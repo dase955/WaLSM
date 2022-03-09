@@ -27,6 +27,9 @@ class UniversalCompactionPicker : public CompactionPicker {
 
   virtual bool NeedsCompaction(
       const VersionStorageInfo* vstorage) const override;
+
+  virtual bool NeedsMerge(
+      const VersionStorageInfo* vstorage) const override;
 };
 }  // namespace ROCKSDB_NAMESPACE
 #endif  // !ROCKSDB_LITE

@@ -85,6 +85,8 @@ class CompactionPicker {
 
   virtual bool NeedsCompaction(const VersionStorageInfo* vstorage) const = 0;
 
+  virtual bool NeedsMerge(const VersionStorageInfo* vstorage) const = 0;
+
 // Sanitize the input set of compaction input files.
 // When the input parameters do not describe a valid compaction, the
 // function will try to fix the input_files by adding necessary
@@ -277,6 +279,11 @@ class NullCompactionPicker : public CompactionPicker {
   // Always returns false.
   virtual bool NeedsCompaction(
       const VersionStorageInfo* /*vstorage*/) const override {
+    return false;
+  }
+
+  virtual bool NeedsMerge(
+      const VersionStorageInfo*) const override {
     return false;
   }
 };

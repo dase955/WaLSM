@@ -275,6 +275,11 @@ bool UniversalCompactionPicker::NeedsCompaction(
   return false;
 }
 
+bool UniversalCompactionPicker::NeedsMerge(
+    const VersionStorageInfo*) const {
+  return true;
+}
+
 Compaction* UniversalCompactionPicker::PickCompaction(
     const std::string& cf_name, const MutableCFOptions& mutable_cf_options,
     const MutableDBOptions& mutable_db_options, VersionStorageInfo* vstorage,

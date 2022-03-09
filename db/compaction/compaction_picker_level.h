@@ -28,6 +28,9 @@ class LevelCompactionPicker : public CompactionPicker {
 
   virtual bool NeedsCompaction(
       const VersionStorageInfo* vstorage) const override;
+
+  virtual bool NeedsMerge(
+      const VersionStorageInfo*) const override { return false; }
 };
 
 }  // namespace ROCKSDB_NAMESPACE
