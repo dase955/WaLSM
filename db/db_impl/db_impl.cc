@@ -269,6 +269,7 @@ DBImpl::DBImpl(const DBOptions& options, const std::string& dbname,
   // is called by client and this seqnum is advanced.
   preserve_deletes_seqnum_.store(0);
 
+  InitGroupQueue();
   global_memtable_.SetVLogManager(&vlog_manager_);
   global_memtable_.InitFirstTwoLevel();
 }
@@ -1685,6 +1686,12 @@ Status DBImpl::GetImpl(const ReadOptions& read_options, const Slice& key,
                         has_unpersisted_data_.load(std::memory_order_relaxed));
   bool done = false;
   std::string* timestamp = ts_sz > 0 ? get_impl_options.timestamp : nullptr;
+
+  // Change
+#ifdef ART
+  std::string art_key(key.data(), key.size());
+  done = global_memtable_.Get(art_key, *get_impl_options.value->GetSelf());
+#else
   if (!skip_memtable) {
     // Get value associated with key
     if (get_impl_options.get_value) {
@@ -1726,6 +1733,8 @@ Status DBImpl::GetImpl(const ReadOptions& read_options, const Slice& key,
       return s;
     }
   }
+#endif
+
   if (!done) {
     PERF_TIMER_GUARD(get_from_output_files_time);
     sv->current->Get(

@@ -9,6 +9,8 @@
 #include <unordered_map>
 #include <unordered_set>
 
+#include <db/write_batch_internal.h>
+
 #include "utils.h"
 #include "nvm_node.h"
 #include "art_node.h"
@@ -107,7 +109,9 @@ void GlobalMemtable::InitFirstTwoLevel() {
 
 void GlobalMemtable::Put(Slice &slice, uint64_t vptr) {
   Slice key;
-  slice.remove_prefix(1);
+  static constexpr size_t record_prefix =
+      WriteBatchInternal::kHeader + 1 + sizeof(SequenceNumber);
+  slice.remove_prefix(record_prefix);
   GetLengthPrefixedSlice(&slice, &key);
   auto hash = Hash(key.data(), key.size());
 
@@ -204,7 +208,9 @@ bool GlobalMemtable::Get(std::string &key, std::string &value) {
       if (current->vptr_ == 0) {
         return false;
       }
-      vlog_manager_->GetKeyValue(current->vptr_, key, value);
+
+      SequenceNumber dummy_seq_num;
+      vlog_manager_->GetKeyValue(current->vptr_, key, value, dummy_seq_num);
       return true;
     }
   }
@@ -219,6 +225,7 @@ void GlobalMemtable::SqueezeNode(InnerNode *leaf) {
   uint64_t *data = node->data;
   uint8_t *fingerprints = node->meta.fingerprints_;
   std::unordered_map<std::string, KVStruct> map;
+  SequenceNumber dummy_seq_num;
 
   for (size_t i = 0; i < NVM_MAX_SIZE; i++) {
     uint64_t hash = data[(i << 1)];
@@ -227,7 +234,7 @@ void GlobalMemtable::SqueezeNode(InnerNode *leaf) {
       continue;
     }
     std::string key, value;
-    vlog_manager_->GetKeyValue(vptr, key, value);
+    vlog_manager_->GetKeyValue(vptr, key, value, dummy_seq_num);
     map[key] = KVStruct(hash, vptr);
   }
 
@@ -375,7 +382,8 @@ void GlobalMemtable::SplitNode(InnerNode *oldLeaf) {
       continue;
     }
     std::string key, value;
-    vlog_manager_->GetKeyValue(vptr, key, value);
+    SequenceNumber dummy_seq_num;
+    vlog_manager_->GetKeyValue(vptr, key, value, dummy_seq_num);
     if (uniqueSet.find(key) == uniqueSet.end()) {
       splitBuckets[static_cast<unsigned char>(key[level])].emplace_back(hash, vptr);
       uniqueSet.insert(key);
@@ -503,7 +511,7 @@ void GlobalMemtable::InsertIntoLeaf(InnerNode *leaf, KVStruct &kvInfo, int level
 bool GlobalMemtable::FindKey(InnerNode *leaf, std::string &key, std::string &value) {
   std::string find_key;
   uint64_t vptr;
-  int64_t dummy;
+  uint64_t dummy_seq_num;
 
   uint64_t hash = Hash(key.c_str(), key.length(), kTypeValue);
   int pos = GET_NODE_BUFFER_SIZE(leaf->status_);
@@ -513,7 +521,8 @@ bool GlobalMemtable::FindKey(InnerNode *leaf, std::string &key, std::string &val
     if (buffer[i * 2] != hash) {
       continue;
     }
-    vlog_manager_->GetKeyValue(buffer[i * 2 + 1], find_key, value);
+    vlog_manager_->GetKeyValue(
+        buffer[i * 2 + 1], find_key, value, dummy_seq_num);
     if (find_key == key) {
       return true;
     }
@@ -540,7 +549,7 @@ bool GlobalMemtable::FindKey(InnerNode *leaf, std::string &key, std::string &val
       if (index >= size || data[index * 2] != hash) {
         continue;
       }
-      vlog_manager_->GetKeyValue(vptr, find_key, value);
+      vlog_manager_->GetKeyValue(vptr, find_key, value, dummy_seq_num);
       if (key == find_key) {
         return true;
       }

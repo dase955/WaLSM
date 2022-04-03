@@ -63,12 +63,12 @@ void Compactor::StopLoop() {
 struct CompactionRec {
   std::string key;
   std::string value;
-  int64_t     seqNum;
+  uint64_t    seqNum;
 
   CompactionRec() = default;
 
-  CompactionRec(std::string &key_, std::string &value_, int64_t seqNum_ )
-      : key(key_), value(value_), seqNum(seqNum_ ){};
+  CompactionRec(std::string &key_, std::string &value_, uint64_t seqNum_ )
+      : key(key_), value(value_), seqNum(seqNum_){};
 
   friend bool operator<(const CompactionRec& l, const CompactionRec& r) {
     return l.key < r.key;
@@ -87,10 +87,10 @@ auto ReadAndSortNodeData(NVMNode *nvmNode) -> std::vector<CompactionRec> {
       continue;
     }
 
-    int64_t seqNum;
+    uint64_t seq_num;
     std::string key, value;
-    GetManager().GetKeyValue(kvInfo.vptr, key, value);
-    kvs.emplace_back(key, value, seqNum);
+    GetManager().GetKeyValue(kvInfo.vptr, key, value, seq_num);
+    kvs.emplace_back(key, value, seq_num);
   }
 
   // use stable sort to keep order of same key

@@ -94,21 +94,22 @@ uint64_t VLogManager::AddRecord(const Slice &slice, uint32_t record_count) {
 
 void VLogManager::GetKey(uint64_t offset, std::string &key) {
   offset &= 0x0000ffffffffffff;
-  Slice slice(pmemptr_ + offset + 1, VLogSegmentSize);
+  Slice slice(pmemptr_ + offset + 9, VLogSegmentSize);
   GetLengthPrefixedSlice(&slice, key);
 }
 
 void VLogManager::GetKey(uint64_t offset, Slice &key) {
   offset &= 0x0000ffffffffffff;
-  Slice slice(pmemptr_ + offset + 1, VLogSegmentSize);
+  Slice slice(pmemptr_ + offset + 9, VLogSegmentSize);
   GetLengthPrefixedSlice(&slice, &key);
 }
 
-ValueType VLogManager::GetKeyValue(
-    uint64_t offset, std::string &key, std::string &value) {
+ValueType VLogManager::GetKeyValue(uint64_t offset, std::string &key,
+                                   std::string &value, SequenceNumber &seq_num) {
   offset &= 0x0000ffffffffffff;
   ValueType type = ((ValueType *)(pmemptr_ + offset))[0];
-  Slice slice(pmemptr_ + offset + 1, VLogSegmentSize);
+  seq_num = ((uint64_t *)(pmemptr_ + offset + 1))[0];
+  Slice slice(pmemptr_ + offset + 9, VLogSegmentSize);
   switch (type) {
     case kTypeValue:
       GetLengthPrefixedSlice(&slice, key);
@@ -148,7 +149,7 @@ void VLogManager::BGWorkGarbageCollection() {
   while (read++ < total_count) {
     ValueType type = *((ValueType *)slice.data());
     uint64_t vptr = slice.data() - pmemptr_;
-    slice.remove_prefix(1);
+    slice.remove_prefix(9);
     switch (type) {
       case kTypeValue:
         GetLengthPrefixedSlice(&slice, key);

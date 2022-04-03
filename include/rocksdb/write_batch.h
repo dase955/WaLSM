@@ -80,6 +80,15 @@ class WriteBatch : public WriteBatchBase {
     base_record_offset_ = base_offset;
   }
 
+  uint64_t GetVptr() {
+    return pos_in_merged_batch_ + base_record_offset_;
+  }
+
+  void SetSequenceNumber(uint64_t sequence_number, size_t id) {
+    assert(id < sequence_number_pos_.size());
+    *((uint64_t*)&rep_[sequence_number_pos_[id]]) = sequence_number;
+  }
+
   // Variant of Put() that gathers output like writev(2).  The key and value
   // that will be written to the database are concatenations of arrays of
   // slices.
@@ -381,11 +390,14 @@ class WriteBatch : public WriteBatchBase {
 
   // Position of this batch in merged batch(done in MergeBatch)
   // It is used to calculate vptr.
-  mutable int pos_in_merged_batch_;
+  mutable int pos_in_merged_batch_ = 0;
 
-  // offset of record inserted to vlog by leader writer,
+  // Offset of record inserted to vlog by leader writer,
   // used to calculate vptr.
   uint64_t base_record_offset_;
+
+  // Store all reserved space for sequence numbers.
+  std::vector<size_t> sequence_number_pos_;
 
   // Intentionally copyable
 };

@@ -55,7 +55,8 @@ class VLogManager {
 
   void GetKey(uint64_t offset, Slice &key);
 
-  ValueType GetKeyValue(uint64_t offset, std::string &key, std::string &value);
+  ValueType GetKeyValue(uint64_t offset, std::string &key,
+                        std::string &value, SequenceNumber &seq_num);
 
  private:
   void RecoverOnRestart();
