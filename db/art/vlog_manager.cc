@@ -19,7 +19,7 @@ VLogManager& GetManager() {
 }
 
 void *OpenVLogFile(int64_t totalSize) {
-  int fd = open("/home/joechen/CLionProjects/untitled4/vlog", O_RDWR|O_CREAT, 00777);
+  int fd = open("/tmp/vlog", O_RDWR|O_CREAT, 00777);
   assert(-1 != fd);
 
   posix_fallocate(fd, 0, totalSize);

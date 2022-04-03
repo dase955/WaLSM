@@ -21,7 +21,7 @@ NodeAllocator &GetNodeAllocator() {
 NodeAllocator::NodeAllocator(bool recover) {
   total_size_ = num_free_ * (int64_t)PAGE_SIZE;
 
-  int fd = open("/home/joechen/CLionProjects/untitled4/NodeMemory", O_RDWR|O_CREAT, 00777);
+  int fd = open("/tmp/NodeMemory", O_RDWR|O_CREAT, 00777);
   assert(-1 != fd);
   lseek(fd, total_size_ - 1, SEEK_END);
   write(fd, "", 1);
