@@ -164,6 +164,7 @@ Status DBImpl::WriteImpl(const WriteOptions& write_options,
 
   write_thread_.JoinBatchGroup(&w);
   Status status;
+  // Change
   if (w.state == WriteThread::STATE_PARALLEL_MEMTABLE_WRITER) {
     // we are a non-leader in a parallel group
 
@@ -232,6 +233,7 @@ Status DBImpl::WriteImpl(const WriteOptions& write_options,
     // PreprocessWrite does its own perf timing.
     PERF_TIMER_STOP(write_pre_and_post_process_time);
 
+    // TODO: check
     status = PreprocessWrite(write_options, &need_log_sync, &write_context);
     if (!two_write_queues_) {
       // Assign it after ::PreprocessWrite since the sequence might advance
@@ -348,6 +350,7 @@ Status DBImpl::WriteImpl(const WriteOptions& write_options,
     last_sequence += seq_inc;
 
     // PreReleaseCallback is called after WAL write and before memtable write
+    // Set sequence number of each write batch
     if (status.ok()) {
       SequenceNumber next_sequence = current_sequence;
       size_t index = 0;
@@ -375,6 +378,7 @@ Status DBImpl::WriteImpl(const WriteOptions& write_options,
         } else if (writer->ShouldWriteToMemtable()) {
           next_sequence += WriteBatchInternal::Count(writer->batch);
         }
+        writer->batch->SetBaseOffset(last_record_offset_);
       }
     }
 
@@ -1034,7 +1038,14 @@ IOStatus DBImpl::WriteToWAL(const WriteBatch& merged_batch,
   if (UNLIKELY(needs_locking)) {
     log_write_mutex_.Lock();
   }
+
+#ifdef ART
+  last_record_offset_ = vlog_manager_.AddRecord(
+      log_entry, WriteBatchInternal::Count(&merged_batch));
+  IOStatus io_s;
+#else
   IOStatus io_s = log_writer->AddRecord(log_entry);
+#endif
 
   if (UNLIKELY(needs_locking)) {
     log_write_mutex_.Unlock();
@@ -1042,7 +1053,11 @@ IOStatus DBImpl::WriteToWAL(const WriteBatch& merged_batch,
   if (log_used != nullptr) {
     *log_used = logfile_number_;
   }
+
+#ifndef ART
   total_log_size_ += log_entry.size();
+#endif
+
   // TODO(myabandeh): it might be unsafe to access alive_log_files_.back() here
   // since alive_log_files_ might be modified concurrently
   alive_log_files_.back().AddSize(log_entry.size());

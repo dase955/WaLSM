@@ -19,6 +19,8 @@
 #include <utility>
 #include <vector>
 
+#include "db/art/global_memtable.h"
+#include "db/art/vlog_manager.h"
 #include "db/column_family.h"
 #include "db/compaction/compaction_job.h"
 #include "db/dbformat.h"
@@ -1868,6 +1870,13 @@ class DBImpl : public DB {
   InstrumentedMutex log_write_mutex_;
 
   std::atomic<bool> shutting_down_;
+
+  GlobalMemtable global_memtable_;
+
+  VLogManager vlog_manager_;
+
+  // Offset of last record written by leader writer.
+  uint64_t last_record_offset_;
 
   // If zero, manual compactions are allowed to proceed. If non-zero, manual
   // compactions may still be running, but will quickly fail with

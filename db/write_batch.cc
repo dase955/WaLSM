@@ -244,7 +244,8 @@ struct SavePoints {
 };
 
 WriteBatch::WriteBatch(size_t reserved_bytes, size_t max_bytes)
-    : content_flags_(0), max_bytes_(max_bytes), rep_(), timestamp_size_(0) {
+    : content_flags_(0), max_bytes_(max_bytes), rep_(), timestamp_size_(0),
+      pos_in_merged_batch_(WriteBatchInternal::kHeader) {
   rep_.reserve((reserved_bytes > WriteBatchInternal::kHeader)
                    ? reserved_bytes
                    : WriteBatchInternal::kHeader);
@@ -252,7 +253,8 @@ WriteBatch::WriteBatch(size_t reserved_bytes, size_t max_bytes)
 }
 
 WriteBatch::WriteBatch(size_t reserved_bytes, size_t max_bytes, size_t ts_sz)
-    : content_flags_(0), max_bytes_(max_bytes), rep_(), timestamp_size_(ts_sz) {
+    : content_flags_(0), max_bytes_(max_bytes), rep_(), timestamp_size_(ts_sz),
+      pos_in_merged_batch_(WriteBatchInternal::kHeader) {
   rep_.reserve((reserved_bytes > WriteBatchInternal::kHeader) ?
     reserved_bytes : WriteBatchInternal::kHeader);
   rep_.resize(WriteBatchInternal::kHeader);
@@ -262,20 +264,23 @@ WriteBatch::WriteBatch(const std::string& rep)
     : content_flags_(ContentFlags::DEFERRED),
       max_bytes_(0),
       rep_(rep),
-      timestamp_size_(0) {}
+      timestamp_size_(0),
+      pos_in_merged_batch_(WriteBatchInternal::kHeader) {}
 
 WriteBatch::WriteBatch(std::string&& rep)
     : content_flags_(ContentFlags::DEFERRED),
       max_bytes_(0),
       rep_(std::move(rep)),
-      timestamp_size_(0) {}
+      timestamp_size_(0),
+      pos_in_merged_batch_(WriteBatchInternal::kHeader) {}
 
 WriteBatch::WriteBatch(const WriteBatch& src)
     : wal_term_point_(src.wal_term_point_),
       content_flags_(src.content_flags_.load(std::memory_order_relaxed)),
       max_bytes_(src.max_bytes_),
       rep_(src.rep_),
-      timestamp_size_(src.timestamp_size_) {
+      timestamp_size_(src.timestamp_size_),
+      pos_in_merged_batch_(WriteBatchInternal::kHeader) {
   if (src.save_points_ != nullptr) {
     save_points_.reset(new SavePoints());
     save_points_->stack = src.save_points_->stack;
@@ -288,7 +293,8 @@ WriteBatch::WriteBatch(WriteBatch&& src) noexcept
       content_flags_(src.content_flags_.load(std::memory_order_relaxed)),
       max_bytes_(src.max_bytes_),
       rep_(std::move(src.rep_)),
-      timestamp_size_(src.timestamp_size_) {}
+      timestamp_size_(src.timestamp_size_),
+      pos_in_merged_batch_(WriteBatchInternal::kHeader) {}
 
 WriteBatch& WriteBatch::operator=(const WriteBatch& src) {
   if (&src != this) {
@@ -2099,6 +2105,7 @@ Status WriteBatchInternal::Append(WriteBatch* dst, const WriteBatch* src,
   }
 
   SetCount(dst, Count(dst) + src_count);
+  src->SetRelativePos(dst->rep_.size());
   assert(src->rep_.size() >= WriteBatchInternal::kHeader);
   dst->rep_.append(src->rep_.data() + WriteBatchInternal::kHeader, src_len);
   dst->content_flags_.store(

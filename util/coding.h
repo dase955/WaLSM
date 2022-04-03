@@ -63,6 +63,7 @@ extern bool GetVarint32(Slice* input, uint32_t* value);
 extern bool GetVarint64(Slice* input, uint64_t* value);
 extern bool GetVarsignedint64(Slice* input, int64_t* value);
 extern bool GetLengthPrefixedSlice(Slice* input, Slice* result);
+extern bool GetLengthPrefixedSlice(Slice* input, std::string& result);
 // This function assumes data is well-formed.
 extern Slice GetLengthPrefixedSlice(const char* data);
 
@@ -439,6 +440,17 @@ inline bool GetLengthPrefixedSlice(Slice* input, Slice* result) {
   uint32_t len = 0;
   if (GetVarint32(input, &len) && input->size() >= len) {
     *result = Slice(input->data(), len);
+    input->remove_prefix(len);
+    return true;
+  } else {
+    return false;
+  }
+}
+
+inline bool GetLengthPrefixedSlice(Slice* input, std::string& result) {
+  uint32_t len = 0;
+  if (GetVarint32(input, &len) && input->size() >= len) {
+    result = std::string(input->data(), len);
     input->remove_prefix(len);
     return true;
   } else {

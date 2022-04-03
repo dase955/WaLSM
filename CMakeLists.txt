@@ -252,6 +252,10 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64|AARCH64")
   endif(HAS_ARMV8_CRC)
 endif(CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64|AARCH64")
 
+# AVX2 test
+set(CMAKE_CXX_FLAGS "-mavx2 ${CMAKE_CXX_FLAGS}")
+add_definitions(-DART)
+
 option(PORTABLE "build a portable binary" OFF)
 option(FORCE_SSE42 "force building with SSE4.2, even when PORTABLE=ON" OFF)
 option(FORCE_AVX "force building with AVX, even when PORTABLE=ON" OFF)
@@ -581,6 +585,15 @@ set(SOURCES
         db/c.cc
         db/column_family.cc
         db/compacted_db_impl.cc
+        db/art/art_node.cc
+        db/art/compactor.cc
+        db/art/global_memtable.cc
+        db/art/heat_group.cc
+        db/art/lock.cc
+        db/art/node_allocator.cc
+        db/art/timestamp.cc
+        db/art/utils.cc
+        db/art/vlog_manager.cc
         db/compaction/compaction.cc
         db/compaction/compaction_iterator.cc
         db/compaction/compaction_picker.cc
