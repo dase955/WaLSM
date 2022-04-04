@@ -4,12 +4,15 @@
 
 #pragma once
 #include <mutex>
+#include <atomic>
 #include <condition_variable>
 #include <rocksdb/rocksdb_namespace.h>
 #include "utils.h"
 #include "timestamp.h"
 
 namespace ROCKSDB_NAMESPACE {
+
+extern std::atomic<int32_t> GlobalDecay;
 
 struct InnerNode;
 
@@ -88,8 +91,6 @@ void AddOperation(HeatGroup *group, GroupOperator op, bool highPri = false);
 float CalculateHeat(int32_t ts);
 
 void EstimateLowerAndUpperBound(Timestamps &ts, float &lower_bound, float &upper_bound);
-
-int32_t GetGlobalDec();
 
 void HeatGroupLoop();
 

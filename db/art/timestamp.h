@@ -29,7 +29,7 @@ struct Timestamps {
 
   Timestamps &operator=(const Timestamps &rhs);
 
-  Timestamps copy();
+  Timestamps Copy();
 
   void DecayHeat();
 
@@ -37,6 +37,8 @@ struct Timestamps {
 
   bool GetCurrentHeatAndTs(
       int32_t &begin_ts, int32_t &mid_ts, int32_t &end_ts, float &heat);
+
+  static float DecayFactor[32];
 };
 
 int32_t GetTimestamp();

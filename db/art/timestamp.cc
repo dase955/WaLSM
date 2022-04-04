@@ -12,15 +12,20 @@
 
 namespace ROCKSDB_NAMESPACE {
 
+float Timestamps::DecayFactor[32] = {0};
+
 int32_t GetTimestamp() {
-  static ::std::atomic<int32_t> Timestamp{1024};
-  static ::std::atomic<int32_t> DecayPoint{DecayThreshold};
-  int32_t ts = (Timestamp++) >> 10;
-  int32_t p = DecayPoint.load(::std::memory_order_relaxed);
-  if (ts > p && DecayPoint.compare_exchange_strong(p, p + LayerTsInterval * 2, ::std::memory_order_release)) {
+  static std::atomic<int32_t> Timestamp{1024};
+  return Timestamp.fetch_add(1, std::memory_order_relaxed) >> 10;
+}
+
+void MaybeScheduleHeatDecay(int32_t ts) {
+  int32_t decay = GlobalDecay.load(::std::memory_order_relaxed);
+  if (ts - decay > Waterline &&
+      GlobalDecay.compare_exchange_strong(
+          decay, decay + ForceDecay, ::std::memory_order_relaxed)) {
     AddOperation(nullptr, kOperatorLevelDown, true);
   }
-  return ts;
 }
 
 Timestamps::Timestamps(): last_ts_(0), last_global_dec_(0), size_(0), last_insert_(0), accumulate_(0.f) {}
@@ -45,10 +50,61 @@ Timestamps &Timestamps::operator=(const Timestamps &rhs) {
   return *this;
 }
 
-Timestamps Timestamps::copy() {
+Timestamps Timestamps::Copy() {
   std::lock_guard<SpinLock> lk(update_lock_);
   Timestamps ts(*this);
   return ts;
+}
+
+void Timestamps::DecayHeat() {
+  auto global_dec = GlobalDecay.load(std::memory_order_relaxed);
+  if (last_global_dec_ == global_dec) {
+    return;
+  }
+
+  int delta = global_dec - last_global_dec_;
+  last_global_dec_ = global_dec;
+
+#ifdef USE_AVX512F
+  _mm256_store_epi32(timestamps,
+                     _mm256_sub_epi32(_mm256_set1_epi32(global_dec),
+                                      _mm256_loadu_epi32(timestamps)));
+#else
+  _mm_storeu_si128(
+      (__m128i_u *)timestamps,
+      _mm_sub_epi32(
+          _mm_loadu_si128((__m128i_u *)timestamps),
+          _mm_set1_epi32(delta)));
+  _mm_storeu_si128(
+      (__m128i_u *)(timestamps + 4),
+      _mm_sub_epi32(
+          _mm_loadu_si128((__m128i_u *)(timestamps + 4)),
+          _mm_set1_epi32(delta)));
+#endif
+  delta /= LayerTsInterval;
+  accumulate_ *= delta < 32 ? DecayFactor[delta] : 0;
+}
+
+void Timestamps::UpdateHeat() {
+  std::lock_guard<SpinLock> lk(update_lock_);
+  DecayHeat();
+  auto cur_ts = GetTimestamp();
+  if (cur_ts <= last_ts_) {
+    return;
+  }
+
+  MaybeScheduleHeatDecay(cur_ts);
+
+  last_ts_ = cur_ts;
+  cur_ts -= last_global_dec_;
+  if (size_ < 8) {
+    timestamps[size_++] = cur_ts;
+    return;
+  }
+
+  accumulate_ += CalculateHeat(timestamps[last_insert_]);
+  timestamps[last_insert_++] = cur_ts;
+  last_insert_ %= 8;
 }
 
 bool Timestamps::GetCurrentHeatAndTs(int32_t &begin_ts, int32_t &mid_ts, int32_t &end_ts, float &heat) {

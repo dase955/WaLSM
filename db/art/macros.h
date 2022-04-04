@@ -13,7 +13,7 @@ namespace ROCKSDB_NAMESPACE {
 #endif
 
 /*
- * Macros for GlobalMemtable.h
+ * Macros for global_memtable.h
  */
 
 #define LAST_CHAR 255
@@ -42,7 +42,7 @@ namespace ROCKSDB_NAMESPACE {
 #define SET_NODE_BUFFER_SIZE(s, size)  (s) &= 0xffff0000; (s) |= (size);
 
 /*
- * Macros for NVMNode.h
+ * Macros for nvm_Node.h
  */
 
 #define PAGE_SIZE (4096)
@@ -87,7 +87,9 @@ namespace ROCKSDB_NAMESPACE {
 
 const constexpr int32_t LayerTsInterval = 100;
 
-const constexpr int32_t DecayThreshold = 3072;
+const constexpr int32_t Waterline = 1024;
+
+const constexpr int32_t ForceDecay = LayerTsInterval * 2;
 
 const constexpr double  Coeff = 1.021897;              // Magic!
 

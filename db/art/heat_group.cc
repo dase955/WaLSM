@@ -17,11 +17,9 @@
 
 namespace ROCKSDB_NAMESPACE {
 
-static int32_t GlobalDecr = 0;
+std::atomic<int32_t> GlobalDecay{0};
 
 static float   LayerHeatBound[MAX_LAYERS + 1];
-
-float          DecayFactor[32];
 
 /*----------------------------------------------------------------------*/
 
@@ -54,11 +52,8 @@ float CalculateHeat(int32_t ts) {
   };
 
   ts += 512;
+  assert(ts < 1536);
   return ts >= 0 ? base[ts & 31] * multiplier[ts >> 5] : 0.0f;
-}
-
-int32_t GetGlobalDec() {
-  return GlobalDecr;
 }
 
 void EstimateLowerAndUpperBound(Timestamps &ts, float &lower_bound, float &upper_bound) {
@@ -74,54 +69,6 @@ void EstimateLowerAndUpperBound(Timestamps &ts, float &lower_bound, float &upper
   float h3 = CalculateHeat(end_ts);
   lower_bound = heat + (h1 + h2) * 4;
   upper_bound = heat + (h2 + h3) * 4;
-}
-
-void Timestamps::DecayHeat() {
-  auto global_dec = GetGlobalDec();
-  if (last_global_dec_ == global_dec) {
-    return;
-  }
-
-  int delta = global_dec - last_global_dec_;
-  last_global_dec_ = GlobalDecr;
-
-#ifdef USE_AVX512F
-  _mm256_store_epi32(timestamps,
-                     _mm256_sub_epi32(_mm256_set1_epi32(global_dec),
-                                      _mm256_loadu_epi32(timestamps)));
-#else
-  _mm_storeu_si128(
-      (__m128i_u *)timestamps,
-      _mm_sub_epi32(
-          _mm_loadu_si128((__m128i_u *)timestamps),
-          _mm_set1_epi32(delta)));
-  _mm_storeu_si128(
-      (__m128i_u *)(timestamps + 4),
-      _mm_sub_epi32(
-          _mm_loadu_si128((__m128i_u *)(timestamps + 4)),
-          _mm_set1_epi32(delta)));
-#endif
-  accumulate_ *= DecayFactor[delta / LayerTsInterval];
-}
-
-void Timestamps::UpdateHeat() {
-  std::lock_guard<SpinLock> lk(update_lock_);
-  DecayHeat();
-  auto cur_ts = GetTimestamp();
-  if (cur_ts <= last_ts_) {
-    return;
-  }
-
-  last_ts_ = cur_ts;
-  cur_ts -= last_global_dec_;
-  if (size_ < 8) {
-    timestamps[size_++] = cur_ts;
-    return;
-  }
-
-  accumulate_ += CalculateHeat(timestamps[last_insert_]);
-  timestamps[last_insert_++] = cur_ts;
-  last_insert_ %= 8;
 }
 
 /*----------------------------------------------------------------------*/
@@ -264,7 +211,7 @@ void InitGroupQueue() {
   }
 
   for (size_t i = 0; i < 32; ++i) {
-    DecayFactor[i] = 1.0 / std::pow(Coeff, i * LayerTsInterval);
+    Timestamps::DecayFactor[i] = 1.0 / std::pow(Coeff, i * LayerTsInterval);
   }
 }
 
@@ -389,8 +336,8 @@ void GroupLevelDown() {
     return;
   }
 
-  GlobalDecr += (layer * LayerTsInterval);
-  printf("GroupLevelDown: GlobalDecr increased by %d * 100\n", layer);
+  GlobalDecay.fetch_add(layer * LayerTsInterval, std::memory_order_relaxed);
+  printf("GroupLevelDown: GlobalDecay increased by %d * 100\n", layer);
   GlobalQueue.totalLayers -= layer;
   for (int l = layer; l < MAX_LAYERS; ++l) {
     MoveAllGroupsToLayer(l, l - layer);
@@ -400,16 +347,17 @@ void GroupLevelDown() {
 // Different from GroupLevelDown,
 // groups in layer1 will be moved to layer0 even if layer0 is not empty
 void ForceGroupLevelDown() {
+  GlobalDecay.fetch_add(2 * LayerTsInterval);
+  printf("ForceGroupLevelDown: GlobalDecay increased by 2 * 100\n");
+
   if (GlobalQueue.totalLayers < 6) {
     return;
   }
 
-  GlobalDecr += LayerTsInterval;
-  GlobalQueue.totalLayers -= 1;
-  printf("ForceGroupLevelDown: GlobalDecr increased by 1 * 100\n");
-
-  for (int l = 1; l < MAX_LAYERS; ++l) {
-    MoveAllGroupsToLayer(l, l - 1);
+  GlobalQueue.totalLayers -= 2;
+  MoveAllGroupsToLayer(1, 0);
+  for (int l = 2; l < MAX_LAYERS; ++l) {
+    MoveAllGroupsToLayer(l, l - 2);
   }
 }
 

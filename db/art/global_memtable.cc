@@ -77,31 +77,46 @@ void GlobalMemtable::InitFirstTwoLevel() {
   art256->header_.prefix_length_ = 1;
   art256->header_.num_children_ = 256;
 
+  std::string ascii(
+      "\t\n !\"#$%&'()*+,-./0123456789:;<=>?@"
+      "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+      "[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~");
+  std::unordered_set<int> used_ascii;
+  used_ascii.insert(0);
+  used_ascii.insert(LAST_CHAR);
+  for (auto &c : ascii) {
+    used_ascii.insert((int)c);
+  }
+
   InnerNode *nextInnerNode = tail_;
-  for (int i = LAST_CHAR; i >= 0; --i) {
+  for (int first_char = LAST_CHAR; first_char >= 0; --first_char) {
     auto *node = new InnerNode();
     SET_NON_LEAF(node->status_);
     SET_ART_FULL(node->status_);
-    art256->children_[i] = node;
+    art256->children_[first_char] = node;
 
     // Second level
     node->art = AllocateArtNode(kNode256);
-    auto art256_2 = (ArtNode256 *)node->art;
-    art256_2->header_.prefix_length_ = 2;
-    art256_2->header_.num_children_ = 256;
+    auto art256_l2 = (ArtNode256 *)node->art;
+    art256_l2->header_.prefix_length_ = 2;
+    art256_l2->header_.num_children_ = 256;
 
     auto heatGroup = NewHeatGroup();
 
-    for (int j = LAST_CHAR; j >= 0; --j) {
-      art256_2->children_[j] = AllocateLeafNode(
-          2, static_cast<unsigned char>(j), nextInnerNode);
-      art256_2->children_[j]->heat_group_ = heatGroup;
-      nextInnerNode = art256_2->children_[j];
+    for (int second_char = LAST_CHAR; second_char >= 0; --second_char) {
+      if (used_ascii.find(second_char) == used_ascii.end()) {
+        continue;
+      }
+
+      art256_l2->children_[second_char] = AllocateLeafNode(
+          2, static_cast<unsigned char>(second_char), nextInnerNode);
+      art256_l2->children_[second_char]->heat_group_ = heatGroup;
+      nextInnerNode = art256_l2->children_[second_char];
     }
 
-    heatGroup->first_node_ = art256_2->children_[0];
-    heatGroup->last_node_ = art256_2->children_[LAST_CHAR];
-    InsertIntoLayer(heatGroup, 0);
+    heatGroup->first_node_ = art256_l2->children_[0];
+    heatGroup->last_node_ = art256_l2->children_[LAST_CHAR];
+    InsertIntoLayer(heatGroup, BASE_LAYER);
   }
 
   head_ = nextInnerNode;
@@ -112,33 +127,34 @@ void GlobalMemtable::Put(Slice &slice, uint64_t vptr) {
   static constexpr size_t record_prefix =
       WriteBatchInternal::kHeader + 1 + sizeof(SequenceNumber);
   slice.remove_prefix(record_prefix);
+  auto kv_size = slice.size();
   GetLengthPrefixedSlice(&slice, &key);
   auto hash = Hash(key.data(), key.size());
 
   KVStruct kvInfo(hash, vptr);
-  kvInfo.kvSize = slice.size();
+  kvInfo.kvSize = kv_size;
   kvInfo.valueType = 0;
   size_t maxDepth = key.size();
 
-  bool needRestart;
+  bool need_restart;
   size_t level = 0;
   uint32_t version;
   InnerNode *current = root_;
-  InnerNode *nextNode;
+  InnerNode *next_node;
 
   while (true) {
   Restart:
-    needRestart = false;
+    need_restart = false;
     version = current->opt_lock_.AwaitNodeUnlocked();
-    nextNode = FindChild(current, key[level]);
-    current->opt_lock_.CheckOrRestart(version, needRestart);
-    if (needRestart) {
+    next_node = FindChild(current, key[level]);
+    current->opt_lock_.CheckOrRestart(version, need_restart);
+    if (need_restart) {
       goto Restart;
     }
 
     if (IS_LEAF(current->status_)) {
-      current->opt_lock_.UpgradeToWriteLockOrRestart(version, needRestart);
-      if (needRestart) {
+      current->opt_lock_.UpgradeToWriteLockOrRestart(version, need_restart);
+      if (need_restart) {
         goto Restart;
       }
 
@@ -146,9 +162,9 @@ void GlobalMemtable::Put(Slice &slice, uint64_t vptr) {
       return;
     }
 
-    if (!nextNode) {
-      current->opt_lock_.UpgradeToWriteLockOrRestart(version, needRestart);
-      if (needRestart) {
+    if (!next_node) {
+      current->opt_lock_.UpgradeToWriteLockOrRestart(version, need_restart);
+      if (need_restart) {
         goto Restart;
       }
 
@@ -176,7 +192,7 @@ void GlobalMemtable::Put(Slice &slice, uint64_t vptr) {
 
     // level > maxDepth means key need to be stored in vptr_
     // TODO: how to persistence data stored in vptr_
-    current = nextNode;
+    current = next_node;
     if (level++ == maxDepth) {
       current->vptr_ = kvInfo.vptr;
       return;
@@ -288,7 +304,7 @@ void GlobalMemtable::SplitLeafBelowLevel5(InnerNode *leaf) {
     split_buckets[static_cast<unsigned int>(getPrefix(level, kvInfo))].push_back(kvInfo); // ??
   }
 
-  Timestamps curTs = leaf->ts.copy();
+  Timestamps cur_ts = leaf->ts.Copy();
 
   int32_t split_num = 2;
   for (size_t i = 1; i < LAST_CHAR; ++i) {
@@ -301,7 +317,7 @@ void GlobalMemtable::SplitLeafBelowLevel5(InnerNode *leaf) {
       level + 1, static_cast<unsigned char>(LAST_CHAR), leaf->next_node_);
   auto last_node = final_node;
   auto first_node = final_node;
-  final_node->ts = curTs;
+  final_node->ts = cur_ts;
 
   std::vector<InnerNode*> new_leaves{final_node};
   std::vector<unsigned char> prefixes{LAST_CHAR};
@@ -312,7 +328,7 @@ void GlobalMemtable::SplitLeafBelowLevel5(InnerNode *leaf) {
       continue;
     }
     auto new_leaf = AllocateLeafNode(level + 1, static_cast<unsigned char>(c), last_node);
-    new_leaf->ts = curTs;
+    new_leaf->ts = cur_ts;
     auto nvm_node = new_leaf->nvm_node_;
     int pos = 0, fpos = 0;
     uint32_t leaf_size = 0;
