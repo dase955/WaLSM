@@ -9,8 +9,8 @@
 
 #include "utils.h"
 #include "macros.h"
-#include "global_memtable.h"
 #include "heat_group.h"
+#include "global_memtable.h"
 
 namespace ROCKSDB_NAMESPACE {
 
@@ -455,7 +455,7 @@ void InsertToArtNode(
   }
 
   if (insert_to_group) {
-    GroupInsertNewNode(left_node, leaf);
+    InsertNodesToGroup(left_node, leaf);
   }
 }
 

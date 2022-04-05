@@ -269,9 +269,15 @@ DBImpl::DBImpl(const DBOptions& options, const std::string& dbname,
   // is called by client and this seqnum is advanced.
   preserve_deletes_seqnum_.store(0);
 
-  InitGroupQueue();
+  group_manager_.InitGroupQueue();
+  group_manager_.SetCompactor(&compactor_);
+  compactor_.SetGroupManager(&group_manager_);
+  compactor_.SetVLogManager(&vlog_manager_);
   global_memtable_.SetVLogManager(&vlog_manager_);
+  global_memtable_.SetGroupManager(&group_manager_);
   global_memtable_.InitFirstTwoLevel();
+  group_manager_.StartHeatThread();
+
 }
 
 Status DBImpl::Resume() {
@@ -657,6 +663,7 @@ Status DBImpl::CloseHelper() {
 Status DBImpl::CloseImpl() { return CloseHelper(); }
 
 DBImpl::~DBImpl() {
+  group_manager_.StopHeatThread();
   if (!closed_) {
     closed_ = true;
     CloseHelper().PermitUncheckedError();

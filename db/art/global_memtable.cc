@@ -17,6 +17,7 @@
 #include "node_allocator.h"
 #include "vlog_manager.h"
 #include "heat_group.h"
+#include "heat_group_manager.h"
 #include "compactor.h"
 
 namespace ROCKSDB_NAMESPACE {
@@ -101,7 +102,7 @@ void GlobalMemtable::InitFirstTwoLevel() {
     art256_l2->header_.prefix_length_ = 2;
     art256_l2->header_.num_children_ = 256;
 
-    auto heatGroup = NewHeatGroup();
+    auto heatGroup = new HeatGroup();
 
     for (int second_char = LAST_CHAR; second_char >= 0; --second_char) {
       if (used_ascii.find(second_char) == used_ascii.end()) {
@@ -116,7 +117,7 @@ void GlobalMemtable::InitFirstTwoLevel() {
 
     heatGroup->first_node_ = art256_l2->children_[0];
     heatGroup->last_node_ = art256_l2->children_[LAST_CHAR];
-    InsertIntoLayer(heatGroup, BASE_LAYER);
+    group_manager_->InsertIntoLayer(heatGroup, BASE_LAYER);
   }
 
   head_ = nextInnerNode;
@@ -170,7 +171,7 @@ void GlobalMemtable::Put(Slice &slice, uint64_t vptr) {
 
       InnerNode *leaf = AllocateLeafNode(level + 1, key[level], nullptr);
       ++leaf->status_;
-      leaf->ts.UpdateHeat();
+      leaf->heat_group_->UpdateHeat();
       leaf->estimated_size_ += kvInfo.kvSize;
       leaf->buffer_size_ += kvInfo.kvSize;
       leaf->buffer_[0] = kvInfo.hash;
@@ -236,6 +237,11 @@ void GlobalMemtable::SetVLogManager(VLogManager *vlog_manager) {
   vlog_manager_ = vlog_manager;
 }
 
+void GlobalMemtable::SetGroupManager(HeatGroupManager *group_manager) {
+  group_manager_ = group_manager;
+}
+
+
 void GlobalMemtable::SqueezeNode(InnerNode *leaf) {
   auto node = leaf->nvm_node_;
   uint64_t *data = node->data;
@@ -271,7 +277,7 @@ void GlobalMemtable::SqueezeNode(InnerNode *leaf) {
   assert(count <= (NVM_MAX_SIZE * 2));
 
   leaf->estimated_size_ = curSize;
-  leaf->heat_group_->updateSize(curSize - prevSize);
+  leaf->heat_group_->UpdateSize(curSize - prevSize);
 
   int rows = ((fpos - 1) >> 4) + 1;
   int size = rows << 4;
@@ -374,7 +380,7 @@ void GlobalMemtable::SplitLeafBelowLevel5(InnerNode *leaf) {
   InsertSplitInnerNode(leaf, first_node, final_node, (level + 1));
   // _mm_sfence(); clwb(node->meta); _mm_sfence();
   leaf->estimated_size_ = 0;
-  GroupInsertNewNode(leaf, new_leaves);
+  InsertNodesToGroup(leaf, new_leaves);
 
   SET_NON_LEAF(leaf->status_);
   leaf->opt_lock_.WriteUnlock(false);
@@ -474,7 +480,7 @@ void GlobalMemtable::SplitNode(InnerNode *oldLeaf) {
 
   InsertSplitInnerNode(oldLeaf, firstInnerNode, finalInnerNode, (level + 1));
   // _mm_sfence(); clwb(node->meta); _mm_sfence();
-  GroupInsertNewNode(oldLeaf, newInnerNodes);
+  InsertNodesToGroup(oldLeaf, newInnerNodes);
 
   SET_NON_LEAF(oldLeaf->status_);
   oldLeaf->opt_lock_.WriteUnlock(false);
@@ -491,7 +497,7 @@ void GlobalMemtable::InsertIntoLeaf(InnerNode *leaf, KVStruct &kvInfo, int level
   leaf->buffer_[writePos - 2] = kvInfo.hash;
   leaf->buffer_[writePos - 1] = kvInfo.vptr;
 
-  leaf->ts.UpdateHeat();
+  leaf->heat_group_->UpdateHeat();
   leaf->estimated_size_ += kvInfo.kvSize;
   leaf->buffer_size_ += kvInfo.kvSize;
 
@@ -503,8 +509,8 @@ void GlobalMemtable::InsertIntoLeaf(InnerNode *leaf, KVStruct &kvInfo, int level
   std::lock_guard<std::mutex> lk(leaf->flush_mutex_);
 
   // Group size_ and total size_ is updated when doing flush
-  GetCompactor().updateSize(leaf->buffer_size_);
-  leaf->heat_group_->updateSize(leaf->buffer_size_);
+  UpdateTotalSize(leaf->buffer_size_);
+  leaf->heat_group_->UpdateSize(leaf->buffer_size_);
   leaf->buffer_size_ = 0;
 
   // Now we need to flush data into nvm

@@ -93,10 +93,10 @@ const constexpr int32_t ForceDecay = LayerTsInterval * 2;
 
 const constexpr double  Coeff = 1.021897;              // Magic!
 
-const constexpr int     CompactionThreshold = 1 << 26; // 64M
+const constexpr int     CompactionThreshold = 512 << 20; // 512M
 
-const constexpr int     GroupSplitThreshold = 1 << 22; // 4M
+const constexpr int     GroupSplitThreshold = 16 << 20;  // 16M
 
-const constexpr int     GroupMinSize = 1 << 20;        // 1M
+const constexpr int     GroupMinSize = 8 << 20;          // 8M
 
 }  // namespace ROCKSDB_NAMESPACE

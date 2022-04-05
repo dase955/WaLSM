@@ -83,7 +83,7 @@ InnerNode *AllocateLeafNode(uint8_t prefix_length,
 }
 
 void InsertInnerNode(InnerNode *node, InnerNode *inserted) {
-  std::lock_guard<SpinLock> lk(node->link_lock_);
+  std::lock_guard<SpinMutex> lk(node->link_lock_);
 
   auto prev_node = node->last_child_node_;
   inserted->next_node_ = prev_node->next_node_;
@@ -107,7 +107,7 @@ void InsertInnerNode(InnerNode *node, InnerNode *inserted) {
 
 void InsertSplitInnerNode(InnerNode *node, InnerNode *first_inserted,
                           InnerNode *last_inserted, int prefix_length) {
-  std::lock_guard<SpinLock> lk(node->link_lock_);
+  std::lock_guard<SpinMutex> lk(node->link_lock_);
 
   auto prev_node = node->last_child_node_;
   auto prev_nvm_node = prev_node->nvm_node_;

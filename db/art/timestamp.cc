@@ -5,34 +5,29 @@
 #include "timestamp.h"
 
 #include <atomic>
-#include <mutex>
+#include <cstring>
 
-#include "macros.h"
+#include "utils.h"
 #include "heat_group.h"
+#include "heat_group_manager.h"
 
 namespace ROCKSDB_NAMESPACE {
 
 float Timestamps::DecayFactor[32] = {0};
 
 int32_t GetTimestamp() {
-  static std::atomic<int32_t> Timestamp{1024};
-  return Timestamp.fetch_add(1, std::memory_order_relaxed) >> 10;
+  static std::atomic<int32_t> Timestamp{16384};
+  return Timestamp.fetch_add(1, std::memory_order_relaxed) >> 14;
 }
 
-void MaybeScheduleHeatDecay(int32_t ts) {
-  int32_t decay = GlobalDecay.load(::std::memory_order_relaxed);
-  if (ts - decay > Waterline &&
-      GlobalDecay.compare_exchange_strong(
-          decay, decay + ForceDecay, ::std::memory_order_relaxed)) {
-    AddOperation(nullptr, kOperatorLevelDown, true);
-  }
-}
-
-Timestamps::Timestamps(): last_ts_(0), last_global_dec_(0), size_(0), last_insert_(0), accumulate_(0.f) {}
+Timestamps::Timestamps()
+    : last_ts_(0), last_global_dec_(0), size_(0),
+      last_insert_(0), accumulate_(0.f) {}
 
 Timestamps::Timestamps(const Timestamps &rhs)
     : last_ts_(rhs.last_ts_), last_global_dec_(rhs.last_global_dec_),
-      size_(rhs.size_), last_insert_(rhs.last_insert_), accumulate_(rhs.accumulate_) {
+      size_(rhs.size_), last_insert_(rhs.last_insert_),
+      accumulate_(rhs.accumulate_) {
   memcpy(timestamps, rhs.timestamps, 32);
 }
 
@@ -51,7 +46,7 @@ Timestamps &Timestamps::operator=(const Timestamps &rhs) {
 }
 
 Timestamps Timestamps::Copy() {
-  std::lock_guard<SpinLock> lk(update_lock_);
+  std::lock_guard<SpinMutex> lk(update_lock_);
   Timestamps ts(*this);
   return ts;
 }
@@ -86,16 +81,15 @@ void Timestamps::DecayHeat() {
 }
 
 void Timestamps::UpdateHeat() {
-  std::lock_guard<SpinLock> lk(update_lock_);
-  DecayHeat();
   auto cur_ts = GetTimestamp();
+  std::lock_guard<SpinMutex> lk(update_lock_);
   if (cur_ts <= last_ts_) {
     return;
   }
-
-  MaybeScheduleHeatDecay(cur_ts);
-
   last_ts_ = cur_ts;
+
+  DecayHeat();
+
   cur_ts -= last_global_dec_;
   if (size_ < 8) {
     timestamps[size_++] = cur_ts;
@@ -107,8 +101,9 @@ void Timestamps::UpdateHeat() {
   last_insert_ %= 8;
 }
 
-bool Timestamps::GetCurrentHeatAndTs(int32_t &begin_ts, int32_t &mid_ts, int32_t &end_ts, float &heat) {
-  std::lock_guard<SpinLock> lk(update_lock_);
+bool Timestamps::GetCurrentHeatAndTs(
+    int32_t &begin_ts, int32_t &mid_ts, int32_t &end_ts, float &heat) {
+  std::lock_guard<SpinMutex> lk(update_lock_);
   if (size_ == 0) {
     return false;
   }

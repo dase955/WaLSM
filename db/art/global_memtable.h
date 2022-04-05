@@ -17,6 +17,7 @@
 #include <string>
 #include <atomic>
 #include <mutex>
+#include <util/mutexlock.h>
 #include <rocksdb/rocksdb_namespace.h>
 #include <rocksdb/slice.h>
 #include "timestamp.h"
@@ -27,6 +28,7 @@ namespace ROCKSDB_NAMESPACE {
 struct NVMNode;
 struct HeatGroup;
 struct ArtNodeHeader;
+class HeatGroupManager;
 class VLogManager;
 struct KVStruct;
 
@@ -64,7 +66,7 @@ struct InnerNode {
   OptLock               opt_lock_;
 
   // Used for inserting new node into linked list
-  SpinLock              link_lock_;
+  SpinMutex              link_lock_;
 
   // Used for flush and split operation
   std::mutex            flush_mutex_;
@@ -74,7 +76,9 @@ struct InnerNode {
 
 class GlobalMemtable {
  public:
-  GlobalMemtable() : root_(nullptr), head_(nullptr), tail_(nullptr) {}
+  GlobalMemtable()
+      : root_(nullptr), head_(nullptr), tail_(nullptr),
+        vlog_manager_(nullptr), group_manager_(nullptr) {}
 
   void Put(Slice &slice, uint64_t vptr);
 
@@ -83,6 +87,8 @@ class GlobalMemtable {
   void InitFirstTwoLevel();
 
   void SetVLogManager(VLogManager *vlog_manager);
+
+  void SetGroupManager(HeatGroupManager *group_manager);
 
  private:
   bool FindKey(InnerNode *leaf, std::string &key, std::string &value);
@@ -101,6 +107,8 @@ class GlobalMemtable {
   InnerNode *tail_;
 
   VLogManager *vlog_manager_;
+
+  HeatGroupManager *group_manager_;
 };
 
 } // namespace ROCKSDB_NAMESPACE

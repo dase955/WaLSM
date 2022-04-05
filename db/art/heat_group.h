@@ -5,17 +5,19 @@
 #pragma once
 #include <mutex>
 #include <atomic>
+#include <vector>
 #include <condition_variable>
 #include <rocksdb/rocksdb_namespace.h>
-#include "utils.h"
+#include "macros.h"
 #include "timestamp.h"
 
 namespace ROCKSDB_NAMESPACE {
 
-extern std::atomic<int32_t> GlobalDecay;
-
 struct InnerNode;
+struct HeatGroup;
+class HeatGroupManager;
 
+// Status of heat group
 enum GroupStatus {
   kGroupNone,
   kGroupWaitSplit,
@@ -31,32 +33,6 @@ enum GroupOperator {
   kOperationStop,
 };
 
-struct HeatGroup {
-  std::mutex lock; // TODO: check sizeof(std::mutex>
-  char padding[24];
-
-  std::atomic<int32_t>     group_size_;
-  InnerNode                *first_node_;
-  InnerNode                *last_node_;
-  std::atomic<GroupStatus> status_;
-  bool                     in_base_layer_;
-
-  HeatGroup                *next;
-  HeatGroup                *prev;
-
-  explicit HeatGroup(InnerNode *initial_node = nullptr)
-      : group_size_(0),
-        first_node_(initial_node), last_node_(initial_node),
-        status_(kGroupNone), in_base_layer_(false),
-        next(nullptr), prev(nullptr) {};
-
-  bool insertNewNode(InnerNode *last, std::vector<InnerNode*> &inserts);
-
-  void updateSize(int32_t size);
-};
-
-HeatGroup *NewHeatGroup();
-
 struct GroupOperation {
   HeatGroup *target;
   GroupOperator op;
@@ -66,34 +42,61 @@ struct GroupOperation {
       : target(target_), op(op_) {};
 };
 
+struct HeatGroup {
+  std::mutex lock;
+  char padding[24];
+
+  Timestamps               ts;
+
+  std::atomic<int32_t>     group_size_;
+  InnerNode                *first_node_;
+  InnerNode                *last_node_;
+  std::atomic<GroupStatus> status_;
+  bool                     in_base_layer_;
+
+  HeatGroupManager         *group_manager_;
+  HeatGroup                *next;
+  HeatGroup                *prev;
+  char padding2[8];
+
+  explicit HeatGroup(InnerNode *initialNode = nullptr)
+      : group_size_(0),
+        first_node_(initialNode), last_node_(initialNode),
+        status_(kGroupNone), in_base_layer_(false),
+        next(nullptr), prev(nullptr) {};
+
+  bool InsertNewNode(InnerNode *last, std::vector<InnerNode*> &inserts);
+
+  void UpdateSize(int32_t size);
+
+  void UpdateHeat();
+
+  void MaybeScheduleHeatDecay(int32_t last_ts);
+};
+
 struct MultiLayerGroupQueue {
-  HeatGroup  *heads_[MAX_LAYERS + 2];
-  HeatGroup  *tails_[MAX_LAYERS + 2];
+  HeatGroup  *heads_[MAX_LAYERS + 2]{};
+  HeatGroup  *tails_[MAX_LAYERS + 2]{};
   HeatGroup **heads = heads_ + 2;
   HeatGroup **tails = tails_ + 2;
   int totalLayers = 1;
 };
 
-void InitGroupQueue();
-
-void RemoveFromQueue(HeatGroup *group);
-
-void InsertIntoLayer(HeatGroup *inserted, int level);
-
-void GroupInsertNewNode(InnerNode *node, InnerNode* inserts);
-
-void GroupInsertNewNode(InnerNode *node, std::vector<InnerNode*> &inserts);
-
-int ChooseGroupLevel(HeatGroup *group);
-
-void AddOperation(HeatGroup *group, GroupOperator op, bool highPri = false);
-
 float CalculateHeat(int32_t ts);
 
-void EstimateLowerAndUpperBound(Timestamps &ts, float &lower_bound, float &upper_bound);
+// Estimate heat bound by current timestamp.
+void EstimateLowerAndUpperBound(
+    Timestamps &ts, float &lower_bound, float &upper_bound);
 
-void HeatGroupLoop();
+// Split heat group
+void SplitGroup(HeatGroup *group);
 
-void WaitHeatGroupLoopStop();
+// Choose new level of heat group by estimated upper and lower bound.
+int ChooseGroupLevel(HeatGroup *group);
+
+// Insert new nodes to heat group of previous node.
+void InsertNodesToGroup(InnerNode *node, InnerNode* inserts);
+
+void InsertNodesToGroup(InnerNode *node, std::vector<InnerNode*> &inserts);
 
 } // namespace ROCKSDB_NAMESPACE

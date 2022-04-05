@@ -3,11 +3,9 @@
 //
 
 #pragma once
-
 #include <cstdint>
-
 #include <rocksdb/rocksdb_namespace.h>
-
+#include <util/mutexlock.h>
 #include "lock.h"
 
 namespace ROCKSDB_NAMESPACE {
@@ -21,7 +19,7 @@ struct Timestamps {
   float   accumulate_;
 
   // Hold lock when trying to update heat or update global timestamp
-  SpinLock update_lock_;
+  SpinMutex update_lock_;
 
   Timestamps();
 

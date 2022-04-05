@@ -3,13 +3,10 @@
 //
 
 #pragma once
-
 #include <cstdint>
 #include <immintrin.h>
-
 #include <rocksdb/rocksdb_namespace.h>
 #include <db/dbformat.h>
-
 #include "macros.h"
 
 namespace ROCKSDB_NAMESPACE {

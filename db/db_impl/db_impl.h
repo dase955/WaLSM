@@ -19,6 +19,8 @@
 #include <utility>
 #include <vector>
 
+#include "db/art/compactor.h"
+#include "db/art/heat_group_manager.h"
 #include "db/art/global_memtable.h"
 #include "db/art/vlog_manager.h"
 #include "db/column_family.h"
@@ -1874,6 +1876,10 @@ class DBImpl : public DB {
   GlobalMemtable global_memtable_;
 
   VLogManager vlog_manager_;
+
+  Compactor compactor_;
+
+  HeatGroupManager group_manager_;
 
   // Offset of last record written by leader writer.
   uint64_t last_record_offset_;
