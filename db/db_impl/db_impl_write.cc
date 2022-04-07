@@ -181,7 +181,7 @@ Status DBImpl::WriteImpl(const WriteOptions& write_options,
 
 #ifdef ART
       Slice input = WriteBatchInternal::Contents(w.batch);
-      global_memtable_.Put(input, w.batch->GetVptr());
+      global_memtable_->Put(input, w.batch->GetVptr());
 #else
       w.status = WriteBatchInternal::InsertInto(
           &w, w.sequence, &column_family_memtables, &flush_scheduler_,
@@ -406,7 +406,7 @@ Status DBImpl::WriteImpl(const WriteOptions& write_options,
 #ifdef ART
         for (auto writer : write_group) {
           Slice input = WriteBatchInternal::Contents(writer->batch);
-          global_memtable_.Put(input, writer->batch->GetVptr());
+          global_memtable_->Put(input, writer->batch->GetVptr());
         }
 #else
         w.status = WriteBatchInternal::InsertInto(
@@ -429,7 +429,7 @@ Status DBImpl::WriteImpl(const WriteOptions& write_options,
 
 #ifdef ART
           Slice input = WriteBatchInternal::Contents(w.batch);
-          global_memtable_.Put(input, w.batch->GetVptr());
+          global_memtable_->Put(input, w.batch->GetVptr());
 #else
           assert(w.sequence == current_sequence);
           w.status = WriteBatchInternal::InsertInto(

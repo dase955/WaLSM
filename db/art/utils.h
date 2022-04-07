@@ -16,6 +16,9 @@ struct InnerNode;
 struct NVMNode;
 struct ArtNodeHeader;
 
+#define likely(x)       __builtin_expect(!!(x), 1)
+#define unlikely(x)     __builtin_expect(!!(x), 0)
+
 uint64_t Hash(
     const char *key, size_t n,
     [[maybe_unused]] ValueType value_type = kTypeValue);

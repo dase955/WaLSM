@@ -89,6 +89,8 @@ void GlobalMemtable::InitFirstTwoLevel() {
     used_ascii.insert((int)c);
   }
 
+  auto pre_allocate_children = used_ascii.size();
+
   InnerNode *nextInnerNode = tail_;
   for (int first_char = LAST_CHAR; first_char >= 0; --first_char) {
     auto *node = new InnerNode();
@@ -100,7 +102,7 @@ void GlobalMemtable::InitFirstTwoLevel() {
     node->art = AllocateArtNode(kNode256);
     auto art256_l2 = (ArtNode256 *)node->art;
     art256_l2->header_.prefix_length_ = 2;
-    art256_l2->header_.num_children_ = 256;
+    art256_l2->header_.num_children_ = pre_allocate_children;
 
     auto heatGroup = new HeatGroup();
 
@@ -115,6 +117,7 @@ void GlobalMemtable::InitFirstTwoLevel() {
       nextInnerNode = art256_l2->children_[second_char];
     }
 
+    heatGroup->group_manager_ = group_manager_;
     heatGroup->first_node_ = art256_l2->children_[0];
     heatGroup->last_node_ = art256_l2->children_[LAST_CHAR];
     group_manager_->InsertIntoLayer(heatGroup, BASE_LAYER);
@@ -171,7 +174,6 @@ void GlobalMemtable::Put(Slice &slice, uint64_t vptr) {
 
       InnerNode *leaf = AllocateLeafNode(level + 1, key[level], nullptr);
       ++leaf->status_;
-      leaf->heat_group_->UpdateHeat();
       leaf->estimated_size_ += kvInfo.kvSize;
       leaf->buffer_size_ += kvInfo.kvSize;
       leaf->buffer_[0] = kvInfo.hash;
@@ -188,6 +190,7 @@ void GlobalMemtable::Put(Slice &slice, uint64_t vptr) {
 
       InsertToArtNode(current->art, leaf, key[level], true);
       current->opt_lock_.WriteUnlock();
+      leaf->heat_group_->UpdateHeat();
       return;
     }
 
@@ -232,15 +235,6 @@ bool GlobalMemtable::Get(std::string &key, std::string &value) {
     }
   }
 }
-
-void GlobalMemtable::SetVLogManager(VLogManager *vlog_manager) {
-  vlog_manager_ = vlog_manager;
-}
-
-void GlobalMemtable::SetGroupManager(HeatGroupManager *group_manager) {
-  group_manager_ = group_manager;
-}
-
 
 void GlobalMemtable::SqueezeNode(InnerNode *leaf) {
   auto node = leaf->nvm_node_;
@@ -310,7 +304,7 @@ void GlobalMemtable::SplitLeafBelowLevel5(InnerNode *leaf) {
     split_buckets[static_cast<unsigned int>(getPrefix(level, kvInfo))].push_back(kvInfo); // ??
   }
 
-  Timestamps cur_ts = leaf->ts.Copy();
+  int64_t oldest_key_time = leaf->oldest_key_time_;
 
   int32_t split_num = 2;
   for (size_t i = 1; i < LAST_CHAR; ++i) {
@@ -323,7 +317,7 @@ void GlobalMemtable::SplitLeafBelowLevel5(InnerNode *leaf) {
       level + 1, static_cast<unsigned char>(LAST_CHAR), leaf->next_node_);
   auto last_node = final_node;
   auto first_node = final_node;
-  final_node->ts = cur_ts;
+  final_node->oldest_key_time_ = oldest_key_time;
 
   std::vector<InnerNode*> new_leaves{final_node};
   std::vector<unsigned char> prefixes{LAST_CHAR};
@@ -334,7 +328,7 @@ void GlobalMemtable::SplitLeafBelowLevel5(InnerNode *leaf) {
       continue;
     }
     auto new_leaf = AllocateLeafNode(level + 1, static_cast<unsigned char>(c), last_node);
-    new_leaf->ts = cur_ts;
+    new_leaf->oldest_key_time_ = oldest_key_time;
     auto nvm_node = new_leaf->nvm_node_;
     int pos = 0, fpos = 0;
     uint32_t leaf_size = 0;
@@ -441,7 +435,8 @@ void GlobalMemtable::SplitNode(InnerNode *oldLeaf) {
     if (splitBuckets[c].empty()) {
       continue;
     }
-    auto allocatedLeaf = AllocateLeafNode(level + 1, static_cast<unsigned char>(c), lastInnerNode);
+    auto allocatedLeaf = AllocateLeafNode(
+        level + 1, static_cast<unsigned char>(c), lastInnerNode);
     auto nvmNode = allocatedLeaf->nvm_node_;
     int pos = 0, fpos = 0;
     uint32_t nodeSize = 0;
@@ -489,22 +484,21 @@ void GlobalMemtable::SplitNode(InnerNode *oldLeaf) {
 // "4b prefix + 4b hash + 8b pointer" OR "4b SeqNum + 4b hash + 8b pointer"
 // This function is responsible for unlocking opt_lock_
 void GlobalMemtable::InsertIntoLeaf(InnerNode *leaf, KVStruct &kvInfo, int level) {
-  ++leaf->status_;
-
-  int writePos = GET_NODE_BUFFER_SIZE(leaf->status_) << 1;
+  int writePos = GET_NODE_BUFFER_SIZE(++leaf->status_) << 1;
   assert(writePos <= 32);
 
   leaf->buffer_[writePos - 2] = kvInfo.hash;
   leaf->buffer_[writePos - 1] = kvInfo.vptr;
-
-  leaf->heat_group_->UpdateHeat();
-  leaf->estimated_size_ += kvInfo.kvSize;
   leaf->buffer_size_ += kvInfo.kvSize;
+  leaf->estimated_size_ += kvInfo.kvSize;
 
-  if (writePos < 32) {
+  if (likely(writePos < 32)) {
     leaf->opt_lock_.WriteUnlock(true);
+    leaf->heat_group_->UpdateHeat();
     return;
   }
+
+  leaf->heat_group_->UpdateHeat();
 
   std::lock_guard<std::mutex> lk(leaf->flush_mutex_);
 
@@ -512,6 +506,7 @@ void GlobalMemtable::InsertIntoLeaf(InnerNode *leaf, KVStruct &kvInfo, int level
   UpdateTotalSize(leaf->buffer_size_);
   leaf->heat_group_->UpdateSize(leaf->buffer_size_);
   leaf->buffer_size_ = 0;
+  env_->GetCurrentTime(&leaf->oldest_key_time_);
 
   // Now we need to flush data into nvm
   SET_NODE_BUFFER_SIZE(leaf->status_, 0);
@@ -549,6 +544,8 @@ bool GlobalMemtable::FindKey(InnerNode *leaf, std::string &key, std::string &val
       return true;
     }
   }
+
+  // Todo: also search in backup nvm node
 
   auto data = leaf->nvm_node_->data;
   auto fingerprints = leaf->nvm_node_->meta.fingerprints_;

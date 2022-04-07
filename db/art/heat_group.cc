@@ -341,6 +341,7 @@ void HeatGroupManager::MoveGroup(HeatGroup *group) {
   int newLevel = ChooseGroupLevel(group);
   RemoveFromQueue(group);
   InsertIntoLayer(group, newLevel);
+  group->status_.store(kGroupNone, std::memory_order_relaxed);
 }
 
 void HeatGroupManager::MoveAllGroupsToLayer(int from, int to) {
@@ -382,7 +383,7 @@ void HeatGroupManager::GroupLevelDown() {
 }
 
 void HeatGroupManager::ForceGroupLevelDown() {
-  //printf("ForceGroupLevelDown: GlobalDecay increased by 200\n");
+  printf("ForceGroupLevelDown: GlobalDecay increased by 200\n");
 
   if (group_queue_.totalLayers < 6) {
     return;

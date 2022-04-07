@@ -36,8 +36,6 @@ struct InnerNode {
   uint64_t     buffer_[32];             // 256B buffer_
   uint8_t      hll_[64];        // 64B hyper log log
 
-  // These values are rarely modified, put them in one cache-line
-
   // Pointer to heat group
   HeatGroup    *heat_group_;
 
@@ -48,10 +46,6 @@ struct InnerNode {
   NVMNode       *nvm_node_, *backup_nvm_node_;
   InnerNode     *last_child_node_;
   InnerNode     *next_node_;
-  char          padding[8]{};
-
-  Timestamps    ts;
-
   uint64_t      vptr_;
 
   // node status_, see macros.h
@@ -71,6 +65,11 @@ struct InnerNode {
   // Used for flush and split operation
   std::mutex            flush_mutex_;
 
+  // Hold gc_mutex_ when do gc,
+  std::mutex            gc_mutex_;
+
+  int64_t              oldest_key_time_ = 0;
+
   InnerNode();
 };
 
@@ -80,15 +79,19 @@ class GlobalMemtable {
       : root_(nullptr), head_(nullptr), tail_(nullptr),
         vlog_manager_(nullptr), group_manager_(nullptr) {}
 
+  GlobalMemtable(
+      VLogManager *vlog_manager, HeatGroupManager *group_manager, Env *env)
+      : root_(nullptr), head_(nullptr), tail_(nullptr),
+        vlog_manager_(vlog_manager), group_manager_(group_manager),
+        env_(env) {
+            InitFirstTwoLevel();
+        };
+
   void Put(Slice &slice, uint64_t vptr);
 
   bool Get(std::string &key, std::string &value);
 
   void InitFirstTwoLevel();
-
-  void SetVLogManager(VLogManager *vlog_manager);
-
-  void SetGroupManager(HeatGroupManager *group_manager);
 
  private:
   bool FindKey(InnerNode *leaf, std::string &key, std::string &value);
@@ -109,6 +112,8 @@ class GlobalMemtable {
   VLogManager *vlog_manager_;
 
   HeatGroupManager *group_manager_;
+
+  Env *env_;
 };
 
 } // namespace ROCKSDB_NAMESPACE

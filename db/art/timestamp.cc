@@ -82,8 +82,12 @@ void Timestamps::DecayHeat() {
 
 void Timestamps::UpdateHeat() {
   auto cur_ts = GetTimestamp();
+  if (likely(cur_ts <= last_ts_)) {
+    return;
+  }
+
   std::lock_guard<SpinMutex> lk(update_lock_);
-  if (cur_ts <= last_ts_) {
+  if (unlikely(cur_ts <= last_ts_)) {
     return;
   }
   last_ts_ = cur_ts;

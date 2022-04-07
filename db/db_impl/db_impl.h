@@ -134,6 +134,7 @@ class Directories {
 // Since it's a very large class, the definition of the functions is
 // divided in several db_impl_*.cc files, besides db_impl.cc.
 class DBImpl : public DB {
+  friend class Compactor;
  public:
   DBImpl(const DBOptions& options, const std::string& dbname,
          const bool seq_per_batch = false, const bool batch_per_txn = true);
@@ -1464,6 +1465,13 @@ class DBImpl : public DB {
       SnapshotChecker* snapshot_checker, LogBuffer* log_buffer,
       Env::Priority thread_pri);
 
+  // Flush the nodes in nvm to storage. Then
+  // installs a new super version for the column family.
+  Status FlushNodesToOutputFIle(
+      ColumnFamilyData* cfd, const MutableCFOptions& mutable_cf_options,
+      SuperVersionContext* superversion_context
+  );
+
   // Flush the memtables of (multiple) column families to multiple files on
   // persistent storage.
   Status FlushMemTablesToOutputFiles(
@@ -1664,6 +1672,7 @@ class DBImpl : public DB {
   void BackgroundCallCompaction(PrepickedCompaction* prepicked_compaction,
                                 Env::Priority thread_pri);
   void BackgroundCallFlush(Env::Priority thread_pri);
+  void SyncCallFlush();
   void BackgroundCallPurge();
   Status BackgroundCompaction(bool* madeProgress, JobContext* job_context,
                               LogBuffer* log_buffer,
@@ -1873,7 +1882,7 @@ class DBImpl : public DB {
 
   std::atomic<bool> shutting_down_;
 
-  GlobalMemtable global_memtable_;
+  GlobalMemtable *global_memtable_;
 
   VLogManager vlog_manager_;
 

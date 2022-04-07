@@ -273,11 +273,10 @@ DBImpl::DBImpl(const DBOptions& options, const std::string& dbname,
   group_manager_.SetCompactor(&compactor_);
   compactor_.SetGroupManager(&group_manager_);
   compactor_.SetVLogManager(&vlog_manager_);
-  global_memtable_.SetVLogManager(&vlog_manager_);
-  global_memtable_.SetGroupManager(&group_manager_);
-  global_memtable_.InitFirstTwoLevel();
-  group_manager_.StartHeatThread();
 
+  global_memtable_ = new GlobalMemtable(
+      &vlog_manager_, &group_manager_, env_);
+  group_manager_.StartHeatThread();
 }
 
 Status DBImpl::Resume() {
@@ -1697,7 +1696,7 @@ Status DBImpl::GetImpl(const ReadOptions& read_options, const Slice& key,
   // Change
 #ifdef ART
   std::string art_key(key.data(), key.size());
-  done = global_memtable_.Get(art_key, *get_impl_options.value->GetSelf());
+  done = global_memtable_->Get(art_key, *get_impl_options.value->GetSelf());
 #else
   if (!skip_memtable) {
     // Get value associated with key

@@ -22,9 +22,9 @@ void *OpenVLogFile(int64_t totalSize) {
   int fd = open("/tmp/vlog", O_RDWR|O_CREAT, 00777);
   assert(-1 != fd);
 
-  posix_fallocate(fd, 0, totalSize);
-  // lseek(fd, totalSize - 1, SEEK_END);
-  // write(fd, "", 1);
+  //posix_fallocate(fd, 0, totalSize);
+  lseek(fd, totalSize - 1, SEEK_END);
+  write(fd, "", 1);
 
   auto addr = (char *)mmap(NULL, totalSize, PROT_READ | PROT_WRITE,MAP_SHARED, fd, 0);
   close(fd);

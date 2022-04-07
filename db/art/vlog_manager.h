@@ -14,10 +14,10 @@ namespace ROCKSDB_NAMESPACE {
 #define SEG_HDR_SIZE 256
 
 // Size of vlog file
-const constexpr int64_t VLogFileSize = 1ULL << 31; // 2G
+const constexpr int64_t VLogFileSize = 4ULL << 30; // 4G
 
 // Size of vlog segment
-const constexpr int64_t VLogSegmentSize = 1 << 14; // 16M
+const constexpr int64_t VLogSegmentSize = 16 << 20; // 16M
 
 // Number of vlog segment
 const constexpr int64_t VLogSegmentNum = VLogFileSize / VLogSegmentSize;
