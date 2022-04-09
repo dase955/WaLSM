@@ -263,8 +263,10 @@ bool UniversalCompactionBuilder::IsInputFilesNonOverlapping(Compaction* c) {
 bool UniversalCompactionPicker::NeedsCompaction(
     const VersionStorageInfo* vstorage) const {
   const int kLevel0 = 0;
-  if (vstorage->CompactionScore(kLevel0) >= 1) {
-    return true;
+  for (int p = 0; p < vstorage->PartitionSize(); p++) {
+    if (vstorage->UniversalCompactionScore(p, kLevel0) >= 1) {
+      return true;
+    }
   }
   if (!vstorage->FilesMarkedForPeriodicCompaction().empty()) {
     return true;
@@ -363,6 +365,7 @@ UniversalCompactionBuilder::CalculateSortedRuns(
 // time-range to compact.
 Compaction* UniversalCompactionBuilder::PickCompaction() {
   const int kLevel0 = 0;
+  // TODO: update universal compaction
   score_ = vstorage_->CompactionScore(kLevel0);
   sorted_runs_ = CalculateSortedRuns(*vstorage_);
 
@@ -421,7 +424,7 @@ Compaction* UniversalCompactionBuilder::PickCompaction() {
         // Get the total number of sorted runs that are not being compacted
         int num_sr_not_compacted = 0;
         for (size_t i = 0; i < sorted_runs_.size(); i++) {
-          if (sorted_runs_[i].being_compacted == false) {
+          if (!sorted_runs_[i].being_compacted) {
             num_sr_not_compacted++;
           }
         }

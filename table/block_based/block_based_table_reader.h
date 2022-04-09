@@ -158,6 +158,8 @@ class BlockBasedTable : public TableReader {
   uint64_t ApproximateSize(const Slice& start, const Slice& end,
                            TableReaderCaller caller) override;
 
+  Slice ApproximateMiddleKey(const Slice& start, const Slice& end) override;
+
   bool TEST_BlockInCache(const BlockHandle& handle) const;
 
   // Returns true if the block for the specified key is in cache.

@@ -3169,6 +3169,44 @@ uint64_t BlockBasedTable::ApproximateSize(const Slice& start, const Slice& end,
                                static_cast<double>(rep_->file_size));
 }
 
+Slice BlockBasedTable::ApproximateMiddleKey(const Slice& start,
+                                            const Slice& end) {
+  uint64_t data_size = GetApproximateDataSize();
+  if (UNLIKELY(data_size == 0)) {
+    // bad start and end entry
+    return Slice("");
+  }
+
+  BlockCacheLookupContext context(kUncategorized);
+  IndexBlockIter iiter_on_stack;
+  ReadOptions ro;
+  ro.total_order_seek = true;
+  auto index_iter =
+      NewIndexIterator(ro, /*disable_prefix_seek=*/true,
+                       /*input_iter=*/&iiter_on_stack, /*get_context=*/nullptr,
+                       /*lookup_context=*/&context);
+  std::unique_ptr<InternalIteratorBase<IndexValue>> iiter_unique_ptr;
+  if (index_iter != &iiter_on_stack) {
+    iiter_unique_ptr.reset(index_iter);
+  }
+
+  index_iter->Seek(end);
+  uint64_t end_offset = ApproximateDataOffsetOf(*index_iter, data_size);
+  index_iter->Seek(start);
+  uint64_t start_offset = ApproximateDataOffsetOf(*index_iter, data_size);
+
+  // guess middle_offset = (end_offset + start_offset) / 2
+  uint64_t middle_offset = (end_offset + start_offset) >> 1;
+
+  // TODO: improve offset search, maybe we should change IndexValue api.
+  while (index_iter->Valid()
+         && index_iter->value().handle.offset() < middle_offset) {
+    index_iter->Next();
+  }
+
+  return index_iter->user_key();
+}
+
 bool BlockBasedTable::TEST_FilterBlockInCache() const {
   assert(rep_ != nullptr);
   return TEST_BlockInCache(rep_->filter_handle);

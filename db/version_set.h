@@ -205,10 +205,28 @@ class VersionStorageInfo {
   int MaxOutputLevel(bool allow_ingest_behind) const;
 
   // Return level number that has idx'th highest score
-  int CompactionScoreLevel(int idx) const { return compaction_level_[idx]; }
+  // Useless for our improvement.
+  int CompactionScoreLevel(int) const { return 0; }
 
   // Return idx'th highest score
-  double CompactionScore(int idx) const { return compaction_score_[idx]; }
+  // only work for level and fifo
+  double CompactionScore(int) const { return 0.0; }
+
+  double UniversalCompactionScore(int, int) const {
+    return 0.0;
+  }
+
+  int PartitionSize() const { return (int) partitions_.size(); }
+
+  std::vector<FileMetaData*>* GetHitFiles(Slice& smallest_user_key) {
+    FilePartition fp;
+    fp.smallest_ = smallest_user_key;
+    auto hit_partition = partitions_.lower_bound(&fp);
+    if (hit_partition != partitions_.end()) {
+      return (*hit_partition)->files_;
+    }
+    return nullptr;
+  }
 
   void GetOverlappingInputs(
       int level, const InternalKey* begin,  // nullptr means before all keys
@@ -283,6 +301,98 @@ class VersionStorageInfo {
   const std::vector<FileMetaData*>& LevelFiles(int level) const {
     return files_[level];
   }
+
+  struct FilePartition {
+
+    int level_;
+
+    // Level that should be compacted next and its compaction score.
+    // Score < 1 means compaction is not strictly needed.  These fields
+    // are initialized by Finalize().
+    // The most critical level to be compacted is listed first
+    // These are used to pick the best compaction level
+    std::vector<double> compaction_score_;
+    std::vector<int> compaction_level_;
+
+    Slice smallest_;
+    Slice largest_;
+    std::vector<FileMetaData*>* files_;
+
+    // approximate partition size
+    uint64_t data_size_;
+
+    FilePartition() {}
+
+    FilePartition(int level, Slice& smallest)
+        : level_(level),
+          compaction_score_(level),
+          compaction_level_(level),
+          smallest_(smallest),
+          largest_(""),
+          files_(new std::vector<FileMetaData*>[level]),
+          data_size_(0) { };
+
+    FilePartition(int level, Slice& smallest, Slice& largest)
+        : level_(level),
+          compaction_score_(level),
+          compaction_level_(level),
+          smallest_(smallest),
+          largest_(largest),
+          files_(new std::vector<FileMetaData*>[level]),
+          data_size_(0) { };
+
+    ~FilePartition() {
+      delete[] files_;
+    }
+
+    int GetLevel() const { return level_; }
+
+    void AddFile(int level, FileMetaData* f) {
+      auto& level_files = files_[level];
+      level_files.push_back(f);
+      data_size_ += f->fd.table_reader->ApproximateSize(largest_, smallest_,
+                                                        kUncategorized);
+    }
+
+    FilePartition* Split() {
+      // TODO: improve split
+      // not sure if we should lock partition when split
+      Slice middleKey;
+      bool flag = false;
+      for (int i = level_-1; i >= 0; i--) {
+        for (FileMetaData* f : files_[i]) {
+          middleKey = f->fd.table_reader->
+                      ApproximateMiddleKey(smallest_, largest_);
+          if (middleKey.compare("") != 0) {
+            flag = true;
+            break;
+          }
+        }
+        if (flag) {
+          break;
+        }
+      }
+
+      // split failed
+      if (!flag || middleKey.compare("") == 0) {
+        return nullptr;
+      }
+      auto* fp = new FilePartition(level_, middleKey, largest_);
+      // add files
+      for (int i = 0; i < level_; i++) {
+        for (FileMetaData* f : files_[i]) {
+          if (f->largest.user_key().compare(middleKey) >= 0 &&
+              largest_.compare(f->smallest.user_key()) >= 0) {
+            fp->AddFile(i, f);
+          }
+        }
+      }
+      return fp;
+    }
+
+    bool Oversize(uint64_t threshold) const { return data_size_ > threshold; }
+
+  };
 
   class FileLocation {
    public:
@@ -514,6 +624,15 @@ class VersionStorageInfo {
   // in increasing order of keys
   std::vector<FileMetaData*>* files_;
 
+  // List of file partitions
+  // and custom comparatives
+  struct partitions_compare {
+    bool operator()(FilePartition *lhs, FilePartition *rhs) const {
+      return lhs->smallest_.compare(rhs->smallest_);
+    }
+  };
+  std::set<FilePartition*, partitions_compare> partitions_;
+
   // Map of all table files in version. Maps file number to (level, position on
   // level).
   using FileLocations = std::unordered_map<uint64_t, FileLocation>;
@@ -580,13 +699,6 @@ class VersionStorageInfo {
   // created that references it.
   SequenceNumber oldest_snapshot_seqnum_ = 0;
 
-  // Level that should be compacted next and its compaction score.
-  // Score < 1 means compaction is not strictly needed.  These fields
-  // are initialized by Finalize().
-  // The most critical level to be compacted is listed first
-  // These are used to pick the best compaction level
-  std::vector<double> compaction_score_;
-  std::vector<int> compaction_level_;
   int l0_delay_trigger_count_ = 0;  // Count used to trigger slow down and stop
                                     // for number of L0 files.
 
