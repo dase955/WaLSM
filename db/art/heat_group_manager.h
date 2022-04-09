@@ -17,7 +17,7 @@ class Compactor;
 
 class HeatGroupManager {
  public:
-  void SetCompactor(Compactor *compactor);
+  void SetCompactor(Compactor* compactor);
 
   void InitGroupQueue();
 
@@ -26,13 +26,15 @@ class HeatGroupManager {
   void StopHeatThread();
 
   // Operation with high priority will be put in front
-  void AddOperation(HeatGroup *group, GroupOperator op, bool highPri = false);
+  void AddOperation(HeatGroup* group, GroupOperator op, bool highPri = false);
 
-  void InsertIntoLayer(HeatGroup *inserted, int level);
+  void InsertIntoLayer(HeatGroup* inserted, int level);
 
-  void MoveGroup(HeatGroup *group);
+  void MoveGroup(HeatGroup* group);
 
   void MoveAllGroupsToLayer(int from, int to);
+
+  void TestChooseCompaction();
 
  private:
   void BGWorkProcessHeatGroup();
@@ -45,7 +47,7 @@ class HeatGroupManager {
 
   void GroupLevelDown();
 
-  Compactor *compactor_;
+  Compactor* compactor_;
 
   TQueueConcurrent<GroupOperation> group_operations_;
 

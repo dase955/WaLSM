@@ -23,13 +23,13 @@ class DBImpl;
 struct CompactionRec {
   std::string key;
   std::string value;
-  uint64_t    seqNum;
+  uint64_t seq_num_;
   ValueType   type;
 
   CompactionRec() = default;
 
-  CompactionRec(std::string &key_, std::string &value_, uint64_t seqNum_, ValueType type_)
-      : key(key_), value(value_), seqNum(seqNum_), type(type_){};
+  CompactionRec(std::string& key_, std::string& value_, uint64_t seq_num, ValueType type_)
+      : key(key_), value(value_), seq_num_(seq_num), type(type_){};
 
   friend bool operator<(const CompactionRec& l, const CompactionRec& r) {
     return l.key < r.key;
@@ -62,9 +62,10 @@ class Compactor {
 
   void Notify(HeatGroup *heat_group);
 
- private:
   // return compacted size
   int32_t DoCompaction();
+
+ private:
 
   std::mutex mutex_;
 
@@ -72,13 +73,13 @@ class Compactor {
 
   bool thread_stop_;
 
-  HeatGroup *chosen_group_;
+  HeatGroup* chosen_group_;
 
-  HeatGroupManager *group_manager_;
+  HeatGroupManager* group_manager_;
 
-  VLogManager *vlog_manager_;
+  VLogManager* vlog_manager_;
 
-  DBImpl *db_impl_;
+  DBImpl* db_impl_;
 };
 
 void UpdateTotalSize(size_t update_size);

@@ -13,6 +13,7 @@
 #include <deque>
 #include <vector>
 
+#include "db/art/compactor.h"
 #include "db/blob/blob_file_builder.h"
 #include "db/compaction/compaction_iterator.h"
 #include "db/dbformat.h"
@@ -333,6 +334,201 @@ Status BuildTable(
 
       blob_file_additions->clear();
     }
+  }
+
+  if (meta->fd.GetFileSize() == 0) {
+    fname = "(nil)";
+  }
+  // Output to event logger and fire events.
+  EventHelpers::LogAndNotifyTableFileCreationFinished(
+      event_logger, ioptions.listeners, dbname, column_family_name, fname,
+      job_id, meta->fd, meta->oldest_blob_file_number, tp, reason, s,
+      file_checksum, file_checksum_func_name);
+
+  return s;
+}
+
+Status BuildTableFromArt(
+    ArtCompactionJob *job,
+    const std::string& dbname, VersionSet* versions, Env* env, FileSystem* fs,
+    const ImmutableCFOptions& ioptions,
+    const MutableCFOptions& mutable_cf_options, const FileOptions& file_options,
+    TableCache* table_cache,
+    FileMetaData* meta,
+    const InternalKeyComparator& internal_comparator,
+    const std::vector<std::unique_ptr<IntTblPropCollectorFactory>>*
+        int_tbl_prop_collector_factories,
+    uint32_t column_family_id, const std::string& column_family_name,
+    std::vector<SequenceNumber> snapshots,
+    SequenceNumber earliest_write_conflict_snapshot,
+    SnapshotChecker* snapshot_checker, const CompressionType compression,
+    uint64_t sample_for_compression, const CompressionOptions& compression_opts,
+    bool paranoid_file_checks, InternalStats* internal_stats,
+    TableFileCreationReason reason, IOStatus* io_status,
+    const std::shared_ptr<IOTracer>& io_tracer, EventLogger* event_logger,
+    int job_id, const Env::IOPriority io_priority,
+    TableProperties* table_properties, int level, const uint64_t creation_time,
+    const uint64_t oldest_key_time, Env::WriteLifeTimeHint write_hint,
+    const uint64_t file_creation_time, const std::string& db_id,
+    const std::string& db_session_id) {
+
+  // Reports the IOStats for flush for every following bytes.
+  const size_t kReportFlushIOStatsEvery = 1048576;
+  OutputValidator output_validator(
+      internal_comparator,
+      /*enable_order_check=*/
+      mutable_cf_options.check_flush_compaction_key_order,
+      /*enable_hash=*/paranoid_file_checks);
+  Status s;
+  meta->fd.file_size = 0;
+
+  std::string fname = TableFileName(ioptions.cf_paths, meta->fd.GetNumber(),
+                                    meta->fd.GetPathId());
+  std::vector<std::string> blob_file_paths;
+  std::string file_checksum = kUnknownFileChecksum;
+  std::string file_checksum_func_name = kUnknownFileChecksumFuncName;
+  TableProperties tp;
+
+  TableBuilder* builder;
+  std::unique_ptr<WritableFileWriter> file_writer;
+  // Currently we only enable dictionary compression during compaction to the
+  // bottommost level.
+  CompressionOptions compression_opts_for_flush(compression_opts);
+  compression_opts_for_flush.max_dict_bytes = 0;
+  compression_opts_for_flush.zstd_max_train_bytes = 0;
+  {
+    std::unique_ptr<FSWritableFile> file;
+    bool use_direct_writes = file_options.use_direct_writes;
+    IOStatus io_s = NewWritableFile(fs, fname, &file, file_options);
+    assert(s.ok());
+    s = io_s;
+    if (io_status->ok()) {
+      *io_status = io_s;
+    }
+    file->SetIOPriority(io_priority);
+    file->SetWriteLifeTimeHint(write_hint);
+
+    file_writer.reset(new WritableFileWriter(
+        std::move(file), fname, file_options, env, io_tracer,
+        ioptions.statistics, ioptions.listeners,
+        ioptions.file_checksum_gen_factory));
+
+    builder = NewTableBuilder(
+        ioptions, mutable_cf_options, internal_comparator,
+        int_tbl_prop_collector_factories, column_family_id,
+        column_family_name, file_writer.get(), compression,
+        sample_for_compression, compression_opts_for_flush, level,
+        false /* skip_filters */, creation_time, oldest_key_time,
+        0 /*target_file_size*/, file_creation_time, db_id, db_session_id);
+  }
+
+  for (auto &rec : job->compacted_data_) {
+    InternalKey ikey(rec.key, rec.seq_num_, rec.type);
+    builder->Add(ikey.Encode(), rec.value);
+    meta->UpdateBoundaries(
+        ikey.Encode(), rec.value, rec.seq_num_, rec.type);
+  }
+
+  /*for (; c_iter.Valid(); c_iter.Next()) {
+    const Slice& key = c_iter.key();
+    const Slice& value = c_iter.value();
+    const ParsedInternalKey& ikey = c_iter.ikey();
+    // Generate a rolling 64-bit hash of the key and values
+    s = output_validator.Add(key, value);
+    if (!s.ok()) {
+      break;
+    }
+    builder->Add(key, value);
+    meta->UpdateBoundaries(key, value, ikey.sequence, ikey.type);
+
+    // TODO(noetzli): Update stats after flush, too.
+    if (io_priority == Env::IO_HIGH &&
+        IOSTATS(bytes_written) >= kReportFlushIOStatsEvery) {
+      ThreadStatusUtil::SetThreadOperationProperty(
+          ThreadStatus::FLUSH_BYTES_WRITTEN, IOSTATS(bytes_written));
+    }
+  }*/
+
+  TEST_SYNC_POINT("BuildTable:BeforeFinishBuildTable");
+  s = builder->Finish();
+  *io_status = builder->io_status();
+  if (s.ok()) {
+    uint64_t file_size = builder->FileSize();
+    meta->fd.file_size = file_size;
+    meta->marked_for_compaction = builder->NeedCompact();
+    assert(meta->fd.GetFileSize() > 0);
+    tp = builder->GetTableProperties(); // refresh now that builder is finished
+    if (table_properties) {
+      *table_properties = tp;
+    }
+  }
+  delete builder;
+
+  // Finish and check for file errors
+  TEST_SYNC_POINT("BuildTable:BeforeSyncTable");
+  if (s.ok()) {
+    StopWatch sw(env, ioptions.statistics, TABLE_SYNC_MICROS);
+    *io_status = file_writer->Sync(ioptions.use_fsync);
+  }
+  TEST_SYNC_POINT("BuildTable:BeforeCloseTableFile");
+  if (s.ok() && io_status->ok()) {
+    *io_status = file_writer->Close();
+  }
+  if (s.ok() && io_status->ok()) {
+    // Add the checksum information to file metadata.
+    meta->file_checksum = file_writer->GetFileChecksum();
+    meta->file_checksum_func_name = file_writer->GetFileChecksumFuncName();
+    file_checksum = meta->file_checksum;
+    file_checksum_func_name = meta->file_checksum_func_name;
+  }
+
+  if (s.ok()) {
+    s = *io_status;
+  }
+
+  // TODO Also check the IO status when create the Iterator.
+
+  if (s.ok()) {
+    // Verify that the table is usable
+    // We set for_compaction to false and don't OptimizeForCompactionTableRead
+    // here because this is a special case after we finish the table building
+    // No matter whether use_direct_io_for_flush_and_compaction is true,
+    // we will regrad this verification as user reads since the goal is
+    // to cache it here for further user reads
+    ReadOptions read_options;
+    std::unique_ptr<InternalIterator> it(table_cache->NewIterator(
+        read_options, file_options, internal_comparator, *meta,
+        nullptr /* range_del_agg */,
+        mutable_cf_options.prefix_extractor.get(), nullptr,
+        (internal_stats == nullptr) ? nullptr
+                                    : internal_stats->GetFileReadHist(0),
+        TableReaderCaller::kFlush, /*arena=*/nullptr,
+        /*skip_filter=*/false, level,
+        MaxFileSizeForL0MetaPin(mutable_cf_options),
+        /*smallest_compaction_key=*/nullptr,
+        /*largest_compaction_key*/ nullptr,
+        /*allow_unprepared_value*/ false));
+    s = it->status();
+    if (s.ok() && paranoid_file_checks) {
+      OutputValidator file_validator(internal_comparator,
+                                     /*enable_order_check=*/true,
+                                     /*enable_hash=*/true);
+      for (it->SeekToFirst(); it->Valid(); it->Next()) {
+        // Generate a rolling 64-bit hash of the key and values
+        file_validator.Add(it->key(), it->value()).PermitUncheckedError();
+      }
+      s = it->status();
+      if (s.ok() && !output_validator.CompareValidator(file_validator)) {
+        s = Status::Corruption("Paranoid checksums do not match");
+      }
+    }
+  }
+
+  if (!s.ok() || meta->fd.GetFileSize() == 0) {
+    constexpr IODebugContext* dbg = nullptr;
+
+    Status ignored = fs->DeleteFile(fname, IOOptions(), dbg);
+    ignored.PermitUncheckedError();
   }
 
   if (meta->fd.GetFileSize() == 0) {

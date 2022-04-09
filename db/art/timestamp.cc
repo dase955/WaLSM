@@ -24,14 +24,14 @@ Timestamps::Timestamps()
     : last_ts_(0), last_global_dec_(0), size_(0),
       last_insert_(0), accumulate_(0.f) {}
 
-Timestamps::Timestamps(const Timestamps &rhs)
+Timestamps::Timestamps(const Timestamps& rhs)
     : last_ts_(rhs.last_ts_), last_global_dec_(rhs.last_global_dec_),
       size_(rhs.size_), last_insert_(rhs.last_insert_),
       accumulate_(rhs.accumulate_) {
   memcpy(timestamps, rhs.timestamps, 32);
 }
 
-Timestamps &Timestamps::operator=(const Timestamps &rhs) {
+Timestamps& Timestamps::operator=(const Timestamps& rhs) {
   if (this == &rhs) {
     return *this;
   }
@@ -106,7 +106,7 @@ void Timestamps::UpdateHeat() {
 }
 
 bool Timestamps::GetCurrentHeatAndTs(
-    int32_t &begin_ts, int32_t &mid_ts, int32_t &end_ts, float &heat) {
+    int32_t& begin_ts, int32_t& mid_ts, int32_t& end_ts, float& heat) {
   std::lock_guard<SpinMutex> lk(update_lock_);
   if (size_ == 0) {
     return false;

@@ -273,6 +273,7 @@ DBImpl::DBImpl(const DBOptions& options, const std::string& dbname,
   group_manager_.SetCompactor(&compactor_);
   compactor_.SetGroupManager(&group_manager_);
   compactor_.SetVLogManager(&vlog_manager_);
+  compactor_.SetDB(this);
 
   global_memtable_ = new GlobalMemtable(
       &vlog_manager_, &group_manager_, env_);
@@ -5001,6 +5002,12 @@ Status DBImpl::GetCreationTimeOfOldestFile(uint64_t* creation_time) {
     return Status::NotSupported("This API only works if max_open_files = -1");
   }
 }
+
+void DBImpl::TestCompaction() {
+  group_manager_.TestChooseCompaction();
+  compactor_.DoCompaction();
+}
+
 #endif  // ROCKSDB_LITE
 
 }  // namespace ROCKSDB_NAMESPACE

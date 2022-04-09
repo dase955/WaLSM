@@ -13,7 +13,7 @@
 
 namespace ROCKSDB_NAMESPACE {
 
-NodeAllocator &GetNodeAllocator() {
+NodeAllocator& GetNodeAllocator() {
   static NodeAllocator manager;
   return manager;
 }
@@ -44,12 +44,12 @@ NodeAllocator::~NodeAllocator() {
   munmap(pmemptr_, total_size_);
 }
 
-NVMNode *NodeAllocator::AllocateNode() {
-  char *addr = free_pages_.pop_front();
-  return (NVMNode *)addr;
+NVMNode* NodeAllocator::AllocateNode() {
+  char* addr = free_pages_.pop_front();
+  return (NVMNode*)addr;
 }
 
-void NodeAllocator::DeallocateNode(char *addr) {
+void NodeAllocator::DeallocateNode(char* addr) {
   free_pages_.emplace_back(addr);
 }
 
@@ -57,20 +57,20 @@ void NodeAllocator::recoverOnRestart() {
 
 }
 
-int64_t NodeAllocator::relative(NVMNode *node) {
+int64_t NodeAllocator::relative(NVMNode* node) {
   return (char *)node - pmemptr_;
 }
 
-NVMNode *NodeAllocator::absolute(int64_t offset) {
-  return offset == -1 ? nullptr : (NVMNode *)(pmemptr_ + offset);
+NVMNode* NodeAllocator::absolute(int64_t offset) {
+  return offset == -1 ? nullptr : (NVMNode*)(pmemptr_ + offset);
 }
 
 #ifdef ART_LITTLE_ENDIAN
-char getPrefix(int level, const KVStruct &kvInfo) {
-  return kvInfo.prefixes[level - 2];
+char GetPrefix(int level, const KVStruct& kvInfo) {
+  return kvInfo.prefixes_[level - 2];
 }
 #else
-inline char getPrefix(int level, const uint64_t &hash) {
+inline char GetPrefix(int level, const uint64_t &hash) {
   return ((char*)&hash)[level];
 }
 #endif

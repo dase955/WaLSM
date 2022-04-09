@@ -12,7 +12,7 @@ struct NVMNodeMeta {
   uint64_t header = 0;
   int64_t next1 = -1;  // We only store relative offset in meta
   int64_t next2 = -1;
-  void    *dram_pointer_ = nullptr;
+  void*   dram_pointer_ = nullptr;
   uint8_t fingerprints_[224] = {0};
 };
 

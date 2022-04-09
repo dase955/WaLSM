@@ -619,6 +619,8 @@ class DBImpl : public DB {
   // match to our in-memory records
   virtual Status CheckConsistency();
 
+  void TestCompaction();
+
   // max_file_num_to_ignore allows bottom level compaction to filter out newly
   // compacted SST files. Setting max_file_num_to_ignore to kMaxUint64 will
   // disable the filtering
@@ -1672,7 +1674,7 @@ class DBImpl : public DB {
   void BackgroundCallCompaction(PrepickedCompaction* prepicked_compaction,
                                 Env::Priority thread_pri);
   void BackgroundCallFlush(Env::Priority thread_pri);
-  void SyncCallFlush();
+  void SyncCallFlush(ArtCompactionJob* job);
   void BackgroundCallPurge();
   Status BackgroundCompaction(bool* madeProgress, JobContext* job_context,
                               LogBuffer* log_buffer,

@@ -617,6 +617,6 @@ public class ReadOptions extends RocksObject {
   private native long iterateLowerBound(final long handle);
   private native void setTableFilter(final long handle,
       final long tableFilterHandle);
-  private native void setIterStartSeqnum(final long handle, final long seqNum);
+  private native void setIterStartSeqnum(final long handle, final long seq_num_);
   private native long iterStartSeqnum(final long handle);
 }

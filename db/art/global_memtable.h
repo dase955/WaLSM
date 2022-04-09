@@ -33,42 +33,44 @@ class VLogManager;
 struct KVStruct;
 
 struct InnerNode {
-  uint64_t     buffer_[32];             // 256B buffer_
-  uint8_t      hll_[64];        // 64B hyper log log
+  uint64_t       buffer_[32];             // 256B buffer_
+  uint8_t        hll_[64];        // 64B hyper log log
 
   // Pointer to heat group
-  HeatGroup    *heat_group_;
+  HeatGroup*     heat_group_;
 
   // Pointer to art node, backup is used for reallocate
-  ArtNodeHeader *art, *artBackup;
+  ArtNodeHeader* art;
+  ArtNodeHeader* artBackup;
 
   // Pointer to NVM node, backup is used for compaction
-  NVMNode       *nvm_node_, *backup_nvm_node_;
-  InnerNode     *last_child_node_;
-  InnerNode     *next_node_;
-  uint64_t      vptr_;
+  NVMNode*       nvm_node_;
+  NVMNode*       backup_nvm_node_;
+  InnerNode*     last_child_node_;
+  InnerNode*     next_node_;
+  uint64_t       vptr_;
 
   // node status_, see macros.h
-  uint32_t      status_;
+  uint32_t       status_;
 
   // estimated size_ of key and value in this node
-  int32_t       estimated_size_;
+  int32_t        estimated_size_;
 
   // total size_ in buffer_
-  int32_t       buffer_size_;
+  int32_t        buffer_size_;
 
-  OptLock               opt_lock_;
+  OptLock        opt_lock_;
 
   // Used for inserting new node into linked list
-  SpinMutex              link_lock_;
+  SpinMutex      link_lock_;
 
   // Used for flush and split operation
-  std::mutex            flush_mutex_;
+  std::mutex     flush_mutex_;
 
   // Hold gc_mutex_ when do gc,
-  std::mutex            gc_mutex_;
+  std::mutex     gc_mutex_;
 
-  int64_t              oldest_key_time_ = 0;
+  int64_t        oldest_key_time_ = 0;
 
   InnerNode();
 };
@@ -80,40 +82,42 @@ class GlobalMemtable {
         vlog_manager_(nullptr), group_manager_(nullptr) {}
 
   GlobalMemtable(
-      VLogManager *vlog_manager, HeatGroupManager *group_manager, Env *env)
+      VLogManager* vlog_manager, HeatGroupManager* group_manager, Env* env)
       : root_(nullptr), head_(nullptr), tail_(nullptr),
         vlog_manager_(vlog_manager), group_manager_(group_manager),
         env_(env) {
             InitFirstTwoLevel();
         };
 
-  void Put(Slice &slice, uint64_t vptr);
+  void Put(Slice& slice, uint64_t vptr, size_t count);
 
-  bool Get(std::string &key, std::string &value);
+  bool Get(std::string& key, std::string& value);
 
   void InitFirstTwoLevel();
 
  private:
-  bool FindKey(InnerNode *leaf, std::string &key, std::string &value);
+  void Put(Slice& key, KVStruct& kv_info);
 
-  void SqueezeNode(InnerNode *leaf);
+  bool FindKey(InnerNode* leaf, std::string& key, std::string& value);
 
-  void SplitNode(InnerNode *oldLeaf);
+  void SqueezeNode(InnerNode* leaf);
+
+  void SplitLeaf(InnerNode* leaf);
 
   // Optimize split below level 5, since we store first three prefixes in hash(key)
-  void SplitLeafBelowLevel5(InnerNode *leaf);
+  void SplitLeafBelowLevel5(InnerNode* leaf);
 
-  void InsertIntoLeaf(InnerNode *leaf, KVStruct &kvInfo, int level);
+  void InsertIntoLeaf(InnerNode* leaf, KVStruct& kv_info, int level);
 
-  InnerNode *root_;
-  InnerNode *head_;
-  InnerNode *tail_;
+  InnerNode* root_;
+  InnerNode* head_;
+  InnerNode* tail_;
 
-  VLogManager *vlog_manager_;
+  VLogManager* vlog_manager_;
 
-  HeatGroupManager *group_manager_;
+  HeatGroupManager* group_manager_;
 
-  Env *env_;
+  Env* env_;
 };
 
 } // namespace ROCKSDB_NAMESPACE

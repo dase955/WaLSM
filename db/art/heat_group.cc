@@ -24,7 +24,7 @@ static float   LayerHeatBound[MAX_LAYERS + 1];
 /*----------------------------------------------------------------------*/
 
 bool HeatGroup::InsertNewNode(
-    InnerNode *last, std::vector<InnerNode*> &inserts) {
+    InnerNode* last, std::vector<InnerNode*>& inserts) {
   std::lock_guard<std::mutex> lk(lock);
 
   // Nodes have been inserted into heat groups, just return
@@ -146,7 +146,7 @@ void EstimateLowerAndUpperBound(
 
 /*----------------------------------------------------------------------*/
 
-void SplitGroup(HeatGroup *group) {
+void SplitGroup(HeatGroup* group) {
   // This group maybe has been chosen to do compaction, so just pass
   if (group->status_.load(std::memory_order_relaxed) != kGroupWaitSplit) {
     return;
@@ -177,7 +177,7 @@ void SplitGroup(HeatGroup *group) {
   assert(leftEnd != rightEnd);
 
   group->last_node_ = leftEnd;
-  group->group_size_ = totalSize - leftSize;
+  group->group_size_ = leftSize;
 
   auto *rightGroup = new HeatGroup();
   rightGroup->lock.lock();
@@ -222,7 +222,7 @@ int ChooseLevelByHeat(float heat) {
 #endif
 }
 
-int ChooseGroupLevel(HeatGroup *group) {
+int ChooseGroupLevel(HeatGroup* group) {
   if (group->group_size_ < GroupMinSize) {
     return -1;
   }
@@ -236,7 +236,7 @@ int ChooseGroupLevel(HeatGroup *group) {
   return (lowerLevel + upperLevel) >> 1;
 }
 
-void InsertNodesToGroup(InnerNode *node, std::vector<InnerNode*> &inserts) {
+void InsertNodesToGroup(InnerNode* node, std::vector<InnerNode*>& inserts) {
   while (true) {
     auto heatGroup = node->heat_group_;
     if (!heatGroup || !heatGroup->InsertNewNode(node, inserts)) {
@@ -247,12 +247,12 @@ void InsertNodesToGroup(InnerNode *node, std::vector<InnerNode*> &inserts) {
   }
 }
 
-void InsertNodesToGroup(InnerNode *node, InnerNode *insert) {
+void InsertNodesToGroup(InnerNode* node, InnerNode* insert) {
   std::vector<InnerNode*> inserts{insert};
   InsertNodesToGroup(node, inserts);
 }
 
-void RemoveFromQueue(HeatGroup *group) {
+void RemoveFromQueue(HeatGroup* group) {
   group->prev->next = group->next;
   group->next->prev = group->prev;
 }
@@ -315,12 +315,12 @@ void HeatGroupManager::BGWorkProcessHeatGroup() {
   }
 }
 
-void HeatGroupManager::AddOperation(HeatGroup *group, GroupOperator op, bool high_pri) {
+void HeatGroupManager::AddOperation(HeatGroup* group, GroupOperator op, bool high_pri) {
   high_pri ? group_operations_.emplace_front(group, op) :
            group_operations_.emplace_back(group, op);
 }
 
-void HeatGroupManager::InsertIntoLayer(HeatGroup *inserted, int level) {
+void HeatGroupManager::InsertIntoLayer(HeatGroup* inserted, int level) {
   if (level >= group_queue_.totalLayers) {
     group_queue_.totalLayers = level + 1;
   }
@@ -333,7 +333,7 @@ void HeatGroupManager::InsertIntoLayer(HeatGroup *inserted, int level) {
   inserted->in_base_layer_ = level == BASE_LAYER;
 }
 
-void HeatGroupManager::MoveGroup(HeatGroup *group) {
+void HeatGroupManager::MoveGroup(HeatGroup* group) {
   auto status = group->status_.load(std::memory_order_relaxed);
   if (status == kGroupWaitSplit || status == kGroupCompaction) {
     return;
@@ -396,6 +396,18 @@ void HeatGroupManager::ForceGroupLevelDown() {
   }
 }
 
+void HeatGroupManager::TestChooseCompaction() {
+  auto group = group_queue_.heads[BASE_LAYER]->next;
+  while (group != group_queue_.tails[BASE_LAYER]) {
+    auto size = group->group_size_.load();
+    if (size > (1 << 20)) {
+      compactor_->Notify(group);
+      return;
+    }
+    group = group->next;
+  }
+}
+
 void HeatGroupManager::ChooseCompaction() {
   for (int num_try = 0; num_try < 3; ++num_try) {
     GroupLevelDown();
@@ -428,7 +440,7 @@ void HeatGroupManager::ChooseCompaction() {
   compactor_->Notify(nullptr);
 }
 
-void HeatGroupManager::SetCompactor(Compactor *compactor) {
+void HeatGroupManager::SetCompactor(Compactor* compactor) {
   compactor_ = compactor;
 }
 

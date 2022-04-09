@@ -17,7 +17,7 @@
 
 namespace ROCKSDB_NAMESPACE {
 
-uint64_t Hash(const char *key, size_t n, [[maybe_unused]] ValueType value_type) {
+uint64_t Hash(const char* key, size_t n, [[maybe_unused]] ValueType value_type) {
   uint32_t prefix = 0;
   // We don't store first two char
   memcpy((char*)&prefix + 1, key + 2, std::max(0, std::min((int)n - 2, 3)));
@@ -55,15 +55,15 @@ int EstimateDistinctCount(const uint8_t hyperLogLog[64]) {
 
 ////////////////////////////////////////////////////////////////////////////
 
-InnerNode *AllocateLeafNode(uint8_t prefix_length,
+InnerNode* AllocateLeafNode(uint8_t prefix_length,
                             unsigned char last_prefix,
-                            InnerNode *next_node) {
+                            InnerNode* next_node) {
   auto inode = new InnerNode();
   SET_LEAF(inode->status_);
   SET_ART_NON_FULL(inode->status_);
   SET_NODE_BUFFER_SIZE(inode->status_, 0);
 
-  auto &mgr = GetNodeAllocator();
+  auto& mgr = GetNodeAllocator();
 
   auto nvm_node = mgr.AllocateNode();
   inode->nvm_node_ = nvm_node;
@@ -105,8 +105,8 @@ void InsertInnerNode(InnerNode *node, InnerNode *inserted) {
   // pmem_persist(prev_nvm_node, 32);
 }
 
-void InsertSplitInnerNode(InnerNode *node, InnerNode *first_inserted,
-                          InnerNode *last_inserted, int prefix_length) {
+void InsertSplitInnerNode(InnerNode* node, InnerNode* first_inserted,
+                          InnerNode* last_inserted, int prefix_length) {
   std::lock_guard<SpinMutex> lk(node->link_lock_);
 
   auto prev_node = node->last_child_node_;
@@ -118,11 +118,13 @@ void InsertSplitInnerNode(InnerNode *node, InnerNode *first_inserted,
   auto new_hdr = old_hdr;
   if (GET_TAG(old_hdr, ALT_FIRST_TAG)) {
     CLEAR_TAG(new_hdr, ALT_FIRST_TAG);
-    prev_nvm_node->meta.next2 = GetNodeAllocator().relative(inserted_first_nvm_node);
+    prev_nvm_node->meta.next2 =
+        GetNodeAllocator().relative(inserted_first_nvm_node);
     inserted_last_nvm_node->meta.next1 = prev_nvm_node->meta.next1;
   } else {
     SET_TAG(new_hdr, ALT_FIRST_TAG);
-    prev_nvm_node->meta.next1 = GetNodeAllocator().relative(inserted_first_nvm_node);
+    prev_nvm_node->meta.next1 =
+        GetNodeAllocator().relative(inserted_first_nvm_node);
     inserted_last_nvm_node->meta.next1 = prev_nvm_node->meta.next2;
   }
   // _mm_clwb(inserted_last_nvm_node->meta); _mm_sfence();
@@ -141,7 +143,7 @@ void InsertSplitInnerNode(InnerNode *node, InnerNode *first_inserted,
   node->last_child_node_ = last_inserted;
 }
 
-void InsertNewNVMNode(InnerNode *node, NVMNode *new_nvm_node) {
+void InsertNewNVMNode(InnerNode* node, NVMNode* new_nvm_node) {
   auto old_nvm_node = node->nvm_node_;
   auto hdr = old_nvm_node->meta.header;
   SET_ROWS(hdr, 0);
@@ -172,7 +174,7 @@ void InsertNewNVMNode(InnerNode *node, NVMNode *new_nvm_node) {
 }
 
 // Different from InsertNewNVMNode, link_lock_ has been held
-void RemoveOldNVMNode(InnerNode *node) {
+void RemoveOldNVMNode(InnerNode* node) {
   auto next_node = node->next_node_;
   auto nvm_node = node->nvm_node_;
 
@@ -188,28 +190,28 @@ void RemoveOldNVMNode(InnerNode *node) {
   next_node->backup_nvm_node_ = nullptr;
 }
 
-NVMNode*GetNextNode(NVMNode *node) {
+NVMNode* GetNextNode(NVMNode* node) {
   int64_t next_offset =
       GET_TAG(node->meta.header, ALT_FIRST_TAG)
           ? node->meta.next1 : node->meta.next2;
   return GetNodeAllocator().absolute(next_offset);
 }
 
-NVMNode*GetNextNode(int64_t offset) {
-  NVMNode *node = GetNodeAllocator().absolute(offset);
+NVMNode* GetNextNode(int64_t offset) {
+  NVMNode* node = GetNodeAllocator().absolute(offset);
   int64_t next_offset =
       GET_TAG(node->meta.header, ALT_FIRST_TAG)
           ? node->meta.next1 : node->meta.next2;
   return GetNodeAllocator().absolute(next_offset);
 }
 
-int64_t GetNextRelativeNode(NVMNode *node) {
+int64_t GetNextRelativeNode(NVMNode* node) {
   return GET_TAG(node->meta.header, ALT_FIRST_TAG)
              ? node->meta.next1 : node->meta.next2;
 }
 
 int64_t GetNextRelativeNode(int64_t offset) {
-  NVMNode *node = GetNodeAllocator().absolute(offset);
+  NVMNode* node = GetNodeAllocator().absolute(offset);
   return GET_TAG(node->meta.header, ALT_FIRST_TAG)
              ? node->meta.next1 : node->meta.next2;
 }

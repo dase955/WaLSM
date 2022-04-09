@@ -181,7 +181,7 @@ Status DBImpl::WriteImpl(const WriteOptions& write_options,
 
 #ifdef ART
       Slice input = WriteBatchInternal::Contents(w.batch);
-      global_memtable_->Put(input, w.batch->GetVptr());
+      global_memtable_->Put(input, w.batch->GetVptr(), w.batch->Count());
 #else
       w.status = WriteBatchInternal::InsertInto(
           &w, w.sequence, &column_family_memtables, &flush_scheduler_,
@@ -346,6 +346,15 @@ Status DBImpl::WriteImpl(const WriteOptions& write_options,
     if (status.ok()) {
       SequenceNumber next_sequence = current_sequence;
       size_t index = 0;
+
+      // Precalculate wal size to determine RecordIndex for each record.
+      size_t wal_size = 0;
+      for (auto* writer : write_group) {
+        wal_size +=
+            (writer->batch->GetDataSize() - WriteBatchInternal::kHeader);
+      }
+      RecordIndex next_index = vlog_manager_.GetFirstIndex(wal_size);
+
       // Note: the logic for advancing seq here must be consistent with the
       // logic in WriteBatchInternal::InsertInto(write_group...) as well as
       // with WriteBatchInternal::InsertInto(write_batch...) that is called on
@@ -365,15 +374,18 @@ Status DBImpl::WriteImpl(const WriteOptions& write_options,
           }
         }
 
-        for (size_t i = 0; i < WriteBatchInternal::Count(writer->batch); ++i) {
+        auto batch_count = WriteBatchInternal::Count(writer->batch);
+        for (size_t i = 0; i < batch_count; ++i) {
           writer->batch->SetSequenceNumber(next_sequence + i, i);
+          writer->batch->SetRecordIndex( next_index + i, i);
         }
+        next_index += batch_count;
 
         if (seq_per_batch_) {
           assert(writer->batch_cnt);
           next_sequence += writer->batch_cnt;
         } else if (writer->ShouldWriteToMemtable()) {
-          next_sequence += WriteBatchInternal::Count(writer->batch);
+          next_sequence += batch_count;
         }
       }
     }
@@ -406,7 +418,8 @@ Status DBImpl::WriteImpl(const WriteOptions& write_options,
 #ifdef ART
         for (auto writer : write_group) {
           Slice input = WriteBatchInternal::Contents(writer->batch);
-          global_memtable_->Put(input, writer->batch->GetVptr());
+          global_memtable_->Put(
+              input, writer->batch->GetVptr(), writer->batch->Count());
         }
 #else
         w.status = WriteBatchInternal::InsertInto(
@@ -429,7 +442,7 @@ Status DBImpl::WriteImpl(const WriteOptions& write_options,
 
 #ifdef ART
           Slice input = WriteBatchInternal::Contents(w.batch);
-          global_memtable_->Put(input, w.batch->GetVptr());
+          global_memtable_->Put(input, w.batch->GetVptr(), w.batch->Count());
 #else
           assert(w.sequence == current_sequence);
           w.status = WriteBatchInternal::InsertInto(

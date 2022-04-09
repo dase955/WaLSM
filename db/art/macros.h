@@ -95,8 +95,8 @@ const constexpr double  Coeff = 1.021897;              // Magic!
 
 const constexpr int     CompactionThreshold = 512 << 20; // 512M
 
-const constexpr int     GroupSplitThreshold = 16 << 20;  // 16M
+const constexpr int     GroupSplitThreshold = 8 << 20;  // 8M
 
-const constexpr int     GroupMinSize = 8 << 20;          // 8M
+const constexpr int     GroupMinSize = 2 << 20;          // 2M
 
 }  // namespace ROCKSDB_NAMESPACE

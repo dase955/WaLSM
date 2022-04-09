@@ -18,7 +18,7 @@ VLogManager& GetManager() {
   return manager;
 }
 
-void *OpenVLogFile(int64_t totalSize) {
+void* OpenVLogFile(int64_t totalSize) {
   int fd = open("/tmp/vlog", O_RDWR|O_CREAT, 00777);
   assert(-1 != fd);
 
@@ -40,6 +40,7 @@ void VLogManager::PopSegment() {
   header_ = (VLogSegmentHeader *)cur_segment_;
   header_->segment_status_ = SegmentStatus::kSegmentWriting;
   offset_ = header_->offset_;
+  total_count_ = header_->total_count_;
   segment_remain_ = VLogSegmentSize - offset_;
   if (num_free_pages_.fetch_sub(1, std::memory_order_relaxed) < 1 && !gc_) {
     gc_ = true;
@@ -47,14 +48,14 @@ void VLogManager::PopSegment() {
 }
 
 VLogManager::VLogManager(bool need_recovery) {
-  pmemptr_ = (char *) OpenVLogFile(VLogFileSize);
+  pmemptr_ = (char*) OpenVLogFile(VLogFileSize);
 
   if (need_recovery) {
     RecoverOnRestart();
     return;
   }
 
-  char *cur_ptr = pmemptr_;
+  char* cur_ptr = pmemptr_;
   num_free_pages_.store(VLogSegmentNum, std::memory_order_relaxed);
   for (int i = 0; i < VLogSegmentNum; ++i) {
     auto header = (VLogSegmentHeader *)cur_ptr;
@@ -68,8 +69,8 @@ VLogManager::VLogManager(bool need_recovery) {
   PopSegment();
 }
 
-uint64_t VLogManager::AddRecord(const Slice &slice, uint32_t record_count) {
-  // TODO: fix corner case when slice.size_() > VLogSegmentSize
+uint64_t VLogManager::AddRecord(const Slice& slice, uint32_t record_count) {
+  // TODO: fix corner case when slice.size() > VLogSegmentSize
   std::lock_guard<std::mutex> lk(log_mutex_);
 
   auto left = (int64_t)slice.size();
@@ -84,32 +85,65 @@ uint64_t VLogManager::AddRecord(const Slice &slice, uint32_t record_count) {
 
   offset_ += left;
   segment_remain_ -= left;
+  total_count_ += record_count;
 
-  header_->total_count_ += record_count;
+  header_->total_count_ = total_count_;
   header_->offset_ = offset_;
   // pmem_persist((void *)header, 32);
 
   return vptr;
 }
 
+RecordIndex VLogManager::GetFirstIndex(size_t wal_size) {
+  return segment_remain_ < wal_size ? 0 : total_count_;
+}
+
 void VLogManager::GetKey(uint64_t offset, std::string &key) {
+  static constexpr size_t prefix_size
+      = 1 + sizeof(SequenceNumber) + sizeof(RecordIndex);
+
   offset &= 0x0000ffffffffffff;
-  Slice slice(pmemptr_ + offset + 9, VLogSegmentSize);
+  Slice slice(pmemptr_ + offset + prefix_size, VLogSegmentSize);
   GetLengthPrefixedSlice(&slice, key);
 }
 
 void VLogManager::GetKey(uint64_t offset, Slice &key) {
+  static constexpr size_t prefix_size
+      = 1 + sizeof(SequenceNumber) + sizeof(RecordIndex);
+
   offset &= 0x0000ffffffffffff;
-  Slice slice(pmemptr_ + offset + 9, VLogSegmentSize);
+  Slice slice(pmemptr_ + offset + prefix_size, VLogSegmentSize);
   GetLengthPrefixedSlice(&slice, &key);
 }
 
-ValueType VLogManager::GetKeyValue(uint64_t offset, std::string &key,
-                                   std::string &value, SequenceNumber &seq_num) {
+ValueType VLogManager::GetKeyValue(uint64_t offset, std::string& key,
+                                   std::string& value, SequenceNumber& seq_num) {
   offset &= 0x0000ffffffffffff;
   ValueType type = ((ValueType *)(pmemptr_ + offset))[0];
   seq_num = ((uint64_t *)(pmemptr_ + offset + 1))[0];
-  Slice slice(pmemptr_ + offset + 9, VLogSegmentSize);
+  RecordIndex index = ((uint32_t *)(pmemptr_ + offset + 9))[0];
+  Slice slice(pmemptr_ + offset + 13, VLogSegmentSize);
+  switch (type) {
+    case kTypeValue:
+      GetLengthPrefixedSlice(&slice, key);
+      GetLengthPrefixedSlice(&slice, value);
+      break;
+    case kTypeDeletion:
+      GetLengthPrefixedSlice(&slice, key);
+      break;
+    default:
+      break;
+  }
+
+  return type;
+}
+
+ValueType VLogManager::GetKeyValue(
+    uint64_t offset, std::string& key, std::string& value) {
+  offset &= 0x0000ffffffffffff;
+  ValueType type = ((ValueType *)(pmemptr_ + offset))[0];
+  RecordIndex index = ((uint32_t *)(pmemptr_ + offset + 9))[0];
+  Slice slice(pmemptr_ + offset + 13, VLogSegmentSize);
   switch (type) {
     case kTypeValue:
       GetLengthPrefixedSlice(&slice, key);
@@ -129,7 +163,7 @@ void VLogManager::BGWorkGarbageCollection() {
   auto num_used = used_pages_.size();
   bool forceGC = num_used > VLogSegmentNum * ForceGCThreshold;
   char *segment;
-  VLogSegmentHeader *header;
+  VLogSegmentHeader* header;
   for (size_t i = 0; i < num_used; ++i) {
     segment = used_pages_.pop_front();
     header = (VLogSegmentHeader *)segment;
@@ -167,8 +201,8 @@ void VLogManager::BGWorkGarbageCollection() {
   std::sort(data.begin(), data.end(),
             [](std::pair<std::string, uint64_t>& l,
                std::pair<std::string, uint64_t>&r) {
-    return l.first < r.first;
-  });
+              return l.first < r.first;
+            });
 
 
   header->segment_status_ = SegmentStatus::kSegmentUnused;

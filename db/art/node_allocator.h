@@ -20,66 +20,65 @@ class NodeAllocator {
 
   ~NodeAllocator();
 
-  NVMNode *AllocateNode();
+  NVMNode* AllocateNode();
 
-  void DeallocateNode(char *addr);
+  void DeallocateNode(char* addr);
 
   void recoverOnRestart();
 
-  int64_t relative(NVMNode *node);
+  int64_t relative(NVMNode* node);
 
-  NVMNode *absolute(int64_t offset);
+  NVMNode* absolute(int64_t offset);
 
  private:
-  char *pmemptr_;
+  char* pmemptr_;
 
   std::atomic<int> num_free_{1048576};
 
   int64_t total_size_;
 
-  TQueueConcurrent<char *> free_pages_;
+  TQueueConcurrent<char*> free_pages_;
 };
 
-NodeAllocator &GetNodeAllocator();
+NodeAllocator& GetNodeAllocator();
 
 ////////////////////////////////////////////////
 
 #ifdef ART_LITTLE_ENDIAN
 struct KVStruct {
   union {
-    uint64_t hash;
+    uint64_t hash_;
     struct {
       char padding[4];
-      unsigned char valueType;
-      char prefixes[3];
+      unsigned char type_;
+      char prefixes_[3];
     };
   };
   union {
-    uint64_t vptr;
+    uint64_t vptr_;
     struct {
       char padding2[6];
-      uint16_t kvSize;
+      uint16_t kv_size_;
     };
   };
 
   KVStruct() = default;
 
-  KVStruct(uint64_t hash_, uint64_t vptr_) :
-                                             hash(hash_), vptr(vptr_) {};
+  KVStruct(uint64_t hash, uint64_t vptr) : hash_(hash), vptr_(vptr) {};
 };
 #else
 struct KVStruct {
   union {
-    uint64_t hash;
-    char prefixes[4];
+    uint64_t hash_;
+    char prefixes_[4];
   };
   union {
     uint64_t vptr_;
-    uint16_t kvSize;
+    uint16_t kv_size_;
   };
 };
 #endif
 
-char getPrefix(int level, const KVStruct &kvInfo);
+char GetPrefix(int level, const KVStruct& kvInfo);
 
 } // namespace ROCKSDB_NAMESPACE

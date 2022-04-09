@@ -621,6 +621,7 @@ set(SOURCES
         db/experimental.cc
         db/external_sst_file_ingestion_job.cc
         db/file_indexer.cc
+        db/nvm_flush_job.cc
         db/flush_job.cc
         db/flush_scheduler.cc
         db/forward_iterator.cc

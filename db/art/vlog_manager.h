@@ -17,7 +17,7 @@ namespace ROCKSDB_NAMESPACE {
 const constexpr int64_t VLogFileSize = 4ULL << 30; // 4G
 
 // Size of vlog segment
-const constexpr int64_t VLogSegmentSize = 16 << 20; // 16M
+const constexpr int64_t VLogSegmentSize = 1 << 20; // 1M
 
 // Number of vlog segment
 const constexpr int64_t VLogSegmentNum = VLogFileSize / VLogSegmentSize;
@@ -51,12 +51,16 @@ class VLogManager {
 
   uint64_t AddRecord(const Slice& slice, uint32_t record_count = 1);
 
+  RecordIndex GetFirstIndex(size_t wal_size);
+
   void GetKey(uint64_t offset, std::string &key);
 
   void GetKey(uint64_t offset, Slice &key);
 
   ValueType GetKeyValue(uint64_t offset, std::string &key,
                         std::string &value, SequenceNumber &seq_num);
+
+  ValueType GetKeyValue(uint64_t offset, std::string &key, std::string &value);
 
  private:
   void RecoverOnRestart();
@@ -66,15 +70,17 @@ class VLogManager {
   void BGWorkGarbageCollection();
 
   // address of mapped file
-  char *pmemptr_;
+  char* pmemptr_;
 
-  char *cur_segment_;
+  char* cur_segment_;
 
-  VLogSegmentHeader *header_;
+  VLogSegmentHeader* header_;
 
   uint64_t offset_;
 
   uint32_t segment_remain_;
+
+  uint16_t total_count_;
 
   std::mutex log_mutex_;
 

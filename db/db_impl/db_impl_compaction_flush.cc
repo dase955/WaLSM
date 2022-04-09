@@ -8,6 +8,7 @@
 // found in the LICENSE file. See the AUTHORS file for names of contributors.
 #include <cinttypes>
 
+#include "db/nvm_flush_job.h"
 #include "db/builder.h"
 #include "db/db_impl/db_impl.h"
 #include "db/error_handler.h"
@@ -2484,6 +2485,158 @@ void DBImpl::BackgroundCallFlush(Env::Priority thread_pri) {
     bg_flush_scheduled_--;
     // See if there's more work to be done
     MaybeScheduleFlushOrCompaction();
+    atomic_flush_install_cv_.SignalAll();
+    bg_cv_.SignalAll();
+    // IMPORTANT: there should be no code after calling SignalAll. This call may
+    // signal the DB destructor that it's OK to proceed with destruction. In
+    // that case, all DB variables will be dealloacated and referencing them
+    // will cause trouble.
+  }
+}
+
+void DBImpl::SyncCallFlush(ArtCompactionJob* job) {
+  JobContext job_context(next_job_id_.fetch_add(1), true);
+
+  TEST_SYNC_POINT("DBImpl::SyncCallFlush:start");
+
+  LogBuffer log_buffer(InfoLogLevel::DEBUG_LEVEL,
+                       immutable_db_options_.info_log.get());
+  {
+    InstrumentedMutexLock l(&mutex_);
+    num_running_flushes_++;
+
+    std::unique_ptr<std::list<uint64_t>::iterator>
+        pending_outputs_inserted_elem(new std::list<uint64_t>::iterator(
+            CaptureCurrentFileNumberInPendingOutputs()));
+
+    FlushReason reason = FlushReason::kSizeExceedThreshold;
+
+    /*
+    Status s = BackgroundFlush(&made_progress, &job_context, &log_buffer,
+     &reason, thread_pri);
+    */
+
+    std::vector<SuperVersionContext>& superversion_contexts =
+        job_context.superversion_contexts;
+
+    // Only default column family is created and used.
+    auto cfd_set = versions_->GetColumnFamilySet();
+    assert(cfd_set->NumberOfColumnFamilies() == 1);
+    ColumnFamilyData* default_cfd = *cfd_set->begin();
+
+    superversion_contexts.clear();
+    superversion_contexts.reserve(1);
+    superversion_contexts.emplace_back(SuperVersionContext(true));
+
+    auto bg_job_limits = GetBGJobLimits();
+    ROCKS_LOG_BUFFER(
+        &log_buffer,
+        "Calling SyncCallFlush with column "
+        "family [%s], flush slots available %d, compaction slots available "
+        "%d, "
+        "flush slots scheduled %d, compaction slots scheduled %d",
+        default_cfd->GetName().c_str(), bg_job_limits.max_flushes,
+        bg_job_limits.max_compactions, bg_flush_scheduled_,
+        bg_compaction_scheduled_);
+
+    /*
+    Status s = FlushMemTablesToOutputFiles(
+        bg_flush_args, &made_progress,
+        &job_context, &log_buffer, Env::HIGH);
+    */
+
+    std::vector<SequenceNumber> snapshot_seqs;
+    SequenceNumber earliest_write_conflict_snapshot;
+    SnapshotChecker* snapshot_checker;
+    GetSnapshotContext(&job_context, &snapshot_seqs,
+                       &earliest_write_conflict_snapshot, &snapshot_checker);
+
+    MutableCFOptions mutable_cf_options = *default_cfd->GetLatestMutableCFOptions();
+    SuperVersionContext* superversion_context = &(superversion_contexts.back());
+
+    /*Status s = FlushMemTableToOutputFile(
+        default_cfd, mutable_cf_options, &made_progress, &job_context,
+        superversion_context, snapshot_seqs, earliest_write_conflict_snapshot,
+        snapshot_checker, &log_buffer, Env::HIGH);*/
+
+    NVMFlushJob nvm_flush_job(job,
+        dbname_, default_cfd, immutable_db_options_, mutable_cf_options,
+        file_options_for_compaction_, versions_.get(),
+        &mutex_, &shutting_down_, snapshot_seqs, earliest_write_conflict_snapshot,
+        snapshot_checker, &job_context, &log_buffer, directories_.GetDbDir(),
+        GetDataDir(default_cfd, 0U),
+        GetCompressionFlush(*default_cfd->ioptions(), mutable_cf_options), stats_,
+        &event_logger_, mutable_cf_options.report_bg_io_stats,
+        true /* sync_output_directory */, true /* write_manifest */,
+        io_tracer_, db_id_, db_session_id_);
+    FileMetaData file_meta;
+
+    Status s;
+    IOStatus io_s = IOStatus::OK();
+
+    // Within flush_job.Run, rocksdb may call event listener to notify
+    // file creation and deletion.
+    //
+    // Note that flush_job.Run will unlock and lock the db_mutex,
+    // and EventListener callback will be called when the db_mutex
+    // is unlocked by the current thread.
+
+    nvm_flush_job.PickMemTable();
+    s = nvm_flush_job.Run(&logs_with_prep_tracker_, &file_meta);
+    io_s = nvm_flush_job.io_status();
+
+    if (s.ok()) {
+      InstallSuperVersionAndScheduleWork(default_cfd, superversion_context,
+                                         mutable_cf_options);
+
+      const std::string& column_family_name = default_cfd->GetName();
+      Version* const current = default_cfd->current();
+      const VersionStorageInfo* const storage_info = current->storage_info();
+
+      VersionStorageInfo::LevelSummaryStorage tmp;
+      ROCKS_LOG_BUFFER(&log_buffer, "[%s] Level summary: %s\n",
+                       column_family_name.c_str(),
+                       storage_info->LevelSummary(&tmp));
+    }
+
+    if (s.ok()) {
+      auto sfm = static_cast<SstFileManagerImpl*>(
+          immutable_db_options_.sst_file_manager.get());
+      if (sfm) {
+        // Notify sst_file_manager that a new file was added
+        std::string file_path = MakeTableFileName(
+            default_cfd->ioptions()->cf_paths[0].path, file_meta.fd.GetNumber());
+        sfm->OnAddFile(file_path);
+      }
+    }
+
+    TEST_SYNC_POINT("DBImpl::SyncCallFlush:FlushFinish:0");
+    ReleaseFileNumberFromPendingOutputs(pending_outputs_inserted_elem);
+
+    // If flush failed, we want to delete all temporary files that we might have
+    // created. Thus, we force full scan in FindObsoleteFiles()
+    FindObsoleteFiles(&job_context, !s.ok() && !s.IsShutdownInProgress() &&
+                                        !s.IsColumnFamilyDropped());
+    // delete unnecessary files if any, this is done outside the mutex
+    if (job_context.HaveSomethingToClean() ||
+        job_context.HaveSomethingToDelete() || !log_buffer.IsEmpty()) {
+      mutex_.Unlock();
+      TEST_SYNC_POINT("DBImpl::SyncCallFlush:FilesFound");
+      // Have to flush the info logs before bg_flush_scheduled_--
+      // because if bg_flush_scheduled_ becomes 0 and the lock is
+      // released, the deconstructor of DB can kick in and destroy all the
+      // states of DB so info_log might not be available after that point.
+      // It also applies to access other states that DB owns.
+      log_buffer.FlushBufferToLog();
+      if (job_context.HaveSomethingToDelete()) {
+        PurgeObsoleteFiles(job_context);
+      }
+      job_context.Clean();
+      mutex_.Lock();
+    }
+    TEST_SYNC_POINT("DBImpl::SyncCallFlush:ContextCleanedUp");
+
+    num_running_flushes_--;
     atomic_flush_install_cv_.SignalAll();
     bg_cv_.SignalAll();
     // IMPORTANT: there should be no code after calling SignalAll. This call may

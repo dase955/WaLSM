@@ -27,19 +27,19 @@ void UpdateTotalSize(size_t update_size) {
 
 ////////////////////////////////////////////////////////////
 
-void Compactor::SetGroupManager(HeatGroupManager *group_manager) {
+void Compactor::SetGroupManager(HeatGroupManager* group_manager) {
   group_manager_ = group_manager;
 }
 
-void Compactor::SetVLogManager(VLogManager *vlog_manager) {
+void Compactor::SetVLogManager(VLogManager* vlog_manager) {
   vlog_manager_ = vlog_manager;
 }
 
-void Compactor::SetDB(DBImpl *db_impl) {
+void Compactor::SetDB(DBImpl* db_impl) {
   db_impl_ = db_impl;
 }
 
-void Compactor::Notify(HeatGroup *heat_group) {
+void Compactor::Notify(HeatGroup* heat_group) {
   chosen_group_ = heat_group;
   cond_var_.notify_one();
 }
@@ -65,6 +65,8 @@ void Compactor::BGWorkDoCompaction() {
 
     if (chosen_group_) {
       MemTotalSize.fetch_sub(DoCompaction(), std::memory_order_release);
+      // Maybe cause bug here.
+      chosen_group_->status_.store(kGroupWaitMove, std::memory_order_relaxed);
       group_manager_->AddOperation(chosen_group_, kOperatorMove, true);
     }
     std::this_thread::sleep_for(std::chrono::milliseconds (100));
@@ -84,7 +86,7 @@ int32_t Compactor::DoCompaction() {
   InnerNode *start_node_backup = start_node;
 
   NVMNode *first_nvm_backup = nullptr;
-  int32_t compacted_size = 0;
+  int32_t compacted_size = chosen_group_->group_size_.load(std::memory_order_relaxed);
   std::deque<InnerNode *> candidates;
   std::vector<NVMNode *> nvm_nodes;
 
@@ -100,12 +102,13 @@ int32_t Compactor::DoCompaction() {
       memcpy(first_nvm_backup, start_node->nvm_node_, PAGE_SIZE);
       oldest_key_time = std::min(oldest_key_time, start_node->oldest_key_time_);
       start_node->oldest_key_time_ = LONG_LONG_MAX;
-      compacted_size = start_node->estimated_size_;
       start_node->estimated_size_ = 0;
       nvm_nodes.push_back(first_nvm_backup);
     }
     start_node = start_node->next_node_;
   }
+
+  printf("Group size: %d\n", chosen_group_->group_size_.load());
 
   ArtCompactionJob compaction_job;
 
@@ -119,9 +122,9 @@ int32_t Compactor::DoCompaction() {
     auto *new_nvm_node = GetNodeAllocator().AllocateNode();
     InsertNewNVMNode(start_node, new_nvm_node);
     candidates.push_back(start_node);
+    nvm_nodes.push_back(start_node->backup_nvm_node_);
 
     oldest_key_time = std::min(oldest_key_time, start_node->oldest_key_time_);
-    compacted_size += start_node->estimated_size_;
     start_node->oldest_key_time_ = LONG_LONG_MAX;
     start_node->estimated_size_ = 0;
 
@@ -137,37 +140,26 @@ int32_t Compactor::DoCompaction() {
     kvs.reserve(NVM_MAX_SIZE);
     for (size_t i = 0; i < size; ++i) {
       KVStruct kvInfo{data[i * 2], data[i * 2 + 1]};
-      if (kvInfo.vptr == 0) {
+      if (kvInfo.vptr_ == 0) {
         continue;
       }
 
       uint64_t seq_num;
       std::string key, value;
-      auto value_type = vlog_manager_->GetKeyValue(kvInfo.vptr, key, value, seq_num);
+      auto value_type = vlog_manager_->GetKeyValue(kvInfo.vptr_, key, value, seq_num);
       kvs.emplace_back(key, value, seq_num, value_type);
     }
 
     std::stable_sort(kvs.begin(), kvs.end());
-    std::string last_key;
-    bool same = false;
+    std::string last_key = "";
     for (auto &kv : kvs) {
       if (kv.key != last_key) {
-        same = false;
         last_key = kv.key;
         num_entry += kv.type == kTypeValue;
         num_deletes += kv.type == kTypeDeletion;
         total_data_size += (kv.key.length() + kv.value.length());
         compaction_job.compacted_data_.emplace_back(kv);
-      } else {
-        same = true;
       }
-    }
-    if (same) {
-      auto &kv = kvs.back();
-      num_entry += kv.type == kTypeValue;
-      num_deletes += kv.type == kTypeDeletion;
-      total_data_size += (kv.key.length() + kv.value.length());
-      compaction_job.compacted_data_.emplace_back(kv);
     }
   }
 
@@ -177,7 +169,8 @@ int32_t Compactor::DoCompaction() {
   compaction_job.total_data_size_ = compaction_job.total_memory_usage_
       = total_data_size;
 
-  // Compaction...
+  // Compaction
+  db_impl_->SyncCallFlush(&compaction_job);
 
   // remove compacted node form list
   start_node = start_node_backup;

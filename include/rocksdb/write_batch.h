@@ -84,6 +84,11 @@ class WriteBatch : public WriteBatchBase {
     return pos_in_merged_batch_ + base_record_offset_;
   }
 
+  void SetRecordIndex(uint32_t record_index, size_t id) {
+    assert(id < sequence_number_pos_.size());
+    *((uint32_t*)&rep_[sequence_number_pos_[id] + 8]) = record_index;
+  }
+
   void SetSequenceNumber(uint64_t sequence_number, size_t id) {
     assert(id < sequence_number_pos_.size());
     *((uint64_t*)&rep_[sequence_number_pos_[id]]) = sequence_number;

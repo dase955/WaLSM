@@ -27,7 +27,7 @@ struct ArtNodeHeader{
 struct ArtNode4 {
   ArtNodeHeader header_;
   unsigned char keys_[4];
-  InnerNode *children_[4];
+  InnerNode*    children_[4];
 
   ArtNode4();
 };
@@ -35,7 +35,7 @@ struct ArtNode4 {
 struct ArtNode16 {
   ArtNodeHeader header_;
   unsigned char keys_[16];
-  InnerNode *children_[16];
+  InnerNode*    children_[16];
 
   ArtNode16();
 };
@@ -43,14 +43,14 @@ struct ArtNode16 {
 struct ArtNode48 {
   ArtNodeHeader header_;
   unsigned char keys_[256];
-  InnerNode *children_[48];
+  InnerNode*    children_[48];
 
   ArtNode48();
 };
 
 struct ArtNode256 {
   ArtNodeHeader header_;
-  InnerNode *children_[256];
+  InnerNode*    children_[256];
 
   ArtNode256();
 };
@@ -59,19 +59,19 @@ struct ArtNode256 {
 
 ArtNodeType ChooseArtNodeType(int size);
 
-ArtNodeHeader *AllocateArtNode(ArtNodeType node_type);
+ArtNodeHeader* AllocateArtNode(ArtNodeType node_type);
 
-ArtNodeHeader *AllocateArtAfterSplit(
-    const std::vector<InnerNode*>&inserted_nodes,
-    const std::vector<unsigned char> &c,
+ArtNodeHeader* AllocateArtAfterSplit(
+    const std::vector<InnerNode*>& inserted_nodes,
+    const std::vector<unsigned char>& c,
     InnerNode *first_node_in_art);
 
-ArtNodeHeader *ReallocateArtNode(ArtNodeHeader *art);
+ArtNodeHeader* ReallocateArtNode(ArtNodeHeader* art);
 
-InnerNode *FindChild(InnerNode *node, unsigned char c);
+InnerNode* FindChild(InnerNode* node, unsigned char c);
 
 void InsertToArtNode(
-    ArtNodeHeader *art, InnerNode *leaf,
+    ArtNodeHeader* art, InnerNode* leaf,
     unsigned char c, bool insert_to_group);
 
 } // namespace ROCKSDB_NAMESPACE
