@@ -67,7 +67,8 @@ struct InnerNode {
   // Used for flush and split operation
   std::mutex     flush_mutex_;
 
-  // Hold gc_mutex_ when do gc,
+  // Hold gc_mutex when doing gc,
+  // also hold this when node need split or squeeze.
   std::mutex     gc_mutex_;
 
   int64_t        oldest_key_time_ = 0;

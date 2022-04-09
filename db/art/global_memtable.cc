@@ -64,6 +64,41 @@ void FlushBuffer(InnerNode* leaf, int row) {
   // _mm_clwb(node->meta.header); _mm_sfence();
 }
 
+void FlushBufferAndRelease(InnerNode* leaf, int row) {
+  NVMNode* node = leaf->nvm_node_;
+  uint8_t* hll = leaf->hll_;
+
+  uint64_t buffer[32];
+  memcpy(buffer, leaf->buffer_, 256);
+
+  leaf->opt_lock_.WriteUnlock(true);
+
+  int h, bucket;
+  uint8_t digit;
+  uint8_t fingerprints[16];
+  for (size_t i = 0; i < 16; ++i) {
+    auto hash = buffer[i << 1];
+    fingerprints[i] = static_cast<uint8_t>(hash);
+
+    bucket = hash & 63;
+    h = (int) (hash >> 6);
+    digit = h == 0 ? 0 : __builtin_ctz(h) + 1;
+    hll[bucket] = std::max(hll[bucket], digit);
+  }
+
+  memcpy(node->data + (row << 5), buffer, 256);
+  memcpy(node->meta.fingerprints_ + (row << 4), fingerprints, 16);
+  // _mm_clwb(data); _mm_sfence();
+
+  // Write metadata
+  uint64_t hdr = node->meta.header;
+  uint8_t size = GET_SIZE(hdr);
+  SET_SIZE(hdr, (size + 16));
+  SET_ROWS(hdr, (row + 1));
+  node->meta.header = hdr;
+  // _mm_clwb(node->meta.header); _mm_sfence();
+}
+
 //////////////////////////////////////////////////////////
 
 void GlobalMemtable::InitFirstTwoLevel() {
@@ -297,15 +332,9 @@ void GlobalMemtable::SqueezeNode(InnerNode* leaf) {
 }
 
 void GlobalMemtable::SplitLeafBelowLevel5(InnerNode* leaf) {
-  if (EstimateDistinctCount(leaf->hll_) < SQUEEZE_THRESHOLD) {
-    leaf->opt_lock_.WriteUnlock(false);
-    SqueezeNode(leaf);
-    return;
-  }
-
   auto node = leaf->nvm_node_;
   auto* data = node->data;
-  std::vector<KVStruct> split_buckets[256];
+  autovector<KVStruct> split_buckets[256];
 
   int level = GET_PRELEN(node->meta.header);
   for (size_t i = 0; i < NVM_MAX_SIZE; ++i) {
@@ -335,6 +364,7 @@ void GlobalMemtable::SplitLeafBelowLevel5(InnerNode* leaf) {
   std::vector<InnerNode*> new_leaves{final_node};
   std::vector<unsigned char> prefixes{LAST_CHAR};
   new_leaves.reserve(split_num);
+  prefixes.reserve(split_num);
 
   for (int c = LAST_CHAR - 1; c > 0; --c) {
     if (split_buckets[c].empty() && c != 1) {
@@ -394,19 +424,12 @@ void GlobalMemtable::SplitLeafBelowLevel5(InnerNode* leaf) {
   InsertNodesToGroup(leaf, new_leaves);
 
   SET_NON_LEAF(leaf->status_);
-  leaf->opt_lock_.WriteUnlock(false);
 }
 
 void GlobalMemtable::SplitLeaf(InnerNode *leaf) {
-  if (EstimateDistinctCount(leaf->hll_) < SQUEEZE_THRESHOLD) {
-    leaf->opt_lock_.WriteUnlock(false);
-    SqueezeNode(leaf);
-    return;
-  }
-
   auto node = leaf->nvm_node_;
   auto* data = node->data;
-  std::vector<KVStruct> split_buckets[256];
+  autovector<KVStruct> split_buckets[256];
   uint64_t tmpVptr = 0;
 
   // TODO: remove duplication
@@ -493,7 +516,6 @@ void GlobalMemtable::SplitLeaf(InnerNode *leaf) {
   InsertNodesToGroup(leaf, new_leaves);
 
   SET_NON_LEAF(leaf->status_);
-  leaf->opt_lock_.WriteUnlock(false);
 }
 
 // "4b prefix + 4b hash + 8b pointer" OR "4b SeqNum + 4b hash + 8b pointer"
@@ -514,7 +536,7 @@ void GlobalMemtable::InsertIntoLeaf(InnerNode* leaf, KVStruct& kv_info, int leve
 
   leaf->heat_group_->UpdateHeat();
 
-  std::lock_guard<std::mutex> lk(leaf->flush_mutex_);
+  std::lock_guard<std::mutex> flush_lk(leaf->flush_mutex_);
 
   // Group size_ and total size_ is updated when doing flush
   auto buffer_size = leaf->buffer_size_;
@@ -532,12 +554,22 @@ void GlobalMemtable::InsertIntoLeaf(InnerNode* leaf, KVStruct& kv_info, int leve
   auto& nvmMeta = nvmNode->meta;
   int rows = GET_ROWS(nvmMeta.header);
   bool needSplit = rows == NVM_MAX_ROWS - 1;
-  if (needSplit) {
-    FlushBuffer(leaf, rows);
-    level < 5 ? SplitLeafBelowLevel5(leaf) : SplitLeaf(leaf);
+
+  if (likely(!needSplit)) {
+    // 1. release opt lock after flushing data
+    // 2. copy buffer and release lock, then flush (currently used)
+    FlushBufferAndRelease(leaf, rows);
   } else {
-    leaf->opt_lock_.WriteUnlock(true);
     FlushBuffer(leaf, rows);
+    if (EstimateDistinctCount(leaf->hll_) < SQUEEZE_THRESHOLD) {
+      leaf->opt_lock_.WriteUnlock(true);
+      SqueezeNode(leaf);
+      return;
+    } else {
+      std::lock_guard<std::mutex> gc_lk(leaf->gc_mutex_);
+      level < 5 ? SplitLeafBelowLevel5(leaf) : SplitLeaf(leaf);
+      leaf->opt_lock_.WriteUnlock(false);
+    }
   }
 }
 

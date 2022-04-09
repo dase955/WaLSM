@@ -90,7 +90,7 @@ int32_t Compactor::DoCompaction() {
   std::deque<InnerNode *> candidates;
   std::vector<NVMNode *> nvm_nodes;
 
-  uint64_t num_entry = 0;
+  uint64_t num_entries = 0;
   uint64_t num_deletes = 0;
   uint64_t total_data_size = 0;
   int64_t oldest_key_time = LONG_LONG_MAX;
@@ -112,8 +112,15 @@ int32_t Compactor::DoCompaction() {
 
   ArtCompactionJob compaction_job;
 
+  /*auto estimated_entries = chosen_group_->group_size_.load() / 64;
+  std::vector<uint64_t> compacted_records;
+  compacted_records.reserve(estimated_entries);*/
+  autovector<RecordIndex> compacted_records[VLogSegmentNum];
+
   while (start_node != end_node) {
-    std::lock_guard<std::mutex> lk(start_node->flush_mutex_);
+    std::lock_guard<std::mutex> flush_lk(start_node->flush_mutex_);
+    std::lock_guard<std::mutex> gc_lk(start_node->gc_mutex_);
+
     if (!IS_LEAF(start_node->status_)) {
       start_node = start_node->next_node_;
       continue;
@@ -132,6 +139,8 @@ int32_t Compactor::DoCompaction() {
   }
 
   // Sort data
+  SequenceNumber seq_num = 0;
+  RecordIndex record_index = 0;
   for (auto &nvm_node : nvm_nodes) {
     auto meta = nvm_node->meta;
     auto data = nvm_node->data;
@@ -139,15 +148,19 @@ int32_t Compactor::DoCompaction() {
     std::vector<CompactionRec> kvs;
     kvs.reserve(NVM_MAX_SIZE);
     for (size_t i = 0; i < size; ++i) {
-      KVStruct kvInfo{data[i * 2], data[i * 2 + 1]};
-      if (kvInfo.vptr_ == 0) {
+      KVStruct kv_info{data[i * 2], data[i * 2 + 1]};
+      if (kv_info.vptr_ == 0) {
         continue;
       }
 
-      uint64_t seq_num;
       std::string key, value;
-      auto value_type = vlog_manager_->GetKeyValue(kvInfo.vptr_, key, value, seq_num);
+      auto value_type = vlog_manager_->GetKeyValue(
+          kv_info.vptr_, key, value, seq_num, record_index);
       kvs.emplace_back(key, value, seq_num, value_type);
+
+      //compacted_records.push_back((kv_info.vptr_ & SegmentIDMask) | record_index);
+      compacted_records[(kv_info.vptr_ & 0x0000ffffffffffff) >> 20]
+          .push_back(record_index);
     }
 
     std::stable_sort(kvs.begin(), kvs.end());
@@ -155,7 +168,7 @@ int32_t Compactor::DoCompaction() {
     for (auto &kv : kvs) {
       if (kv.key != last_key) {
         last_key = kv.key;
-        num_entry += kv.type == kTypeValue;
+        num_entries += kv.type == kTypeValue;
         num_deletes += kv.type == kTypeDeletion;
         total_data_size += (kv.key.length() + kv.value.length());
         compaction_job.compacted_data_.emplace_back(kv);
@@ -165,7 +178,7 @@ int32_t Compactor::DoCompaction() {
 
   compaction_job.oldest_key_time_ = oldest_key_time;
   compaction_job.total_num_deletes_ = num_deletes;
-  compaction_job.total_num_entries_ = num_entry;
+  compaction_job.total_num_entries_ = num_entries;
   compaction_job.total_data_size_ = compaction_job.total_memory_usage_
       = total_data_size;
 
@@ -189,6 +202,11 @@ int32_t Compactor::DoCompaction() {
 
   if (first_nvm_backup) {
     GetNodeAllocator().DeallocateNode((char *)first_nvm_backup);
+  }
+
+  for (auto &vec : compacted_records) {
+    std::sort(vec.begin(), vec.end());
+
   }
 
   printf("Compaction done: size_=%d\n", compacted_size);

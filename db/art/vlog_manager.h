@@ -19,8 +19,14 @@ const constexpr int64_t VLogFileSize = 4ULL << 30; // 4G
 // Size of vlog segment
 const constexpr int64_t VLogSegmentSize = 1 << 20; // 1M
 
+const constexpr int64_t SegmentIDMask = 0x7ffffffffff00000;
+
+const constexpr int64_t SegmentOffsetMask = 0x00000000000fffff;
+
 // Number of vlog segment
 const constexpr int64_t VLogSegmentNum = VLogFileSize / VLogSegmentSize;
+
+const constexpr int64_t VLogBitmapSize = VLogSegmentSize / 128 - SEG_HDR_SIZE;
 
 // GC is needed when used space of vlog is larger than threshold.
 const float ForceGCThreshold = 0.7;
@@ -34,14 +40,13 @@ enum class SegmentStatus : uint8_t {
 };
 
 struct VLogSegmentHeader {
-  union {
-    struct {
-      uint32_t offset_ = 0;
-      uint16_t total_count_ = 0;
-      uint16_t compacted_count_ = 0;
-      SegmentStatus segment_status_ = SegmentStatus::kSegmentUnused;
-    };
-    char padding[SEG_HDR_SIZE];
+  struct alignas(CACHE_LINE_SIZE) {
+    uint32_t offset_ = 0;
+    uint16_t total_count_ = 0;
+    uint16_t compacted_count_ = 0;
+  };
+  struct alignas(CACHE_LINE_SIZE) l {
+    SpinMutex mutex_;
   };
 };
 
@@ -56,6 +61,9 @@ class VLogManager {
   void GetKey(uint64_t offset, std::string &key);
 
   void GetKey(uint64_t offset, Slice &key);
+
+  ValueType GetKeyValue(uint64_t offset, std::string &key, std::string &value,
+                        SequenceNumber &seq_num, RecordIndex &index);
 
   ValueType GetKeyValue(uint64_t offset, std::string &key,
                         std::string &value, SequenceNumber &seq_num);

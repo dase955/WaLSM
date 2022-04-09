@@ -38,7 +38,6 @@ void VLogManager::RecoverOnRestart() {
 void VLogManager::PopSegment() {
   cur_segment_ = free_pages_.pop_front();
   header_ = (VLogSegmentHeader *)cur_segment_;
-  header_->segment_status_ = SegmentStatus::kSegmentWriting;
   offset_ = header_->offset_;
   total_count_ = header_->total_count_;
   segment_remain_ = VLogSegmentSize - offset_;
@@ -114,6 +113,29 @@ void VLogManager::GetKey(uint64_t offset, Slice &key) {
   offset &= 0x0000ffffffffffff;
   Slice slice(pmemptr_ + offset + prefix_size, VLogSegmentSize);
   GetLengthPrefixedSlice(&slice, &key);
+}
+
+ValueType VLogManager::GetKeyValue(
+    uint64_t offset, std::string& key, std::string& value,
+    SequenceNumber& seq_num, RecordIndex &index) {
+  offset &= 0x0000ffffffffffff;
+  ValueType type = ((ValueType *)(pmemptr_ + offset))[0];
+  seq_num = ((uint64_t *)(pmemptr_ + offset + 1))[0];
+  index = ((uint32_t *)(pmemptr_ + offset + 9))[0];
+  Slice slice(pmemptr_ + offset + 13, VLogSegmentSize);
+  switch (type) {
+    case kTypeValue:
+      GetLengthPrefixedSlice(&slice, key);
+      GetLengthPrefixedSlice(&slice, value);
+      break;
+    case kTypeDeletion:
+      GetLengthPrefixedSlice(&slice, key);
+      break;
+    default:
+      break;
+  }
+
+  return type;
 }
 
 ValueType VLogManager::GetKeyValue(uint64_t offset, std::string& key,
@@ -205,7 +227,6 @@ void VLogManager::BGWorkGarbageCollection() {
             });
 
 
-  header->segment_status_ = SegmentStatus::kSegmentUnused;
   free_pages_.emplace_back(segment);
   num_free_pages_.fetch_add(1, std::memory_order_relaxed);
   gc_ = false;
