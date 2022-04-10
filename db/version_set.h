@@ -604,6 +604,15 @@ class VersionStorageInfo {
                                      const Slice& largest_user_key,
                                      int last_level, int last_l0_idx);
 
+  // List of file partitions
+  // and custom comparatives
+  struct partitions_compare {
+    bool operator()(FilePartition *lhs, FilePartition *rhs) const {
+      return lhs->smallest_.compare(rhs->smallest_);
+    }
+  };
+  std::set<FilePartition*, partitions_compare> partitions_;
+
  private:
   const InternalKeyComparator* internal_comparator_;
   const Comparator* user_comparator_;
@@ -624,14 +633,7 @@ class VersionStorageInfo {
   // in increasing order of keys
   std::vector<FileMetaData*>* files_;
 
-  // List of file partitions
-  // and custom comparatives
-  struct partitions_compare {
-    bool operator()(FilePartition *lhs, FilePartition *rhs) const {
-      return lhs->smallest_.compare(rhs->smallest_);
-    }
-  };
-  std::set<FilePartition*, partitions_compare> partitions_;
+
 
   // Map of all table files in version. Maps file number to (level, position on
   // level).

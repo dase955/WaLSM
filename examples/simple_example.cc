@@ -5,6 +5,7 @@
 
 #include <cstdio>
 #include <string>
+#include <random>
 
 #include "rocksdb/db.h"
 #include "rocksdb/slice.h"
@@ -12,21 +13,34 @@
 
 using namespace ROCKSDB_NAMESPACE;
 
-#if defined(OS_WIN)
-std::string kDBPath = "C:\\Windows\\TEMP\\rocksdb_simple_example";
-#else
-std::string kDBPath = "/tmp/rocksdb_simple_example";
-#endif
+std::string kDBPath = "/Users/chenlixiang/rocksdb_test";
+
+std::string randomString(int len) {
+  char tmp;
+  std::string buf;
+
+  std::random_device dev;
+  std::default_random_engine random(dev());
+
+  for (int i = 0; i < len; i++) {
+    tmp = random() % 36;
+    tmp += (tmp < 10) ? '0' : 'a';
+  }
+
+  return buf;
+}
 
 int main() {
   DB* db;
   Options options;
   // Optimize RocksDB. This is the easiest way to get RocksDB to perform well
   options.IncreaseParallelism();
-  options.OptimizeLevelStyleCompaction();
+  options.OptimizeUniversalStyleCompaction();
+  options.use_direct_io_for_flush_and_compaction = true;
   // create the DB if it's not already present
   options.create_if_missing = true;
-
+  options.target_file_size_base = 4 * 1048576;
+  options.write_buffer_size = 4 * 1048576;
   // open DB
   Status s = DB::Open(options, kDBPath, &db);
   assert(s.ok());
@@ -36,6 +50,14 @@ int main() {
   assert(s.ok());
   std::string value;
   // get value
+  s = db->Get(ReadOptions(), "key1", &value);
+  assert(s.ok());
+  assert(value == "value");
+
+  for (int i = 0; i < 1000000000; i++) {
+    db->Put(WriteOptions(), randomString(64), randomString(128));
+  }
+
   s = db->Get(ReadOptions(), "key1", &value);
   assert(s.ok());
   assert(value == "value");

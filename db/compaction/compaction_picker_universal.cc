@@ -263,8 +263,8 @@ bool UniversalCompactionBuilder::IsInputFilesNonOverlapping(Compaction* c) {
 bool UniversalCompactionPicker::NeedsCompaction(
     const VersionStorageInfo* vstorage) const {
   const int kLevel0 = 0;
-  for (int p = 0; p < vstorage->PartitionSize(); p++) {
-    if (vstorage->UniversalCompactionScore(p, kLevel0) >= 1) {
+  for (auto* fp : vstorage->partitions_) {
+    if (fp->compaction_score_[kLevel0] >= 1.0) {
       return true;
     }
   }
