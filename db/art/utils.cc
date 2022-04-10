@@ -62,6 +62,7 @@ InnerNode* AllocateLeafNode(uint8_t prefix_length,
   SET_LEAF(inode->status_);
   SET_ART_NON_FULL(inode->status_);
   SET_NODE_BUFFER_SIZE(inode->status_, 0);
+  SET_GC_FLUSH_SIZE(inode->status_, 0);
 
   auto& mgr = GetNodeAllocator();
 
@@ -194,7 +195,7 @@ void RemoveOldNVMNode(InnerNode* node) {
   // _mm_clwb(node->nvm_node_->meta); _mm_sfence();
   auto backup_nvm_node = next_node->backup_nvm_node_;
   next_node->backup_nvm_node_ = nullptr;
-  GetNodeAllocator().DeallocateNode((char*)backup_nvm_node);
+  GetNodeAllocator().DeallocateNode(backup_nvm_node);
 }
 
 NVMNode* GetNextNode(NVMNode* node) {

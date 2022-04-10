@@ -11,6 +11,7 @@
 #include <cassert>
 #include <immintrin.h>
 
+#include "utils.h"
 #include "timestamp.h"
 #include "global_memtable.h"
 #include "compactor.h"
@@ -50,25 +51,28 @@ bool HeatGroup::InsertNewNode(
 void HeatGroup::UpdateSize(int32_t size) {
   // This is just a rough estimation, so we don't acquire lock.
 
-  auto curSize = group_size_.fetch_add(size, std::memory_order_relaxed);
-  auto curStatus = status_.load(std::memory_order_relaxed);
-  if (curStatus != kGroupNone) {
+  auto cur_status = status_.load(std::memory_order_relaxed);
+  auto cur_size = group_size_.fetch_add(size, std::memory_order_relaxed);
+  UpdateTotalSize(size);
+
+  if (cur_status != kGroupNone) {
     return;
   }
 
-  GroupStatus newStatus = kGroupNone;
+  GroupStatus new_status = kGroupNone;
   GroupOperator op;
-  if (in_base_layer_ && curSize > GroupMinSize) {
-    newStatus = kGroupWaitMove;
+
+  if (in_base_layer_ && cur_size > GroupMinSize) {
+    new_status = kGroupWaitMove;
     op = kOperatorMove;
-  } else if (curSize > GroupSplitThreshold) {
-    newStatus = kGroupWaitSplit;
+  } else if (cur_size > GroupSplitThreshold) {
+    new_status = kGroupWaitSplit;
     op = kOperatorSplit;
   }
 
-  if (newStatus != kGroupNone &&
+  if (new_status != kGroupNone &&
       status_.compare_exchange_strong(
-          curStatus, newStatus, std::memory_order_relaxed)) {
+          cur_status, new_status, std::memory_order_relaxed)) {
     group_manager_->AddOperation(this, op);
   }
 }
@@ -78,11 +82,11 @@ void HeatGroup::UpdateHeat() {
   MaybeScheduleHeatDecay(ts.last_ts_);
 }
 
-void HeatGroup::MaybeScheduleHeatDecay(int32_t last_ts) {
-  int32_t decay = GlobalDecay.load(::std::memory_order_relaxed);
+inline void HeatGroup::MaybeScheduleHeatDecay(int32_t last_ts) {
+  int32_t decay = GlobalDecay.load(std::memory_order_relaxed);
   if (last_ts - decay > Waterline &&
       GlobalDecay.compare_exchange_strong(
-          decay, decay + ForceDecay, ::std::memory_order_relaxed)) {
+          decay, decay + ForceDecay, std::memory_order_relaxed)) {
     group_manager_->AddOperation(nullptr, kOperatorLevelDown, true);
   }
 }
@@ -128,7 +132,7 @@ float CalculateHeat(int32_t ts) {
 }
 
 void EstimateLowerAndUpperBound(
-    Timestamps &ts, float &lower_bound, float &upper_bound) {
+    Timestamps& ts, float& lower_bound, float& upper_bound) {
   int32_t begin_ts, mid_ts, end_ts;
   float heat;
 
@@ -156,49 +160,48 @@ void SplitGroup(HeatGroup* group) {
 
   auto cur_ts = group->ts.Copy();
 
-  auto leftStart = group->first_node_;
-  auto rightEnd = group->last_node_;
-  auto leftEnd = leftStart;
+  auto left_start = group->first_node_;
+  auto right_end = group->last_node_;
+  auto left_end = left_start;
 
-  auto totalSize = group->group_size_.load(std::memory_order_relaxed);
-  auto splitPoint = totalSize >> 1;
-  int32_t leftSize = 0;
+  auto total_size = group->group_size_.load(std::memory_order_relaxed);
+  auto split_point = total_size >> 1;
+  int32_t left_size = 0;
 
-  while (leftEnd != rightEnd) {
-    leftSize += leftEnd->estimated_size_;
-    leftEnd->heat_group_ = group;
-    if (leftSize > splitPoint) {
+  while (left_end != right_end) {
+    left_size += left_end->estimated_size_;
+    left_end->heat_group_ = group;
+    if (left_size > split_point) {
       break;
     }
-    leftEnd = leftEnd->next_node_;
+    left_end = left_end->next_node_;
   }
 
   // TODO: fix this corner case
-  assert(leftEnd != rightEnd);
+  assert(left_end != right_end);
 
-  group->last_node_ = leftEnd;
-  group->group_size_ = leftSize;
+  group->last_node_ = left_end;
+  group->group_size_ = left_size;
 
-  auto *rightGroup = new HeatGroup();
-  rightGroup->lock.lock();
-  rightGroup->ts = cur_ts;
-  auto rightStart = leftEnd->next_node_;
-  rightGroup->first_node_ = rightStart;
-  rightGroup->last_node_ = rightEnd;
-  rightGroup->group_size_ = totalSize - leftSize;
-  rightGroup->group_manager_ = group->group_manager_;
-  while (rightStart != rightEnd) {
-    rightStart->heat_group_ = rightGroup;
-    rightStart = rightStart->next_node_;
+  auto right_group = new HeatGroup();
+  right_group->lock.lock();
+  right_group->ts = cur_ts;
+  auto right_start = left_end->next_node_;
+  right_group->first_node_ = right_start;
+  right_group->last_node_ = right_end;
+  right_group->group_size_ = total_size - left_size;
+  right_group->group_manager_ = group->group_manager_;
+  while (right_start != right_end) {
+    right_start->heat_group_ = right_group;
+    right_start = right_start->next_node_;
   }
 
   group->group_manager_->MoveGroup(group);
-  group->group_manager_->InsertIntoLayer(
-      rightGroup, ChooseGroupLevel(rightGroup));
+  group->group_manager_->InsertIntoLayer(right_group, ChooseGroupLevel(right_group));
 
-  rightGroup->status_.store(kGroupNone, std::memory_order_relaxed);
-  group->status_.store(kGroupNone, std::memory_order_relaxed);
-  rightGroup->lock.unlock();
+  right_group->status_.store(kGroupNone, std::memory_order_release);
+  group->status_.store(kGroupNone, std::memory_order_release);
+  right_group->lock.unlock();
   group->lock.unlock();
 }
 
@@ -236,20 +239,23 @@ int ChooseGroupLevel(HeatGroup* group) {
   return (lowerLevel + upperLevel) >> 1;
 }
 
-void InsertNodesToGroup(InnerNode* node, std::vector<InnerNode*>& inserts) {
-  while (true) {
-    auto heatGroup = node->heat_group_;
-    if (!heatGroup || !heatGroup->InsertNewNode(node, inserts)) {
-      _mm_pause();
-      continue;
-    }
-    break;
-  }
-}
-
 void InsertNodesToGroup(InnerNode* node, InnerNode* insert) {
   std::vector<InnerNode*> inserts{insert};
   InsertNodesToGroup(node, inserts);
+}
+
+void InsertNodesToGroup(InnerNode* node, std::vector<InnerNode*>& inserts) {
+  for (size_t tries = 0;; ++tries) {
+    auto heat_group = node->heat_group_;
+    if (heat_group && heat_group->InsertNewNode(node, inserts)) {
+      // success
+      break;
+    }
+    port::AsmVolatilePause();
+    if (tries > 100) {
+      std::this_thread::yield();
+    }
+  }
 }
 
 void RemoveFromQueue(HeatGroup* group) {
@@ -315,7 +321,8 @@ void HeatGroupManager::BGWorkProcessHeatGroup() {
   }
 }
 
-void HeatGroupManager::AddOperation(HeatGroup* group, GroupOperator op, bool high_pri) {
+void HeatGroupManager::AddOperation(
+    HeatGroup* group, GroupOperator op, bool high_pri) {
   high_pri ? group_operations_.emplace_front(group, op) :
            group_operations_.emplace_back(group, op);
 }
@@ -335,12 +342,12 @@ void HeatGroupManager::InsertIntoLayer(HeatGroup* inserted, int level) {
 
 void HeatGroupManager::MoveGroup(HeatGroup* group) {
   auto status = group->status_.load(std::memory_order_relaxed);
-  if (status == kGroupWaitSplit || status == kGroupCompaction) {
+  if (unlikely(status == kGroupWaitSplit || status == kGroupCompaction)) {
     return;
   }
-  int newLevel = ChooseGroupLevel(group);
+  int new_level = ChooseGroupLevel(group);
   RemoveFromQueue(group);
-  InsertIntoLayer(group, newLevel);
+  InsertIntoLayer(group, new_level);
   group->status_.store(kGroupNone, std::memory_order_relaxed);
 }
 
@@ -349,17 +356,17 @@ void HeatGroupManager::MoveAllGroupsToLayer(int from, int to) {
     return;
   }
 
-  auto movedFirst = group_queue_.heads[from]->next;
-  auto movedLast = group_queue_.tails[from]->prev;
+  auto moved_first = group_queue_.heads[from]->next;
+  auto moved_last = group_queue_.tails[from]->prev;
   group_queue_.heads[from]->next = group_queue_.tails[from];
   group_queue_.tails[from]->prev = group_queue_.heads[from];
 
   auto tail = group_queue_.tails[to];
   auto prev = tail->prev;
-  prev->next = movedFirst;
-  tail->prev = movedLast;
-  movedFirst->prev = prev;
-  movedLast->next = tail;
+  prev->next = moved_first;
+  tail->prev = moved_last;
+  moved_first->prev = prev;
+  moved_last->next = tail;
 }
 
 void HeatGroupManager::GroupLevelDown() {
@@ -397,11 +404,11 @@ void HeatGroupManager::ForceGroupLevelDown() {
 }
 
 void HeatGroupManager::TestChooseCompaction() {
-  for (int layer = 0; layer < MAX_LAYERS; ++layer) {
+  for (int layer = BASE_LAYER; layer < MAX_LAYERS; ++layer) {
     auto group = group_queue_.heads[layer]->next;
     while (group != group_queue_.tails[layer]) {
       auto size = group->group_size_.load();
-      if (size > GroupMinSize) {
+      if (size > (1 >> 20)) {
         compactor_->Notify(group);
         return;
       }

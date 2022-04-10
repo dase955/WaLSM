@@ -20,9 +20,17 @@ class NodeAllocator {
 
   ~NodeAllocator();
 
+  char* GetBase() {
+    return pmemptr_;
+  }
+
+  size_t GetNumFreePages() {
+    return free_pages_.size();
+  }
+
   NVMNode* AllocateNode();
 
-  void DeallocateNode(char* addr);
+  void DeallocateNode(NVMNode* node);
 
   void recoverOnRestart();
 
@@ -41,44 +49,5 @@ class NodeAllocator {
 };
 
 NodeAllocator& GetNodeAllocator();
-
-////////////////////////////////////////////////
-
-#ifdef ART_LITTLE_ENDIAN
-struct KVStruct {
-  union {
-    uint64_t hash_;
-    struct {
-      char padding[4];
-      unsigned char type_;
-      char prefixes_[3];
-    };
-  };
-  union {
-    uint64_t vptr_;
-    struct {
-      char padding2[6];
-      uint16_t kv_size_;
-    };
-  };
-
-  KVStruct() = default;
-
-  KVStruct(uint64_t hash, uint64_t vptr) : hash_(hash), vptr_(vptr) {};
-};
-#else
-struct KVStruct {
-  union {
-    uint64_t hash_;
-    char prefixes_[4];
-  };
-  union {
-    uint64_t vptr_;
-    uint16_t kv_size_;
-  };
-};
-#endif
-
-char GetPrefix(int level, const KVStruct& kvInfo);
 
 } // namespace ROCKSDB_NAMESPACE

@@ -1166,6 +1166,30 @@ struct DBOptions {
   //
   // Default: false
   bool allow_data_in_errors = false;
+
+  // Options below are used for art.
+
+  // Amount of data in global memtable before trigger compaction.
+  // Default: 512M
+  int compaction_threshold = 512 << 20;
+
+  // A threshold for the max size of a group,
+  // larger size will trigger group split.
+  // Default: 24M
+  int group_split_threshold = 24 << 20;
+
+  // A threshold for the size of a group that can chosen to do compaction.
+  // Default: 8M
+  int group_min_size = 4 << 20;
+
+  // Size of vlog file.
+  // Default: 4G
+  int64_t vlog_file_size = 4ULL << 30;
+
+  // Vlog file is divided into several segments,
+  // in order to do garbage collection.
+  // Default: 1M
+  int64_t vlog_segment_size = 1ULL << 20;
 };
 
 // Options to control the behavior of a database (passed to DB::Open)

@@ -50,26 +50,30 @@ class Compactor {
   Compactor() : thread_stop_(false), chosen_group_(nullptr),
                 group_manager_(nullptr), vlog_manager_(nullptr) {};
 
-  void SetGroupManager(HeatGroupManager *group_manager);
+  void SetGroupManager(HeatGroupManager* group_manager);
 
-  void SetVLogManager(VLogManager *vlog_manager);
+  void SetVLogManager(VLogManager* vlog_manager);
 
-  void SetDB(DBImpl *db_impl);
+  void SetDB(DBImpl* db_impl);
+
+  void StartCompactionThread();
 
   void BGWorkDoCompaction();
 
-  void StopBGWork();
+  void StopCompactionThread();
 
-  void Notify(HeatGroup *heat_group);
+  void Notify(HeatGroup* heat_group);
 
   // return compacted size
-  int32_t DoCompaction();
+  void DoCompaction();
 
  private:
 
   std::mutex mutex_;
 
   std::condition_variable cond_var_;
+
+  std::thread compactor_thread_;
 
   bool thread_stop_;
 

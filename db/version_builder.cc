@@ -383,12 +383,11 @@ class VersionBuilder::Rep {
   }
 
   Status CheckConsistency(VersionStorageInfo* vstorage) {
-    // Always run consistency checks in debug build
-#ifdef NDEBUG
+    // Never run consistency checks! Because in our cases
+    // sequence numbers are unordered between files in l0.
     if (!vstorage->force_consistency_checks()) {
       return Status::OK();
     }
-#endif
     Status s = CheckConsistencyDetails(vstorage);
     if (s.IsCorruption() && s.getState()) {
       // Make it clear the error is due to force_consistency_checks = 1 or

@@ -49,8 +49,8 @@ NVMNode* NodeAllocator::AllocateNode() {
   return (NVMNode*)addr;
 }
 
-void NodeAllocator::DeallocateNode(char* addr) {
-  free_pages_.emplace_back(addr);
+void NodeAllocator::DeallocateNode(NVMNode* node) {
+  free_pages_.emplace_back((char*)node);
 }
 
 void NodeAllocator::recoverOnRestart() {
@@ -64,15 +64,5 @@ int64_t NodeAllocator::relative(NVMNode* node) {
 NVMNode* NodeAllocator::absolute(int64_t offset) {
   return offset == -1 ? nullptr : (NVMNode*)(pmemptr_ + offset);
 }
-
-#ifdef ART_LITTLE_ENDIAN
-char GetPrefix(int level, const KVStruct& kvInfo) {
-  return kvInfo.prefixes_[level - 2];
-}
-#else
-inline char GetPrefix(int level, const uint64_t &hash) {
-  return ((char*)&hash)[level];
-}
-#endif
 
 } // namespace ROCKSDB_NAMESPACE

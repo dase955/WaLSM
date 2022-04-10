@@ -269,15 +269,18 @@ DBImpl::DBImpl(const DBOptions& options, const std::string& dbname,
   // is called by client and this seqnum is advanced.
   preserve_deletes_seqnum_.store(0);
 
+  vlog_manager_ = new VLogManager(options);
+
   group_manager_.InitGroupQueue();
   group_manager_.SetCompactor(&compactor_);
   compactor_.SetGroupManager(&group_manager_);
-  compactor_.SetVLogManager(&vlog_manager_);
+  compactor_.SetVLogManager(vlog_manager_);
   compactor_.SetDB(this);
 
   global_memtable_ = new GlobalMemtable(
-      &vlog_manager_, &group_manager_, env_);
+      vlog_manager_, &group_manager_, env_);
   group_manager_.StartHeatThread();
+  compactor_.StartCompactionThread();
 }
 
 Status DBImpl::Resume() {
@@ -663,11 +666,14 @@ Status DBImpl::CloseHelper() {
 Status DBImpl::CloseImpl() { return CloseHelper(); }
 
 DBImpl::~DBImpl() {
+  compactor_.StopCompactionThread();
   group_manager_.StopHeatThread();
   if (!closed_) {
     closed_ = true;
     CloseHelper().PermitUncheckedError();
   }
+  delete global_memtable_;
+  delete vlog_manager_;
 }
 
 void DBImpl::MaybeIgnoreError(Status* s) const {
@@ -5006,6 +5012,10 @@ Status DBImpl::GetCreationTimeOfOldestFile(uint64_t* creation_time) {
 void DBImpl::TestCompaction() {
   group_manager_.TestChooseCompaction();
   compactor_.DoCompaction();
+}
+
+void DBImpl::TestGC() {
+  vlog_manager_->TestGC();
 }
 
 #endif  // ROCKSDB_LITE

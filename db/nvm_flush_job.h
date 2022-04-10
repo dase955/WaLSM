@@ -94,6 +94,7 @@ class NVMFlushJob {
   void ReportStartedFlush();
   void RecordFlushIOStats();
   Status WriteLevel0Table();
+  std::unique_ptr<FlushJobInfo> GetFlushJobInfo() const;
 
   const std::string& dbname_;
   const std::string db_id_;

@@ -38,7 +38,10 @@ namespace ROCKSDB_NAMESPACE {
 #define SET_END(s)                (s) |= 0x10000000;
 #define SET_NON_END(s)            (s) &= ~(0x10000000);
 
-#define GET_NODE_BUFFER_SIZE(s)        ((s) & 0xffff)
+#define GET_GC_FLUSH_SIZE(s)        (((s) >> 16) & 0x000000ff)
+#define SET_GC_FLUSH_SIZE(s, size)  (s) &= 0xff00ffff; (s) |= ((size) << 16);
+
+#define GET_NODE_BUFFER_SIZE(s)        ((s) & 0x0000ffff)
 #define SET_NODE_BUFFER_SIZE(s, size)  (s) &= 0xffff0000; (s) |= (size);
 
 /*
@@ -95,8 +98,8 @@ const constexpr double  Coeff = 1.021897;              // Magic!
 
 const constexpr int     CompactionThreshold = 512 << 20; // 512M
 
-const constexpr int     GroupSplitThreshold = 16 << 20;  // 16M
+const constexpr int     GroupSplitThreshold = 12 << 20;  // 16M
 
-const constexpr int     GroupMinSize = 8 << 20;          // 8M
+const constexpr int     GroupMinSize = 4 << 20;          // 8M
 
 }  // namespace ROCKSDB_NAMESPACE

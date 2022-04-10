@@ -13,9 +13,9 @@
 #include "nvm_node.h"
 #include "heat_group.h"
 #include "heat_group_manager.h"
-#include "node_allocator.h"
 #include "vlog_manager.h"
 #include "global_memtable.h"
+#include "node_allocator.h"
 
 namespace ROCKSDB_NAMESPACE {
 
@@ -44,6 +44,11 @@ void Compactor::Notify(HeatGroup* heat_group) {
   cond_var_.notify_one();
 }
 
+void Compactor::StartCompactionThread() {
+  compactor_thread_ =
+      std::thread(&Compactor::BGWorkDoCompaction, this);
+}
+
 void Compactor::BGWorkDoCompaction() {
   while (true) {
     if (thread_stop_) {
@@ -56,7 +61,7 @@ void Compactor::BGWorkDoCompaction() {
     }
 
     std::unique_lock<std::mutex> lock{mutex_};
-    group_manager_->AddOperation(nullptr, kOperationChooseCompaction, false);
+    group_manager_->AddOperation(nullptr, kOperationChooseCompaction, true);
     cond_var_.wait(lock);
 
     if (thread_stop_) {
@@ -64,7 +69,7 @@ void Compactor::BGWorkDoCompaction() {
     }
 
     if (chosen_group_) {
-      MemTotalSize.fetch_sub(DoCompaction(), std::memory_order_release);
+      DoCompaction();
       // Maybe cause bug here.
       chosen_group_->status_.store(kGroupWaitMove, std::memory_order_relaxed);
       group_manager_->AddOperation(chosen_group_, kOperatorMove, true);
@@ -73,13 +78,14 @@ void Compactor::BGWorkDoCompaction() {
   }
 }
 
-void Compactor::StopBGWork() {
+void Compactor::StopCompactionThread() {
   thread_stop_ = true;
   cond_var_.notify_one();
+  compactor_thread_.join();
 }
 
-int32_t Compactor::DoCompaction() {
-  printf("Start compaction\n");
+void Compactor::DoCompaction() {
+  //printf("Start compaction\n");
 
   InnerNode* start_node = chosen_group_->first_node_;
   InnerNode* end_node = chosen_group_->last_node_;
@@ -87,8 +93,8 @@ int32_t Compactor::DoCompaction() {
 
   NVMNode* first_nvm_backup = GetNodeAllocator().AllocateNode();
   int32_t compacted_size = chosen_group_->group_size_.load(std::memory_order_relaxed);
-  std::deque<InnerNode *> candidates;
-  std::vector<NVMNode *> nvm_nodes;
+  std::deque<InnerNode*> candidates;
+  std::vector<NVMNode*> nvm_nodes;
 
   uint64_t num_entries = 0;
   uint64_t num_deletes = 0;
@@ -97,7 +103,7 @@ int32_t Compactor::DoCompaction() {
 
   {
     std::lock_guard<std::mutex> lk(start_node->flush_mutex_);
-    std::lock_guard<std::mutex> gc_lk(start_node->gc_mutex_);
+    //std::lock_guard<std::mutex> gc_lk(start_node->gc_mutex_);
 
     if (IS_LEAF(start_node->status_)) {
       memcpy(first_nvm_backup, start_node->nvm_node_, PAGE_SIZE);
@@ -109,14 +115,12 @@ int32_t Compactor::DoCompaction() {
     start_node = start_node->next_node_;
   }
 
-  printf("Group size: %d\n", chosen_group_->group_size_.load());
-
   ArtCompactionJob compaction_job;
   autovector<RecordIndex> compacted_records[VLogSegmentNum];
 
   while (start_node != end_node) {
     std::lock_guard<std::mutex> flush_lk(start_node->flush_mutex_);
-    std::lock_guard<std::mutex> gc_lk(start_node->gc_mutex_);
+    //std::lock_guard<std::mutex> gc_lk(start_node->gc_mutex_);
 
     if (unlikely(!IS_LEAF(start_node->status_))) {
       start_node = start_node->next_node_;
@@ -139,31 +143,35 @@ int32_t Compactor::DoCompaction() {
   // Sort data
   SequenceNumber seq_num = 0;
   RecordIndex record_index = 0;
+
+  std::vector<CompactionRec> kvs;
+  kvs.reserve(NVM_MAX_SIZE);
+
   for (auto& nvm_node : nvm_nodes) {
     auto meta = nvm_node->meta;
     auto data = nvm_node->data;
     size_t size = GET_SIZE(meta.header);
-    std::vector<CompactionRec> kvs;
-    kvs.reserve(NVM_MAX_SIZE);
+
+    kvs.clear();
     for (size_t i = 0; i < size; ++i) {
-      KVStruct kv_info{data[i * 2], data[i * 2 + 1]};
-      if (!kv_info.vptr_) {
+      auto vptr = data[i * 2 + 1];
+      if (!vptr) {
         continue;
       }
 
       std::string key, value;
       auto value_type = vlog_manager_->GetKeyValue(
-          kv_info.vptr_, key, value, seq_num, record_index);
+          vptr, key, value, seq_num, record_index);
       kvs.emplace_back(key, value, seq_num, value_type);
 
       //compacted_records.push_back((kv_info.vptr_ & SegmentIDMask) | record_index);
-      compacted_records[(kv_info.vptr_ & 0x0000ffffffffffff) >> 20]
-          .push_back(record_index);
+      GetActualVptr(vptr);
+      compacted_records[vptr >> 20].push_back(record_index);
     }
 
     std::stable_sort(kvs.begin(), kvs.end());
     std::string last_key;
-    for (auto &kv : kvs) {
+    for (auto& kv : kvs) {
       if (kv.key != last_key) {
         last_key = kv.key;
         num_entries += kv.type == kTypeValue;
@@ -198,7 +206,7 @@ int32_t Compactor::DoCompaction() {
     start_node = start_node->next_node_;
   }
 
-  GetNodeAllocator().DeallocateNode((char*)first_nvm_backup);
+  GetNodeAllocator().DeallocateNode(first_nvm_backup);
 
   for (size_t i = 0; i < VLogSegmentNum; ++i) {
     auto& vec = compacted_records[i];
@@ -210,19 +218,23 @@ int32_t Compactor::DoCompaction() {
     auto bitmap = header->bitmap_;
     for (auto index : vec) {
       assert(index / 8 < VLogBitmapSize);
-      bitmap[index / 8] |= (1 << (index % 8));
+      bitmap[index / 8] &= ~(1 << (index % 8));
     }
     header->compacted_count_ += vec.size();
     // Just clwb, not use sfence
     // pmem_persist(header, VLogHeaderSize);
+
+    header->lock.mutex_.unlock();
   }
 
   // Use sfence after all vlog are modified
   // _mm_sfence();
 
-  printf("Compaction done: size_=%d\n", compacted_size);
+#ifndef NDEBUG
+  printf("%p Compaction done: size_=%d, number of free pages: %zu\n",
+         chosen_group_, compacted_size, GetNodeAllocator().GetNumFreePages());
+#endif
   chosen_group_->UpdateSize(-compacted_size);
-  return compacted_size;
 }
 
 } // namespace ROCKSDB_NAMESPACE

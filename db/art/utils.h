@@ -11,6 +11,9 @@
 
 namespace ROCKSDB_NAMESPACE {
 
+constexpr size_t RecordPrefixSize
+    = 1 + sizeof(SequenceNumber) + sizeof(RecordIndex);
+
 // Forward declaration
 struct InnerNode;
 struct NVMNode;
@@ -24,6 +27,68 @@ uint64_t Hash(
     [[maybe_unused]] ValueType value_type = kTypeValue);
 
 int EstimateDistinctCount(const uint8_t hyperLogLog[64]);
+
+/////////////////////////////////////////////////////
+
+#ifdef ART_LITTLE_ENDIAN
+struct KVStruct {
+  union {
+    uint64_t hash_;
+    struct {
+      char padding[4];
+      unsigned char type_;
+      char prefixes_[3];
+    };
+  };
+  union {
+    uint64_t vptr_;
+    struct {
+      char padding2[6];
+      uint16_t kv_size_;
+    };
+  };
+
+  KVStruct() = default;
+
+  KVStruct(uint64_t hash, uint64_t vptr) : hash_(hash), vptr_(vptr) {};
+};
+
+inline char GetPrefix(int level, const KVStruct& kvInfo) {
+  return kvInfo.prefixes_[level - 2];
+}
+
+inline void GetActualVptr(uint64_t& vptr) {
+  vptr &= 0x0000ffffffffffff;
+}
+
+inline void UpdateActualVptr(uint64_t old_vptr, uint64_t& new_vptr) {
+  new_vptr |= (old_vptr & 0xffff000000000000);
+}
+#else
+struct KVStruct {
+  union {
+    uint64_t hash_;
+    char prefixes_[4];
+  };
+  union {
+    uint64_t vptr_;
+    uint16_t kv_size_;
+  };
+};
+
+inline char GetPrefix(int level, const uint64_t &hash) {
+  return ((char*)&hash)[level];
+}
+
+inline void GetActualVptr(uint64_t& vptr) {
+  vptr >>= 16;
+}
+
+inline void UpdateActualVptr(uint64_t old_vptr, uint64_t& new_vptr) {
+  new_vptr <<= 16;
+  new_vptr |= (old_vptr & 0x000000000000ffff);
+}
+#endif
 
 /////////////////////////////////////////////////////
 

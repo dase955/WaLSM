@@ -270,6 +270,17 @@ class MemTableList {
       std::list<std::unique_ptr<FlushJobInfo>>* committed_flush_jobs_info,
       IOStatus* io_s);
 
+  // Try commit a successful flush in the manifest file. It might just return
+  // Status::OK letting a concurrent flush to do the actual the recording.
+  Status TryInstallNVMFlushResults(
+      ColumnFamilyData* cfd, const MutableCFOptions& mutable_cf_options,
+      MemTable* mem, LogsWithPrepTracker* prep_tracker,
+      VersionSet* vset, InstrumentedMutex* mu, uint64_t file_number,
+      autovector<MemTable*>* to_delete, FSDirectory* db_directory,
+      LogBuffer* log_buffer,
+      std::list<std::unique_ptr<FlushJobInfo>>* committed_flush_jobs_info,
+      IOStatus* io_s);
+
   // New memtables are inserted at the front of the list.
   // Takes ownership of the referenced held on *m by the caller of Add().
   void Add(MemTable* m, autovector<MemTable*>* to_delete);

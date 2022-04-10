@@ -22,8 +22,6 @@
 
 namespace ROCKSDB_NAMESPACE {
 
-#define SQUEEZE_THRESHOLD 112
-
 InnerNode::InnerNode()
     : heat_group_(nullptr), art(nullptr), artBackup(nullptr),
       nvm_node_(nullptr), backup_nvm_node_(nullptr), last_child_node_(nullptr),
@@ -45,8 +43,8 @@ void FlushBuffer(InnerNode* leaf, int row) {
     auto hash = buffer[i << 1];
     fingerprints[i] = static_cast<uint8_t>(hash);
 
-    bucket = hash & 63;
-    h = (int) (hash >> 6);
+    bucket = (int)(hash & 63);
+    h = (int)(hash >> 6);
     digit = h == 0 ? 0 : __builtin_ctz(h) + 1;
     hll[bucket] = std::max(hll[bucket], digit);
   }
@@ -58,8 +56,8 @@ void FlushBuffer(InnerNode* leaf, int row) {
   // Write metadata
   uint64_t hdr = node->meta.header;
   uint8_t size = GET_SIZE(hdr);
-  SET_SIZE(hdr, (size + 16));
-  SET_ROWS(hdr, (row + 1));
+  SET_SIZE(hdr, size + 16);
+  SET_ROWS(hdr, row + 1);
   node->meta.header = hdr;
   // _mm_clwb(node->meta.header); _mm_sfence();
 }
@@ -80,8 +78,8 @@ void FlushBufferAndRelease(InnerNode* leaf, int row) {
     auto hash = buffer[i << 1];
     fingerprints[i] = static_cast<uint8_t>(hash);
 
-    bucket = hash & 63;
-    h = (int) (hash >> 6);
+    bucket = (int)(hash & 63);
+    h = (int)(hash >> 6);
     digit = h == 0 ? 0 : __builtin_ctz(h) + 1;
     hll[bucket] = std::max(hll[bucket], digit);
   }
@@ -93,13 +91,22 @@ void FlushBufferAndRelease(InnerNode* leaf, int row) {
   // Write metadata
   uint64_t hdr = node->meta.header;
   uint8_t size = GET_SIZE(hdr);
-  SET_SIZE(hdr, (size + 16));
-  SET_ROWS(hdr, (row + 1));
+  SET_SIZE(hdr, size + 16);
+  SET_ROWS(hdr, row + 1);
   node->meta.header = hdr;
   // _mm_clwb(node->meta.header); _mm_sfence();
 }
 
 //////////////////////////////////////////////////////////
+
+GlobalMemtable::GlobalMemtable(
+    VLogManager* vlog_manager, HeatGroupManager* group_manager, Env* env)
+    : root_(nullptr), head_(nullptr), tail_(nullptr),
+      vlog_manager_(vlog_manager), group_manager_(group_manager),
+      env_(env) {
+  vlog_manager->SetMemtable(this);
+  InitFirstTwoLevel();
+};
 
 void GlobalMemtable::InitFirstTwoLevel() {
   root_ = new InnerNode();
@@ -111,7 +118,7 @@ void GlobalMemtable::InitFirstTwoLevel() {
   root_->art = AllocateArtNode(kNode256);
   auto art256 = (ArtNode256 *)root_->art;
   art256->header_.prefix_length_ = 1;
-  art256->header_.num_children_ = 256;
+  art256->header_.num_children_ = 129;
 
   std::string ascii(
       "\t\n !\"#$%&'()*+,-./0123456789:;<=>?@"
@@ -126,8 +133,12 @@ void GlobalMemtable::InitFirstTwoLevel() {
 
   auto pre_allocate_children = used_ascii.size();
 
-  InnerNode* nextInnerNode = tail_;
+  InnerNode* next_inner_node = tail_;
   for (int first_char = LAST_CHAR; first_char >= 0; --first_char) {
+    if (first_char > 128 && first_char != LAST_CHAR) {
+      continue;
+    }
+
     auto node = new InnerNode();
     SET_NON_LEAF(node->status_);
     SET_ART_FULL(node->status_);
@@ -147,9 +158,9 @@ void GlobalMemtable::InitFirstTwoLevel() {
       }
 
       art256_l2->children_[second_char] = AllocateLeafNode(
-          2, static_cast<unsigned char>(second_char), nextInnerNode);
+          2, static_cast<unsigned char>(second_char), next_inner_node);
       art256_l2->children_[second_char]->heat_group_ = heatGroup;
-      nextInnerNode = art256_l2->children_[second_char];
+      next_inner_node = art256_l2->children_[second_char];
     }
 
     heatGroup->group_manager_ = group_manager_;
@@ -158,19 +169,17 @@ void GlobalMemtable::InitFirstTwoLevel() {
     group_manager_->InsertIntoLayer(heatGroup, BASE_LAYER);
   }
 
-  head_ = nextInnerNode;
+  head_ = next_inner_node;
 }
 
-void GlobalMemtable::Put(Slice& slice, uint64_t vptr, size_t count) {
-  static constexpr size_t prefix_size
-      = 1 + sizeof(SequenceNumber) + sizeof(RecordIndex);
-
+void GlobalMemtable::Put(Slice& slice, uint64_t base_vptr, size_t count) {
+  uint64_t vptr = base_vptr;
   slice.remove_prefix(WriteBatchInternal::kHeader);
   for (size_t c = 0; c < count; ++c) {
     auto start = slice.data();
     Slice key, value;
     ValueType type = ((ValueType *)slice.data())[0];
-    slice.remove_prefix(prefix_size);
+    slice.remove_prefix(RecordPrefixSize);
     GetLengthPrefixedSlice(&slice, &key);
     if (type == kTypeValue) {
       GetLengthPrefixedSlice(&slice, &value);
@@ -178,7 +187,7 @@ void GlobalMemtable::Put(Slice& slice, uint64_t vptr, size_t count) {
 
     auto hash = Hash(key.data(), key.size());
     KVStruct kv_info(hash, vptr);
-    kv_info.kv_size_ = (slice.data() - start) - prefix_size;
+    kv_info.kv_size_ = (slice.data() - start) - RecordPrefixSize;
     Put(key, kv_info);
     vptr += (slice.data() - start);
   }
@@ -285,6 +294,9 @@ void GlobalMemtable::SqueezeNode(InnerNode* leaf) {
   auto node = leaf->nvm_node_;
   uint64_t* data = node->data;
   uint8_t* fingerprints = node->meta.fingerprints_;
+  memset(leaf->hll_, 0, 64);
+
+  // Maybe we can use vector instead of map.
   std::unordered_map<std::string, KVStruct> map;
 
   for (size_t i = 0; i < NVM_MAX_SIZE; i++) {
@@ -293,29 +305,33 @@ void GlobalMemtable::SqueezeNode(InnerNode* leaf) {
     if (!vptr) {
       continue;
     }
-    std::string key, value;
-    vlog_manager_->GetKeyValue(vptr, key, value);
+    std::string key;
+    vlog_manager_->GetKey(vptr, key);
     map[key] = KVStruct(hash, vptr);
   }
 
   int count = 0, fpos = 0;
-  auto prevSize = leaf->estimated_size_;
-  int32_t curSize = 0;
+  auto prev_size = leaf->estimated_size_;
+  int32_t cur_size = 0;
   memset(fingerprints, 0, 224);
   for (auto &pair: map) {
-    auto &key = pair.first;
-    auto &kvInfo = pair.second;
-    fingerprints[fpos++] = static_cast<uint8_t>(kvInfo.hash_);
-    data[count++] = kvInfo.hash_;
-    data[count++] = kvInfo.vptr_;
-    curSize += kvInfo.kv_size_;
+    auto & kv_info = pair.second;
+    fingerprints[fpos++] = static_cast<uint8_t>(kv_info.hash_);
+    data[count++] = kv_info.hash_;
+    data[count++] = kv_info.vptr_;
+    cur_size += kv_info.kv_size_;
+
+    int bucket = kv_info.hash_ & 63;
+    int h = (int) (kv_info.hash_ >> 6);
+    uint8_t digit = h == 0 ? 0 : __builtin_ctz(h) + 1;
+    leaf->hll_[bucket] = std::max(leaf->hll_[bucket], digit);
   }
 
   assert(fpos <= NVM_MAX_SIZE);
   assert(count <= (NVM_MAX_SIZE * 2));
 
-  leaf->estimated_size_ = curSize;
-  leaf->heat_group_->UpdateSize(curSize - prevSize);
+  leaf->estimated_size_ = cur_size;
+  leaf->heat_group_->UpdateSize(cur_size - prev_size);
 
   int rows = ((fpos - 1) >> 4) + 1;
   int size = rows << 4;
@@ -420,7 +436,7 @@ void GlobalMemtable::SplitLeafBelowLevel5(InnerNode* leaf) {
   leaf->vptr_ = split_buckets[0].empty() ? 0 : split_buckets[0].back().vptr_;
   SET_ART_NON_FULL(leaf->status_);
 
-  InsertSplitInnerNode(leaf, first_node, final_node, (level + 1));
+  InsertSplitInnerNode(leaf, first_node, final_node, level + 1);
   // _mm_sfence(); clwb(node->meta); _mm_sfence();
   leaf->estimated_size_ = 0;
   InsertNodesToGroup(leaf, new_leaves);
@@ -432,7 +448,6 @@ void GlobalMemtable::SplitLeaf(InnerNode *leaf) {
   auto node = leaf->nvm_node_;
   auto* data = node->data;
   autovector<KVStruct> split_buckets[256];
-  uint64_t tmpVptr = 0;
 
   // TODO: remove duplication
   int level = GET_PRELEN(node->meta.header);
@@ -465,7 +480,8 @@ void GlobalMemtable::SplitLeaf(InnerNode *leaf) {
 
   std::vector<InnerNode*> new_leaves{final_node};
   std::vector<unsigned char> prefixes{LAST_CHAR};
-  new_leaves.reserve(256);
+  new_leaves.reserve(split_num);
+  prefixes.reserve(split_num);
 
   for (int c = LAST_CHAR - 1; c > 0; --c) {
     if (split_buckets[c].empty() && c != 1) {
@@ -477,11 +493,11 @@ void GlobalMemtable::SplitLeaf(InnerNode *leaf) {
     int pos = 0, fpos = 0;
     uint32_t leaf_size = 0;
     memset(nvm_node->meta.fingerprints_, 0, 224);
-    for (auto &kvInfo : split_buckets[c]) {
-      nvm_node->meta.fingerprints_[fpos++] = static_cast<uint8_t>(kvInfo.hash_);
-      nvm_node->data[pos++] = kvInfo.hash_;
-      nvm_node->data[pos++] = kvInfo.vptr_;
-      leaf_size += kvInfo.kv_size_;
+    for (auto& kv_info : split_buckets[c]) {
+      nvm_node->meta.fingerprints_[fpos++] = static_cast<uint8_t>(kv_info.hash_);
+      nvm_node->data[pos++] = kv_info.hash_;
+      nvm_node->data[pos++] = kv_info.vptr_;
+      leaf_size += kv_info.kv_size_;
     }
     new_leaf->estimated_size_ = leaf_size;
 
@@ -513,7 +529,7 @@ void GlobalMemtable::SplitLeaf(InnerNode *leaf) {
   leaf->art = art;
   SET_ART_NON_FULL(leaf->status_);
 
-  InsertSplitInnerNode(leaf, first_node, final_node, (level + 1));
+  InsertSplitInnerNode(leaf, first_node, final_node, level + 1);
   // _mm_sfence(); clwb(node->meta); _mm_sfence();
   InsertNodesToGroup(leaf, new_leaves);
 
@@ -522,7 +538,7 @@ void GlobalMemtable::SplitLeaf(InnerNode *leaf) {
 
 // "4b prefix + 4b hash + 8b pointer" OR "4b SeqNum + 4b hash + 8b pointer"
 // This function is responsible for unlocking opt_lock_
-void GlobalMemtable::InsertIntoLeaf(InnerNode* leaf, KVStruct& kv_info, int level) {
+void GlobalMemtable::InsertIntoLeaf(InnerNode* leaf, KVStruct& kv_info, size_t level) {
   int writePos = GET_NODE_BUFFER_SIZE(++leaf->status_) << 1;
   assert(writePos <= 32);
 
@@ -542,7 +558,6 @@ void GlobalMemtable::InsertIntoLeaf(InnerNode* leaf, KVStruct& kv_info, int leve
 
   // Group size_ and total size_ is updated when doing flush
   auto buffer_size = leaf->buffer_size_;
-  UpdateTotalSize(buffer_size);
   leaf->heat_group_->UpdateSize(buffer_size);
   leaf->estimated_size_ += buffer_size;
   leaf->buffer_size_ = 0;
@@ -555,9 +570,9 @@ void GlobalMemtable::InsertIntoLeaf(InnerNode* leaf, KVStruct& kv_info, int leve
   auto nvmNode = leaf->nvm_node_;
   auto& nvmMeta = nvmNode->meta;
   int rows = GET_ROWS(nvmMeta.header);
-  bool needSplit = rows == NVM_MAX_ROWS - 1;
+  bool need_split = rows == NVM_MAX_ROWS - 1;
 
-  if (likely(!needSplit)) {
+  if (likely(!need_split)) {
     // We cannot release the lock directly,
     // because we will use data in buffer
     // Two solutions:
@@ -565,12 +580,13 @@ void GlobalMemtable::InsertIntoLeaf(InnerNode* leaf, KVStruct& kv_info, int leve
     // 2. copy buffer and release lock, then flush (currently used)
     FlushBufferAndRelease(leaf, rows);
   } else {
-    if (EstimateDistinctCount(leaf->hll_) < SQUEEZE_THRESHOLD) {
+    if (EstimateDistinctCount(leaf->hll_) < squeeze_threshold_) {
       FlushBufferAndRelease(leaf, rows);
+      //std::lock_guard<std::mutex> gc_lk(leaf->gc_mutex_);
       SqueezeNode(leaf);
       return;
     } else {
-      std::lock_guard<std::mutex> gc_lk(leaf->gc_mutex_);
+      //std::lock_guard<std::mutex> gc_lk(leaf->gc_mutex_);
       FlushBuffer(leaf, rows);
       level < 5 ? SplitLeafBelowLevel5(leaf) : SplitLeaf(leaf);
       leaf->opt_lock_.WriteUnlock(false);
@@ -581,7 +597,6 @@ void GlobalMemtable::InsertIntoLeaf(InnerNode* leaf, KVStruct& kv_info, int leve
 bool GlobalMemtable::FindKey(InnerNode* leaf, std::string& key, std::string& value) {
   std::string find_key;
   uint64_t vptr;
-  uint64_t dummy_seq_num;
 
   uint64_t hash = Hash(key.c_str(), key.length(), kTypeValue);
   int pos = GET_NODE_BUFFER_SIZE(leaf->status_);
@@ -592,43 +607,106 @@ bool GlobalMemtable::FindKey(InnerNode* leaf, std::string& key, std::string& val
       continue;
     }
     vlog_manager_->GetKeyValue(
-        buffer[i * 2 + 1], find_key, value, dummy_seq_num);
+        buffer[i * 2 + 1], find_key, value);
     if (find_key == key) {
       return true;
     }
   }
 
-  // Todo: also search in backup nvm node
-
-  auto data = leaf->nvm_node_->data;
-  auto fingerprints = leaf->nvm_node_->meta.fingerprints_;
-  int rows = GET_ROWS(leaf->nvm_node_->meta.header);
-
-  int search_rows = (rows - 1) / 2 + 1;
-  int size = rows * 16;
-
   __m256i target = _mm256_set1_epi8((uint8_t)hash);
-  for (int i = search_rows; i >= 0; --i) {
-    int base = i << 5;
-    __m256i f = _mm256_loadu_si256(reinterpret_cast<const __m256i *>(fingerprints + base));
-    __m256i r = _mm256_cmpeq_epi8(f, target);
-    auto res = (unsigned int)_mm256_movemask_epi8(r);
-    while (res > 0) {
-      int found = 31 - __builtin_clz(res);
-      res -= (1 << found);
-      int index = found + base;
-      vptr = data[index * 2 + 1];
-      if (index >= size || data[index * 2] != hash) {
-        continue;
+
+  auto nvm_node = leaf->nvm_node_;
+  {
+    auto data = nvm_node->data;
+    auto fingerprints = nvm_node->meta.fingerprints_;
+    int rows = GET_ROWS(nvm_node->meta.header);
+
+    int search_rows = (rows + 1) / 2 - 1;
+    int size = rows * 16;
+
+    for (int i = search_rows; i >= 0; --i) {
+      int base = i << 5;
+      __m256i f = _mm256_loadu_si256(reinterpret_cast<const __m256i *>(fingerprints + base));
+      __m256i r = _mm256_cmpeq_epi8(f, target);
+      auto res = (unsigned int)_mm256_movemask_epi8(r);
+      while (res > 0) {
+        int found = 31 - __builtin_clz(res);
+        res -= (1 << found);
+        int index = found + base;
+        vptr = data[index * 2 + 1];
+        if (index >= size || data[index * 2] != hash) {
+          continue;
+        }
+        vlog_manager_->GetKeyValue(vptr, find_key, value);
+        if (key == find_key) {
+          return true;
+        }
       }
-      vlog_manager_->GetKeyValue(vptr, find_key, value, dummy_seq_num);
-      if (key == find_key) {
-        return true;
+    }
+  }
+
+  auto nvm_node_backup = leaf->backup_nvm_node_;
+  if (!nvm_node_backup || nvm_node_backup == nvm_node) {
+    return false;
+  }
+  nvm_node = nvm_node_backup;
+  {
+    auto data = nvm_node->data;
+    auto fingerprints = nvm_node->meta.fingerprints_;
+    int rows = GET_ROWS(nvm_node->meta.header);
+
+    int search_rows = (rows + 1) / 2 - 1;
+    int size = rows * 16;
+
+    for (int i = search_rows; i >= 0; --i) {
+      int base = i << 5;
+      __m256i f = _mm256_loadu_si256(reinterpret_cast<const __m256i *>(fingerprints + base));
+      __m256i r = _mm256_cmpeq_epi8(f, target);
+      auto res = (unsigned int)_mm256_movemask_epi8(r);
+      while (res > 0) {
+        int found = 31 - __builtin_clz(res);
+        res -= (1 << found);
+        int index = found + base;
+        vptr = data[index * 2 + 1];
+        if (index >= size || data[index * 2] != hash) {
+          continue;
+        }
+        vlog_manager_->GetKeyValue(vptr, find_key, value);
+        if (key == find_key) {
+          return true;
+        }
       }
     }
   }
 
   return false;
+}
+
+InnerNode* GlobalMemtable::FindInnerNodeByKey(std::string& key, size_t& level,
+                                              bool& stored_in_nvm) {
+  size_t maxDepth = key.size();
+
+  level = 0;
+  stored_in_nvm = true;
+  InnerNode* current = root_;
+  InnerNode* nextNode;
+
+  while (true) {
+    nextNode = FindChild(current, key[level]);
+    if (IS_LEAF(current->status_)) {
+      return current;
+    }
+
+    if (!nextNode) {
+      return nullptr;
+    }
+
+    current = nextNode;
+    if (level++ == maxDepth) {
+      stored_in_nvm = false;
+      return current;
+    }
+  }
 }
 
 } // namespace ROCKSDB_NAMESPACE

@@ -6,7 +6,8 @@
 // Data in nodes are unsorted, fingerprints_ are used to speed up query efficiency.
 // There have some assumption about input data:
 // 1. 0th and 255th node will never be used
-// 2. Key value size_ cannot exceed 64M
+// 2. extended ascii are not used
+// 3. Key value size_ cannot exceed 64M
 // TODO:
 // 1. keys smaller than 8byte can be directly stored in node
 
@@ -80,21 +81,20 @@ class GlobalMemtable {
  public:
   GlobalMemtable()
       : root_(nullptr), head_(nullptr), tail_(nullptr),
-        vlog_manager_(nullptr), group_manager_(nullptr) {}
+        vlog_manager_(nullptr), group_manager_(nullptr),
+        env_(nullptr) {}
 
-  GlobalMemtable(
-      VLogManager* vlog_manager, HeatGroupManager* group_manager, Env* env)
-      : root_(nullptr), head_(nullptr), tail_(nullptr),
-        vlog_manager_(vlog_manager), group_manager_(group_manager),
-        env_(env) {
-            InitFirstTwoLevel();
-        };
+  GlobalMemtable(VLogManager* vlog_manager,
+                 HeatGroupManager* group_manager, Env* env);
 
-  void Put(Slice& slice, uint64_t vptr, size_t count);
+  void Put(Slice& slice, uint64_t base_vptr, size_t count);
 
   bool Get(std::string& key, std::string& value);
 
   void InitFirstTwoLevel();
+
+  InnerNode* FindInnerNodeByKey(
+      std::string& key, size_t& level, bool& stored_in_nvm);
 
  private:
   void Put(Slice& key, KVStruct& kv_info);
@@ -105,10 +105,11 @@ class GlobalMemtable {
 
   void SplitLeaf(InnerNode* leaf);
 
-  // Optimize split below level 5, since we store first three prefixes in hash(key)
+  // Optimize split below level 5,
+  // since we store first three prefixes in hash(key)
   void SplitLeafBelowLevel5(InnerNode* leaf);
 
-  void InsertIntoLeaf(InnerNode* leaf, KVStruct& kv_info, int level);
+  void InsertIntoLeaf(InnerNode* leaf, KVStruct& kv_info, size_t level);
 
   InnerNode* root_;
   InnerNode* head_;
@@ -119,6 +120,8 @@ class GlobalMemtable {
   HeatGroupManager* group_manager_;
 
   Env* env_;
+
+  int squeeze_threshold_ = 112;
 };
 
 } // namespace ROCKSDB_NAMESPACE

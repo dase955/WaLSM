@@ -77,7 +77,7 @@ class DBTest3 : public DBTestBase {
   DBTest3() : DBTestBase("/db_test3", /*env_do_fsync=*/false) {}
 };
 
-void MultiThreadTest(DB *db, std::vector<std::string> *sampled_keys) {
+void MultiThreadTest(DB *db, std::vector<std::string> *sampled_keys, int thread_id) {
   std::random_device rd;
   std::mt19937 gen(rd());
   std::uniform_int_distribution<> keyDis(4, 32);
@@ -87,13 +87,13 @@ void MultiThreadTest(DB *db, std::vector<std::string> *sampled_keys) {
   std::string keyStr("0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz!@#$%^&*()-_=+[{]}|<,>.?/~`' ");
 
   std::vector<std::string> sampledKeys;
-  for (int i = 0; i < 16384 * 128; ++i) {
+  for (int i = 0; i < 16384 * 72; ++i) {
     std::shuffle(keyStr.begin(), keyStr.end(), generator);
     std::string key = keyStr.substr(0, keyDis(gen));    // assumes 32 < number of characters in str
     std::string value = key + key;
 
     ASSERT_OK(db->Put(WriteOptions(), key, value));
-    if (i % 1000 == 0) {
+    if (i % 64 == 0) {
       sampled_keys->push_back(key);
     }
   }
@@ -102,6 +102,7 @@ void MultiThreadTest(DB *db, std::vector<std::string> *sampled_keys) {
 TEST_F(DBTest3, MockEnvTest) {
   std::unique_ptr<MockEnv> env{new MockEnv(Env::Default())};
   Options options;
+  options.force_consistency_checks = false;
   options.create_if_missing = true;
   options.env = env.get();
   DB* db;
@@ -112,15 +113,15 @@ TEST_F(DBTest3, MockEnvTest) {
   std::vector<std::string> sampled_keys[16];
   int n = 0;
   for (auto & thread : threads) {
-    thread = std::thread(MultiThreadTest, db, &(sampled_keys[n++]));
+    thread = std::thread(MultiThreadTest, db, &(sampled_keys[n]), n);
+    n++;
   }
 
   for (auto & thread : threads) {
     thread.join();
   }
 
-  std::cout << "Start" << std::endl;
-
+  std::cout << "Start test get" << std::endl;
   for (auto &vec : sampled_keys) {
     for (auto &key : vec) {
       std::string res;
@@ -133,10 +134,7 @@ TEST_F(DBTest3, MockEnvTest) {
       }
     }
   }
-
-  std::cout << "Done" << std::endl;
-
-  ((DBImpl*)db)->TestCompaction();
+  std::cout << "Test get done" << std::endl;
 
   delete db;
 }

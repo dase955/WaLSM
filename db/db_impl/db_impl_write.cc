@@ -353,7 +353,7 @@ Status DBImpl::WriteImpl(const WriteOptions& write_options,
         wal_size +=
             (writer->batch->GetDataSize() - WriteBatchInternal::kHeader);
       }
-      RecordIndex next_index = vlog_manager_.GetFirstIndex(wal_size);
+      RecordIndex next_index = vlog_manager_->GetFirstIndex(wal_size);
 
       // Note: the logic for advancing seq here must be consistent with the
       // logic in WriteBatchInternal::InsertInto(write_group...) as well as
@@ -1083,7 +1083,7 @@ IOStatus DBImpl::WriteToWAL(const WriteBatch& merged_batch,
 
 #ifdef ART
   log_entry.remove_prefix(WriteBatchInternal::kHeader);
-  last_record_offset_ = vlog_manager_.AddRecord(
+  last_record_offset_ = vlog_manager_->AddRecord(
       log_entry, WriteBatchInternal::Count(&merged_batch));
   IOStatus io_s;
 #else

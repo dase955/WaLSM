@@ -165,9 +165,8 @@ Status NVMFlushJob::Run(LogsWithPrepTracker* prep_tracker,
     TEST_SYNC_POINT("NVMFlushJob::InstallResults");
     // Replace immutable memtable with the generated Table
     IOStatus tmp_io_s;
-    autovector<MemTable*> dummy_mems;
-    s = cfd_->imm()->TryInstallMemtableFlushResults(
-        cfd_, mutable_cf_options_, dummy_mems, prep_tracker, versions_, db_mutex_,
+    s = cfd_->imm()->TryInstallNVMFlushResults(
+        cfd_, mutable_cf_options_, cfd_->mem(), prep_tracker, versions_, db_mutex_,
         meta_.fd.GetNumber(), &job_context_->memtables_to_free, db_directory_,
         log_buffer_, &committed_flush_jobs_info_, &tmp_io_s);
     if (!tmp_io_s.ok()) {
@@ -325,6 +324,8 @@ Status NVMFlushJob::WriteLevel0Table() {
                    meta_.file_checksum, meta_.file_checksum_func_name);
   }
 
+  cfd_->mem()->SetFlushJobInfo(GetFlushJobInfo());
+
   // Note that here we treat flush as level 0 compaction in internal stats
   InternalStats::CompactionStats stats(CompactionReason::kFlush, 1);
   stats.micros = db_options_.env->NowMicros() - start_micros;
@@ -341,6 +342,26 @@ Status NVMFlushJob::WriteLevel0Table() {
                                      stats.bytes_written);
   RecordFlushIOStats();
   return s;
+}
+
+std::unique_ptr<FlushJobInfo> NVMFlushJob::GetFlushJobInfo() const {
+  db_mutex_->AssertHeld();
+  std::unique_ptr<FlushJobInfo> info(new FlushJobInfo{});
+  info->cf_id = cfd_->GetID();
+  info->cf_name = cfd_->GetName();
+
+  const uint64_t file_number = meta_.fd.GetNumber();
+  info->file_path =
+      MakeTableFileName(cfd_->ioptions()->cf_paths[0].path, file_number);
+  info->file_number = file_number;
+  info->oldest_blob_file_number = meta_.oldest_blob_file_number;
+  info->thread_id = db_options_.env->GetThreadID();
+  info->job_id = job_context_->job_id;
+  info->smallest_seqno = meta_.fd.smallest_seqno;
+  info->largest_seqno = meta_.fd.largest_seqno;
+  info->table_properties = table_properties_;
+  info->flush_reason = cfd_->GetFlushReason();
+  return info;
 }
 
 }  // namespace ROCKSDB_NAMESPACE

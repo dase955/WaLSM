@@ -31,9 +31,15 @@ const constexpr int64_t VLogHeaderSize = VLogSegmentSize / 128;
 const constexpr int64_t VLogBitmapSize = VLogHeaderSize - SEG_HDR_SIZE;
 
 // GC is needed when used space of vlog is larger than threshold.
-const float ForceGCThreshold = 0.7;
+const constexpr int ForceGCThreshold = (int)(0.75 * VLogSegmentNum);
 
-const float CompactedRatioThreshold = 0.7;
+const float CompactedRatioThreshold = 0.5;
+
+enum SegmentStatus : uint8_t {
+  kSegmentUnused,
+  kSegmentWriting,
+  kSegmentGC,
+};
 
 struct alignas(CACHE_LINE_SIZE) AlignedLock {
   SpinMutex mutex_;
@@ -41,7 +47,7 @@ struct alignas(CACHE_LINE_SIZE) AlignedLock {
 
 struct VLogSegmentHeader {
   struct alignas(CACHE_LINE_SIZE) {
-    uint32_t offset_ = 0;
+    uint32_t offset_ = 0 ;
     uint16_t total_count_ = 0;
     uint16_t compacted_count_ = 0;
   };
@@ -49,19 +55,25 @@ struct VLogSegmentHeader {
   uint8_t bitmap_[VLogBitmapSize];
 };
 
+class GlobalMemtable;
+
 class VLogManager {
   friend class Compactor;
 
  public:
-  explicit VLogManager(bool need_recovery = false);
+  explicit VLogManager(DBOptions& options, bool need_recovery = false);
+
+  ~VLogManager();
+
+  void SetMemtable(GlobalMemtable* mem);
 
   uint64_t AddRecord(const Slice& slice, uint32_t record_count = 1);
 
   RecordIndex GetFirstIndex(size_t wal_size);
 
-  void GetKey(uint64_t offset, std::string &key);
+  void GetKey(uint64_t vptr, std::string &key);
 
-  void GetKey(uint64_t offset, Slice &key);
+  void GetKey(uint64_t vptr, Slice &key);
 
   ValueType GetKeyValue(uint64_t offset, std::string &key, std::string &value,
                         SequenceNumber &seq_num, RecordIndex &index);
@@ -71,10 +83,17 @@ class VLogManager {
 
   ValueType GetKeyValue(uint64_t offset, std::string &key, std::string &value);
 
+  void TestGC();
+
  private:
   void RecoverOnRestart();
 
-  void PopSegment();
+  void PopFreeSegment();
+
+  char* WriteToNewSegment(
+      char *segment, std::string& record, uint64_t& new_vptr);
+
+  char* ChooseSegmentGC();
 
   void BGWorkGarbageCollection();
 
@@ -99,9 +118,14 @@ class VLogManager {
 
   std::thread gc_thread_;
 
+  // Mutex and condvar for gc thread
+  port::Mutex gc_mu_;
+  port::CondVar gc_cv_;
+  bool thread_stop_;
+
+  GlobalMemtable* mem_;
+
   bool gc_ = false;
 };
-
-VLogManager &GetManager();
 
 }  // namespace ROCKSDB_NAMESPACE

@@ -1040,6 +1040,11 @@ class VersionSet {
     return last_sequence_.load(std::memory_order_acquire);
   }
 
+  // Return the last sequence number.
+  uint64_t LastSequence(uint64_t update) {
+    return last_sequence_.fetch_add(update, std::memory_order_release);
+  }
+
   // Note: memory_order_acquire must be sufficient.
   uint64_t LastAllocatedSequence() const {
     return last_allocated_sequence_.load(std::memory_order_seq_cst);
