@@ -44,6 +44,8 @@ void InsertToArtNode(ArtNodeHeader* art, InnerNode* leaf,
 /////////////////////////////////////////////////////
 // NVMNode
 
+// We must ensure that next node is not being compacted,
+// because nvm_ptr may be changed during compaction.
 InnerNode* AllocateLeafNode(uint8_t prefix_length,
                             unsigned char last_prefix,
                             InnerNode* next_node = nullptr);

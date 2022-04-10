@@ -397,15 +397,18 @@ void HeatGroupManager::ForceGroupLevelDown() {
 }
 
 void HeatGroupManager::TestChooseCompaction() {
-  auto group = group_queue_.heads[BASE_LAYER]->next;
-  while (group != group_queue_.tails[BASE_LAYER]) {
-    auto size = group->group_size_.load();
-    if (size > (1 << 20)) {
-      compactor_->Notify(group);
-      return;
+  for (int layer = 0; layer < MAX_LAYERS; ++layer) {
+    auto group = group_queue_.heads[layer]->next;
+    while (group != group_queue_.tails[layer]) {
+      auto size = group->group_size_.load();
+      if (size > GroupMinSize) {
+        compactor_->Notify(group);
+        return;
+      }
+      group = group->next;
     }
-    group = group->next;
   }
+  assert(false);
 }
 
 void HeatGroupManager::ChooseCompaction() {

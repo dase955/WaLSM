@@ -70,20 +70,22 @@ InnerNode* AllocateLeafNode(uint8_t prefix_length,
   inode->last_child_node_ = inode;
   inode->next_node_ = next_node;
 
-  nvm_node->meta.dram_pointer_ = inode;
-  nvm_node->meta.next1 = next_node ? mgr.relative(next_node->nvm_node_) : -1;
-
   uint64_t hdr = 0;
   SET_LAST_PREFIX(hdr, last_prefix);
   SET_PRELEN(hdr, prefix_length);
   SET_TAG(hdr, VALID_TAG);
   SET_TAG(hdr, ALT_FIRST_TAG);
+
   nvm_node->meta.header = hdr;
+  nvm_node->meta.dram_pointer_ = inode;
+  nvm_node->meta.next1 = next_node ? mgr.relative(next_node->nvm_node_) : -1;
+
+  // pmem_persist
   return inode;
 }
 
-void InsertInnerNode(InnerNode *node, InnerNode *inserted) {
-  std::lock_guard<SpinMutex> lk(node->link_lock_);
+void InsertInnerNode(InnerNode* node, InnerNode* inserted) {
+  std::lock_guard<SpinMutex> link_lk(node->link_lock_);
 
   auto prev_node = node->last_child_node_;
   inserted->next_node_ = prev_node->next_node_;
@@ -93,6 +95,8 @@ void InsertInnerNode(InnerNode *node, InnerNode *inserted) {
   auto inserted_nvm_node = inserted->nvm_node_;
   uint64_t hdr = prev_nvm_node->meta.header;
 
+  // Because we only change pointer here,
+  // so there is no need to switch alt bit.
   if (GET_TAG(hdr, ALT_FIRST_TAG)) {
     inserted_nvm_node->meta.next1 = prev_nvm_node->meta.next1;
     prev_nvm_node->meta.next1 =
@@ -146,39 +150,41 @@ void InsertSplitInnerNode(InnerNode* node, InnerNode* first_inserted,
 void InsertNewNVMNode(InnerNode* node, NVMNode* new_nvm_node) {
   auto old_nvm_node = node->nvm_node_;
   auto hdr = old_nvm_node->meta.header;
+  SET_TAG(hdr, ALT_FIRST_TAG);
   SET_ROWS(hdr, 0);
   SET_SIZE(hdr, 0);
   new_nvm_node->meta.header = hdr;
   new_nvm_node->meta.dram_pointer_ = node;
 
-  node->link_lock_.lock();
-  node->backup_nvm_node_ = old_nvm_node;
-  node->nvm_node_ = new_nvm_node;
+  {
+    std::lock_guard<SpinMutex> link_lk(node->link_lock_);
 
-  auto old_hdr = old_nvm_node->meta.header;
-  auto new_hdr = old_hdr;
+    node->backup_nvm_node_ = old_nvm_node;
+    node->nvm_node_ = new_nvm_node;
 
-  if (GET_TAG(old_hdr, ALT_FIRST_TAG)) {
-    new_nvm_node->meta.next1 = old_nvm_node->meta.next1;
-    old_nvm_node->meta.next1 = GetNodeAllocator().relative(new_nvm_node);
-  } else {
-    new_nvm_node->meta.next1 = old_nvm_node->meta.next2;
-    old_nvm_node->meta.next2 = GetNodeAllocator().relative(new_nvm_node);
+    auto old_hdr = old_nvm_node->meta.header;
+    auto new_hdr = old_hdr;
+
+    if (GET_TAG(old_hdr, ALT_FIRST_TAG)) {
+      new_nvm_node->meta.next1 = old_nvm_node->meta.next1;
+      old_nvm_node->meta.next1 = GetNodeAllocator().relative(new_nvm_node);
+    } else {
+      new_nvm_node->meta.next1 = old_nvm_node->meta.next2;
+      old_nvm_node->meta.next2 = GetNodeAllocator().relative(new_nvm_node);
+    }
+    // _mm_clwb(nvmNode->meta); _mm_sfence();
+
+    old_nvm_node->meta.header = new_hdr;
+    // _mm_clwb(node->meta); _mm_sfence();
   }
-  // _mm_clwb(nvmNode->meta); _mm_sfence();
-
-  old_nvm_node->meta.header = new_hdr;
-  // _mm_clwb(node->meta); _mm_sfence();
-
-  node->link_lock_.unlock();
 }
 
 // Different from InsertNewNVMNode, link_lock_ has been held
 void RemoveOldNVMNode(InnerNode* node) {
   auto next_node = node->next_node_;
   auto nvm_node = node->nvm_node_;
-
   auto hdr = nvm_node->meta.header;
+
   if (GET_TAG(hdr, ALT_FIRST_TAG)) {
     nvm_node->meta.next1 = GetNextRelativeNode(nvm_node->meta.next1);
   } else {
@@ -186,8 +192,9 @@ void RemoveOldNVMNode(InnerNode* node) {
   }
 
   // _mm_clwb(node->nvm_node_->meta); _mm_sfence();
-  GetNodeAllocator().DeallocateNode((char*)next_node->backup_nvm_node_);
+  auto backup_nvm_node = next_node->backup_nvm_node_;
   next_node->backup_nvm_node_ = nullptr;
+  GetNodeAllocator().DeallocateNode((char*)backup_nvm_node);
 }
 
 NVMNode* GetNextNode(NVMNode* node) {

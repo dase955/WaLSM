@@ -58,7 +58,7 @@ void NodeAllocator::recoverOnRestart() {
 }
 
 int64_t NodeAllocator::relative(NVMNode* node) {
-  return (char *)node - pmemptr_;
+  return (char*)node - pmemptr_;
 }
 
 NVMNode* NodeAllocator::absolute(int64_t offset) {

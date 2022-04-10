@@ -339,10 +339,11 @@ void GlobalMemtable::SplitLeafBelowLevel5(InnerNode* leaf) {
   int level = GET_PRELEN(node->meta.header);
   for (size_t i = 0; i < NVM_MAX_SIZE; ++i) {
     KVStruct kv_info(data[(i << 1)], data[(i << 1) + 1]);
-    if (kv_info.vptr_ == 0) {
+    if (!kv_info.vptr_) {
       continue;
     }
-    split_buckets[static_cast<unsigned int>(GetPrefix(level, kv_info))].push_back(kv_info); // ??
+    split_buckets[static_cast<unsigned int>(GetPrefix(level, kv_info))]
+        .push_back(kv_info); // ??
   }
 
   int64_t oldest_key_time = leaf->oldest_key_time_;
@@ -356,7 +357,7 @@ void GlobalMemtable::SplitLeafBelowLevel5(InnerNode* leaf) {
   }
 
   auto final_node = AllocateLeafNode(
-      level + 1, static_cast<unsigned char>(LAST_CHAR), leaf->next_node_);
+      level + 1, static_cast<unsigned char>(LAST_CHAR), nullptr);
   auto last_node = final_node;
   auto first_node = final_node;
   final_node->oldest_key_time_ = oldest_key_time;
@@ -370,7 +371,8 @@ void GlobalMemtable::SplitLeafBelowLevel5(InnerNode* leaf) {
     if (split_buckets[c].empty() && c != 1) {
       continue;
     }
-    auto new_leaf = AllocateLeafNode(level + 1, static_cast<unsigned char>(c), last_node);
+    auto new_leaf = AllocateLeafNode(
+        level + 1, static_cast<unsigned char>(c), last_node);
     new_leaf->oldest_key_time_ = oldest_key_time;
     auto nvm_node = new_leaf->nvm_node_;
     int pos = 0, fpos = 0;
@@ -556,17 +558,20 @@ void GlobalMemtable::InsertIntoLeaf(InnerNode* leaf, KVStruct& kv_info, int leve
   bool needSplit = rows == NVM_MAX_ROWS - 1;
 
   if (likely(!needSplit)) {
+    // We cannot release the lock directly,
+    // because we will use data in buffer
+    // Two solutions:
     // 1. release opt lock after flushing data
     // 2. copy buffer and release lock, then flush (currently used)
     FlushBufferAndRelease(leaf, rows);
   } else {
-    FlushBuffer(leaf, rows);
     if (EstimateDistinctCount(leaf->hll_) < SQUEEZE_THRESHOLD) {
-      leaf->opt_lock_.WriteUnlock(true);
+      FlushBufferAndRelease(leaf, rows);
       SqueezeNode(leaf);
       return;
     } else {
       std::lock_guard<std::mutex> gc_lk(leaf->gc_mutex_);
+      FlushBuffer(leaf, rows);
       level < 5 ? SplitLeafBelowLevel5(leaf) : SplitLeaf(leaf);
       leaf->opt_lock_.WriteUnlock(false);
     }
