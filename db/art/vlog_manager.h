@@ -11,7 +11,7 @@
 
 namespace ROCKSDB_NAMESPACE {
 
-#define SEG_HDR_SIZE 256
+#define SEG_HDR_SIZE 128
 
 // Size of vlog file
 const constexpr int64_t VLogFileSize = 4ULL << 30; // 4G
@@ -26,17 +26,17 @@ const constexpr int64_t SegmentOffsetMask = 0x00000000000fffff;
 // Number of vlog segment
 const constexpr int64_t VLogSegmentNum = VLogFileSize / VLogSegmentSize;
 
-const constexpr int64_t VLogBitmapSize = VLogSegmentSize / 128 - SEG_HDR_SIZE;
+const constexpr int64_t VLogHeaderSize = VLogSegmentSize / 128;
+
+const constexpr int64_t VLogBitmapSize = VLogHeaderSize - SEG_HDR_SIZE;
 
 // GC is needed when used space of vlog is larger than threshold.
 const float ForceGCThreshold = 0.7;
 
 const float CompactedRatioThreshold = 0.7;
 
-enum class SegmentStatus : uint8_t {
-  kSegmentUnused,
-  kSegmentWriting,
-  kSegmentGC,
+struct alignas(CACHE_LINE_SIZE) AlignedLock {
+  SpinMutex mutex_;
 };
 
 struct VLogSegmentHeader {
@@ -45,12 +45,13 @@ struct VLogSegmentHeader {
     uint16_t total_count_ = 0;
     uint16_t compacted_count_ = 0;
   };
-  struct alignas(CACHE_LINE_SIZE) l {
-    SpinMutex mutex_;
-  };
+  AlignedLock lock;
+  uint8_t bitmap_[VLogBitmapSize];
 };
 
 class VLogManager {
+  friend class Compactor;
+
  public:
   explicit VLogManager(bool need_recovery = false);
 
@@ -89,8 +90,6 @@ class VLogManager {
   uint32_t segment_remain_;
 
   uint16_t total_count_;
-
-  std::mutex log_mutex_;
 
   std::atomic<int> num_free_pages_;
 

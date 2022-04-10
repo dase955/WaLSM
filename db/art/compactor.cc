@@ -81,11 +81,11 @@ void Compactor::StopBGWork() {
 int32_t Compactor::DoCompaction() {
   printf("Start compaction\n");
 
-  InnerNode *start_node = chosen_group_->first_node_;
-  InnerNode *end_node = chosen_group_->last_node_;
-  InnerNode *start_node_backup = start_node;
+  InnerNode* start_node = chosen_group_->first_node_;
+  InnerNode* end_node = chosen_group_->last_node_;
+  InnerNode* start_node_backup = start_node;
 
-  NVMNode *first_nvm_backup = nullptr;
+  NVMNode* first_nvm_backup = GetNodeAllocator().AllocateNode();
   int32_t compacted_size = chosen_group_->group_size_.load(std::memory_order_relaxed);
   std::deque<InnerNode *> candidates;
   std::vector<NVMNode *> nvm_nodes;
@@ -93,16 +93,17 @@ int32_t Compactor::DoCompaction() {
   uint64_t num_entries = 0;
   uint64_t num_deletes = 0;
   uint64_t total_data_size = 0;
-  int64_t oldest_key_time = LONG_LONG_MAX;
+  int64_t oldest_key_time = start_node->oldest_key_time_;
 
   {
     std::lock_guard<std::mutex> lk(start_node->flush_mutex_);
+    std::lock_guard<std::mutex> gc_lk(start_node->gc_mutex_);
+
     if (IS_LEAF(start_node->status_)) {
-      first_nvm_backup = GetNodeAllocator().AllocateNode();
       memcpy(first_nvm_backup, start_node->nvm_node_, PAGE_SIZE);
-      oldest_key_time = std::min(oldest_key_time, start_node->oldest_key_time_);
       start_node->oldest_key_time_ = LONG_LONG_MAX;
       start_node->estimated_size_ = 0;
+      memset(start_node->hll_, 0, 64);
       nvm_nodes.push_back(first_nvm_backup);
     }
     start_node = start_node->next_node_;
@@ -111,22 +112,18 @@ int32_t Compactor::DoCompaction() {
   printf("Group size: %d\n", chosen_group_->group_size_.load());
 
   ArtCompactionJob compaction_job;
-
-  /*auto estimated_entries = chosen_group_->group_size_.load() / 64;
-  std::vector<uint64_t> compacted_records;
-  compacted_records.reserve(estimated_entries);*/
   autovector<RecordIndex> compacted_records[VLogSegmentNum];
 
   while (start_node != end_node) {
     std::lock_guard<std::mutex> flush_lk(start_node->flush_mutex_);
     std::lock_guard<std::mutex> gc_lk(start_node->gc_mutex_);
 
-    if (!IS_LEAF(start_node->status_)) {
+    if (unlikely(!IS_LEAF(start_node->status_))) {
       start_node = start_node->next_node_;
       continue;
     }
 
-    auto *new_nvm_node = GetNodeAllocator().AllocateNode();
+    auto new_nvm_node = GetNodeAllocator().AllocateNode();
     InsertNewNVMNode(start_node, new_nvm_node);
     candidates.push_back(start_node);
     nvm_nodes.push_back(start_node->backup_nvm_node_);
@@ -134,6 +131,7 @@ int32_t Compactor::DoCompaction() {
     oldest_key_time = std::min(oldest_key_time, start_node->oldest_key_time_);
     start_node->oldest_key_time_ = LONG_LONG_MAX;
     start_node->estimated_size_ = 0;
+    memset(start_node->hll_, 0, 64);
 
     start_node = start_node->next_node_;
   }
@@ -141,7 +139,7 @@ int32_t Compactor::DoCompaction() {
   // Sort data
   SequenceNumber seq_num = 0;
   RecordIndex record_index = 0;
-  for (auto &nvm_node : nvm_nodes) {
+  for (auto& nvm_node : nvm_nodes) {
     auto meta = nvm_node->meta;
     auto data = nvm_node->data;
     size_t size = GET_SIZE(meta.header);
@@ -149,7 +147,7 @@ int32_t Compactor::DoCompaction() {
     kvs.reserve(NVM_MAX_SIZE);
     for (size_t i = 0; i < size; ++i) {
       KVStruct kv_info{data[i * 2], data[i * 2 + 1]};
-      if (kv_info.vptr_ == 0) {
+      if (!kv_info.vptr_) {
         continue;
       }
 
@@ -164,7 +162,7 @@ int32_t Compactor::DoCompaction() {
     }
 
     std::stable_sort(kvs.begin(), kvs.end());
-    std::string last_key = "";
+    std::string last_key;
     for (auto &kv : kvs) {
       if (kv.key != last_key) {
         last_key = kv.key;
@@ -200,14 +198,27 @@ int32_t Compactor::DoCompaction() {
     start_node = start_node->next_node_;
   }
 
-  if (first_nvm_backup) {
-    GetNodeAllocator().DeallocateNode((char *)first_nvm_backup);
-  }
+  GetNodeAllocator().DeallocateNode((char*)first_nvm_backup);
 
-  for (auto &vec : compacted_records) {
+  for (size_t i = 0; i < VLogSegmentNum; ++i) {
+    auto& vec = compacted_records[i];
     std::sort(vec.begin(), vec.end());
-
+    auto header = (VLogSegmentHeader*)(vlog_manager_->pmemptr_ + VLogSegmentSize * i);
+    if (!header->lock.mutex_.try_lock()) {
+      continue;
+    }
+    auto bitmap = header->bitmap_;
+    for (auto index : vec) {
+      assert(index / 8 < VLogBitmapSize);
+      bitmap[index / 8] |= (1 << (index % 8));
+    }
+    header->compacted_count_ += vec.size();
+    // Just clwb, not use sfence
+    // pmem_persist(header, VLogHeaderSize);
   }
+
+  // Use sfence after all vlog are modified
+  // _mm_sfence();
 
   printf("Compaction done: size_=%d\n", compacted_size);
   chosen_group_->UpdateSize(-compacted_size);

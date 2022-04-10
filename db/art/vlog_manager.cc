@@ -37,7 +37,7 @@ void VLogManager::RecoverOnRestart() {
 
 void VLogManager::PopSegment() {
   cur_segment_ = free_pages_.pop_front();
-  header_ = (VLogSegmentHeader *)cur_segment_;
+  header_ = (VLogSegmentHeader*)cur_segment_;
   offset_ = header_->offset_;
   total_count_ = header_->total_count_;
   segment_remain_ = VLogSegmentSize - offset_;
@@ -57,10 +57,11 @@ VLogManager::VLogManager(bool need_recovery) {
   char* cur_ptr = pmemptr_;
   num_free_pages_.store(VLogSegmentNum, std::memory_order_relaxed);
   for (int i = 0; i < VLogSegmentNum; ++i) {
-    auto header = (VLogSegmentHeader *)cur_ptr;
-    header->offset_ = SEG_HDR_SIZE;
+    auto header = (VLogSegmentHeader*)cur_ptr;
+    header->offset_ = VLogHeaderSize;
     header->total_count_ = header->compacted_count_ = 0;
-    // pmem_persist(cur_ptr, 64);
+    memset(header->bitmap_, -1, VLogBitmapSize);
+    // pmem_persist(cur_ptr, VLogHeaderSize);
     free_pages_.emplace_back(cur_ptr);
     cur_ptr += VLogSegmentSize;
   }
@@ -69,11 +70,11 @@ VLogManager::VLogManager(bool need_recovery) {
 }
 
 uint64_t VLogManager::AddRecord(const Slice& slice, uint32_t record_count) {
-  // TODO: fix corner case when slice.size() > VLogSegmentSize
-  std::lock_guard<std::mutex> lk(log_mutex_);
+  // std::lock_guard<std::mutex> log_lk(log_mutex_);
 
   auto left = (int64_t)slice.size();
   if (segment_remain_ < left) {
+    // TODO: new segment may still doesn't have enough space for record.
     used_pages_.emplace_back(cur_segment_);
     PopSegment();
   }
@@ -88,7 +89,7 @@ uint64_t VLogManager::AddRecord(const Slice& slice, uint32_t record_count) {
 
   header_->total_count_ = total_count_;
   header_->offset_ = offset_;
-  // pmem_persist((void *)header, 32);
+  // pmem_persist((void*)header, 32);
 
   return vptr;
 }
@@ -184,7 +185,7 @@ ValueType VLogManager::GetKeyValue(
 void VLogManager::BGWorkGarbageCollection() {
   auto num_used = used_pages_.size();
   bool forceGC = num_used > VLogSegmentNum * ForceGCThreshold;
-  char *segment;
+  char* segment;
   VLogSegmentHeader* header;
   for (size_t i = 0; i < num_used; ++i) {
     segment = used_pages_.pop_front();
@@ -196,13 +197,16 @@ void VLogManager::BGWorkGarbageCollection() {
     used_pages_.emplace_back(segment);
   }
 
+  std::lock_guard<SpinMutex> gc_lock(header->lock.mutex_);
+
   std::string key, value;
   std::vector<std::pair<std::string, uint64_t>> data;
-  Slice slice(segment + SEG_HDR_SIZE, VLogSegmentSize - SEG_HDR_SIZE);
+  Slice slice(segment + VLogHeaderSize, VLogSegmentSize - VLogHeaderSize);
 
   uint16_t read = 0;
   auto total_count = header->total_count_;
-  while (read++ < total_count) {
+  auto bitmap = header->bitmap_;
+  while (read < total_count) {
     ValueType type = *((ValueType *)slice.data());
     uint64_t vptr = slice.data() - pmemptr_;
     slice.remove_prefix(9);
@@ -217,7 +221,11 @@ void VLogManager::BGWorkGarbageCollection() {
       default:
         break;
     }
-    data.emplace_back(key, vptr);
+
+    if (bitmap[read / 8] & (1 << (read % 8))) {
+      data.emplace_back(key, vptr);
+    }
+    ++read;
   }
 
   std::sort(data.begin(), data.end(),
@@ -226,6 +234,11 @@ void VLogManager::BGWorkGarbageCollection() {
               return l.first < r.first;
             });
 
+
+  header->offset_ = VLogSegmentSize;
+  header->total_count_ = header->compacted_count_ = 0;
+  memset(header->bitmap_, -1, VLogBitmapSize);
+  // pmem_persist(header, VLogHeaderSize);
 
   free_pages_.emplace_back(segment);
   num_free_pages_.fetch_add(1, std::memory_order_relaxed);
