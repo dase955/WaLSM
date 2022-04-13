@@ -30,14 +30,6 @@ namespace ROCKSDB_NAMESPACE {
 #define SET_ART_FULL(s)           (s) |= 0x40000000;
 #define SET_ART_NON_FULL(s)       (s) &= ~(0x40000000);
 
-// necessary?
-#define IS_START(s)               ((s) & 0x20000000)
-#define SET_START(s)              (s) |= 0x20000000;
-#define SET_NON_START(s)          (s) &= ~(0x20000000);
-#define IS_END(s)                 (s) & 0x10000000
-#define SET_END(s)                (s) |= 0x10000000;
-#define SET_NON_END(s)            (s) &= ~(0x10000000);
-
 #define GET_GC_FLUSH_SIZE(s)        (((s) >> 16) & 0x000000ff)
 #define SET_GC_FLUSH_SIZE(s, size)  (s) &= 0xff00ffff; (s) |= ((size) << 16);
 
@@ -50,11 +42,11 @@ namespace ROCKSDB_NAMESPACE {
 
 #define PAGE_SIZE (4096)
 
-#define CLEAR_VALUE(hdr, pos) hdr &= ~((uint64_t)0xff << (pos << 3));
-#define GET_VALUE(hdr, pos)   ((hdr >> (pos << 3)) & 0xff)
+#define CLEAR_VALUE(hdr, pos) hdr &= ~((uint64_t)0xff << ((pos) << 3));
+#define GET_VALUE(hdr, pos)   (((hdr) >> ((pos) << 3)) & 0xff)
 #define SET_VALUE(hdr, pos, val) \
     CLEAR_VALUE(hdr, pos);       \
-    hdr |= ((uint64_t)val << (pos << 3));
+    (hdr) |= ((uint64_t)(val) << ((pos) << 3));
 
 #define GET_SIZE(hdr)           GET_VALUE((hdr), 6)
 #define SET_SIZE(hdr, val)      SET_VALUE((hdr), 6, (val))
@@ -85,21 +77,11 @@ namespace ROCKSDB_NAMESPACE {
  */
 
 #define MAX_LAYERS 10
-#define BASE_LAYER (-1) // BASE_LAYER is for groups whose size_ is below threshold.
-#define TEMP_LAYER (-2) // TEMP_LAYER is for groups doing compaction.
 
-const constexpr int32_t LayerTsInterval = 100;
+// BASE_LAYER is for groups whose size_ is below threshold.
+#define BASE_LAYER (-1)
 
-const constexpr int32_t Waterline = 1024;
-
-const constexpr int32_t ForceDecay = LayerTsInterval * 2;
-
-const constexpr double  Coeff = 1.021897;              // Magic!
-
-const constexpr int     CompactionThreshold = 512 << 20; // 512M
-
-const constexpr int     GroupSplitThreshold = 12 << 20;  // 16M
-
-const constexpr int     GroupMinSize = 4 << 20;          // 8M
+// TEMP_LAYER is for groups doing compaction.
+#define TEMP_LAYER (-2)
 
 }  // namespace ROCKSDB_NAMESPACE

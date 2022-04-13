@@ -67,6 +67,8 @@ class Compactor {
   // return compacted size
   void DoCompaction();
 
+  static size_t compaction_threshold_;
+
  private:
 
   std::mutex mutex_;

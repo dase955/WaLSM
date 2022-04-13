@@ -1879,13 +1879,13 @@ class DBImpl : public DB {
 
   std::atomic<bool> shutting_down_;
 
-  GlobalMemtable* global_memtable_;
-
   VLogManager* vlog_manager_;
+
+  GlobalMemtable* global_memtable_;
 
   Compactor compactor_;
 
-  HeatGroupManager group_manager_;
+  HeatGroupManager* group_manager_;
 
   // Offset of last record written by leader writer.
   uint64_t last_record_offset_;

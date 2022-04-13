@@ -31,15 +31,9 @@ const constexpr int64_t VLogHeaderSize = VLogSegmentSize / 128;
 const constexpr int64_t VLogBitmapSize = VLogHeaderSize - SEG_HDR_SIZE;
 
 // GC is needed when used space of vlog is larger than threshold.
-const constexpr int ForceGCThreshold = (int)(0.75 * VLogSegmentNum);
+const constexpr int ForceGCThreshold = (int)(0.5 * VLogSegmentNum);
 
 const float CompactedRatioThreshold = 0.5;
-
-enum SegmentStatus : uint8_t {
-  kSegmentUnused,
-  kSegmentWriting,
-  kSegmentGC,
-};
 
 struct alignas(CACHE_LINE_SIZE) AlignedLock {
   SpinMutex mutex_;
@@ -52,7 +46,21 @@ struct VLogSegmentHeader {
     uint16_t compacted_count_ = 0;
   };
   AlignedLock lock;
-  uint8_t bitmap_[VLogBitmapSize];
+  uint8_t bitmap_[];
+};
+
+struct GCData {
+  uint64_t vptr_;
+  std::string record_;
+  std::string key_;
+
+  GCData() = default;
+
+  GCData(uint32_t key_start, uint32_t key_length,
+         uint64_t vptr, std::string& record)
+      : vptr_(vptr), record_(record),
+        key_(std::string(record_.data() + key_start, key_length)){
+  };
 };
 
 class GlobalMemtable;
@@ -61,7 +69,7 @@ class VLogManager {
   friend class Compactor;
 
  public:
-  explicit VLogManager(DBOptions& options, bool need_recovery = false);
+  explicit VLogManager(const DBOptions& options);
 
   ~VLogManager();
 
@@ -69,35 +77,36 @@ class VLogManager {
 
   uint64_t AddRecord(const Slice& slice, uint32_t record_count = 1);
 
-  RecordIndex GetFirstIndex(size_t wal_size);
-
   void GetKey(uint64_t vptr, std::string &key);
 
   void GetKey(uint64_t vptr, Slice &key);
 
-  ValueType GetKeyValue(uint64_t offset, std::string &key, std::string &value,
-                        SequenceNumber &seq_num, RecordIndex &index);
+  ValueType GetKeyValue(uint64_t offset, std::string& key, std::string& value,
+                        SequenceNumber& seq_num, RecordIndex& index);
 
-  ValueType GetKeyValue(uint64_t offset, std::string &key,
-                        std::string &value, SequenceNumber &seq_num);
+  ValueType GetKeyValue(uint64_t offset, std::string& key,
+                        std::string& value, SequenceNumber& seq_num);
 
-  ValueType GetKeyValue(uint64_t offset, std::string &key, std::string &value);
+  ValueType GetKeyValue(uint64_t offset, std::string& key, std::string& value);
+
+  RecordIndex GetFirstIndex(size_t wal_size) const;
 
   void TestGC();
 
  private:
   void RecoverOnRestart();
 
+  void BGWorkGarbageCollection();
+
   void PopFreeSegment();
 
   char* WriteToNewSegment(
       char *segment, std::string& record, uint64_t& new_vptr);
 
-  char* ChooseSegmentGC();
+  char* ChooseSegmentToGC();
 
-  void BGWorkGarbageCollection();
+  std::vector<GCData> ReadAndSortData(char* segment);
 
-  // address of mapped file
   char* pmemptr_;
 
   char* cur_segment_;
@@ -108,23 +117,19 @@ class VLogManager {
 
   uint32_t segment_remain_;
 
-  uint16_t total_count_;
+  uint16_t count_in_segment_;
 
-  std::atomic<int> num_free_pages_;
+  GlobalMemtable* mem_;
 
-  TQueueConcurrent<char *> free_pages_;
+  TQueueConcurrent<char*> free_pages_;
 
-  TQueueConcurrent<char *> used_pages_;
-
-  std::thread gc_thread_;
+  TQueueConcurrent<char*> used_pages_;
 
   // Mutex and condvar for gc thread
   port::Mutex gc_mu_;
   port::CondVar gc_cv_;
   bool thread_stop_;
-
-  GlobalMemtable* mem_;
-
+  std::thread gc_thread_;
   bool gc_ = false;
 };
 

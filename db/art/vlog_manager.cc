@@ -10,16 +10,16 @@
 #include <csignal>
 #include <string>
 #include <cstring>
-#include <iostream>
 
 #include "db/art/nvm_node.h"
 #include "db/art/utils.h"
 #include "db/art/global_memtable.h"
 #include "db/art/node_allocator.h"
+#include "util/autovector.h"
 
 namespace ROCKSDB_NAMESPACE {
 
-void* OpenVLogFile(int64_t total_size) {
+char* OpenVLogFile(uint64_t total_size) {
   int fd = open("/tmp/vlog", O_RDWR|O_CREAT, 00777);
   assert(-1 != fd);
 
@@ -27,9 +27,9 @@ void* OpenVLogFile(int64_t total_size) {
   lseek(fd, total_size - 1, SEEK_END);
   write(fd, "", 1);
 
-  auto addr = (char *)mmap(NULL, total_size, PROT_READ | PROT_WRITE,MAP_SHARED, fd, 0);
+  char* ptr = (char *)mmap(nullptr, total_size, PROT_READ | PROT_WRITE,MAP_SHARED, fd, 0);
   close(fd);
-  return addr;
+  return ptr;
 }
 
 void VLogManager::RecoverOnRestart() {
@@ -40,28 +40,22 @@ void VLogManager::PopFreeSegment() {
   cur_segment_ = free_pages_.pop_front();
   header_ = (VLogSegmentHeader*)cur_segment_;
   offset_ = header_->offset_;
-  total_count_ = header_->total_count_;
+  count_in_segment_ = header_->total_count_;
   segment_remain_ = VLogSegmentSize - offset_;
-  auto num_free_pages = num_free_pages_.fetch_sub(1, std::memory_order_relaxed);
+  int num_free_pages = free_pages_.size();
   if (!gc_ && num_free_pages < ForceGCThreshold) {
     gc_ = true;
     gc_cv_.Signal();
   }
 }
 
-VLogManager::VLogManager(DBOptions& options, bool need_recovery)
+// Why size of vlog header equals vlog_segment_size_ / 128 ?
+// We assume that minimum length of single record is 16 byte,
+VLogManager::VLogManager(const DBOptions& options)
     : gc_mu_(), gc_cv_(&gc_mu_), thread_stop_(false) {
-  pmemptr_ = (char*) OpenVLogFile(VLogFileSize);
-
-  gc_thread_ = std::thread(&VLogManager::BGWorkGarbageCollection, this);
-
-  if (need_recovery) {
-    RecoverOnRestart();
-    return;
-  }
+  pmemptr_ = OpenVLogFile(VLogFileSize);
 
   char* cur_ptr = pmemptr_;
-  num_free_pages_.store(VLogSegmentNum, std::memory_order_relaxed);
   for (int i = 0; i < VLogSegmentNum; ++i) {
     auto header = new (cur_ptr) VLogSegmentHeader();
     header->offset_ = VLogHeaderSize;
@@ -73,6 +67,8 @@ VLogManager::VLogManager(DBOptions& options, bool need_recovery)
   }
 
   PopFreeSegment();
+
+  gc_thread_ = std::thread(&VLogManager::BGWorkGarbageCollection, this);
 }
 
 VLogManager::~VLogManager() {
@@ -102,17 +98,17 @@ uint64_t VLogManager::AddRecord(const Slice& slice, uint32_t record_count) {
 
   offset_ += left;
   segment_remain_ -= left;
-  total_count_ += record_count;
+  count_in_segment_ += record_count;
 
-  header_->total_count_ = total_count_;
+  header_->total_count_ = count_in_segment_;
   header_->offset_ = offset_;
   // pmem_persist((void*)header, 32);
 
   return vptr;
 }
 
-RecordIndex VLogManager::GetFirstIndex(size_t wal_size) {
-  return segment_remain_ < wal_size ? 0 : total_count_;
+RecordIndex VLogManager::GetFirstIndex(size_t wal_size) const {
+  return segment_remain_ < wal_size ? 0 : count_in_segment_;
 }
 
 void VLogManager::GetKey(uint64_t vptr, std::string &key) {
@@ -192,23 +188,6 @@ ValueType VLogManager::GetKeyValue(
   return type;
 }
 
-struct GCData {
-  uint64_t vptr_;
-  std::string record_;
-  std::string key_;
-
-  GCData() = default;
-
-  GCData(uint32_t key_start, uint32_t key_length,
-          uint64_t vptr, std::string& record)
-      : vptr_(vptr), record_(record),
-        key_(std::string(record_.data() + key_start, key_length)){
-            if (vptr_ == 0) {
-              printf("gg\n");
-            }
-        };
-};
-
 int SearchVptr(
     InnerNode* inner_node, uint64_t hash, int rows, uint64_t vptr) {
 
@@ -246,7 +225,7 @@ int SearchVptr(
 }
 
 
-std::vector<GCData> ReadAndSortData(char* segment, char* pmemptr) {
+std::vector<GCData> VLogManager::ReadAndSortData(char* segment) {
   auto header = (VLogSegmentHeader*)segment;
   std::vector<GCData> gc_data;
   Slice slice(segment + VLogHeaderSize, VLogSegmentSize - VLogHeaderSize);
@@ -273,7 +252,7 @@ std::vector<GCData> ReadAndSortData(char* segment, char* pmemptr) {
 
     if (bitmap[read / 8] & (1 << (read % 8))) {
       std::string record(record_start, slice.data() - record_start);
-      dummy_info.vptr_ = record_start - pmemptr;
+      dummy_info.vptr_ = record_start - pmemptr_;
       dummy_info.kv_size_ = record.size() - RecordPrefixSize;
       gc_data.emplace_back(
           key_start, key_length, dummy_info.vptr_, record);
@@ -296,7 +275,7 @@ void VLogManager::BGWorkGarbageCollection() {
       break;
     }
 
-    char* segment_gc = ChooseSegmentGC();
+    char* segment_gc = ChooseSegmentToGC();
     auto* header_gc = (VLogSegmentHeader*)segment_gc;
 
     // If no segment is chosen, wait for next iteration.
@@ -306,7 +285,7 @@ void VLogManager::BGWorkGarbageCollection() {
     }
 
     std::lock_guard<SpinMutex> gc_lock(header_gc->lock.mutex_);
-    std::vector<GCData> gc_data = ReadAndSortData(segment_gc, pmemptr_);
+    std::vector<GCData> gc_data = ReadAndSortData(segment_gc);
 
     auto new_segment = free_pages_.pop_front();
 
@@ -347,7 +326,7 @@ void VLogManager::BGWorkGarbageCollection() {
           continue;
         }
         auto nvm_node = inner_node->nvm_node_;
-        auto rows = GET_ROWS(nvm_node->meta.header);
+        int rows = GET_ROWS(nvm_node->meta.header);
 
         do {
           auto& key = cur_data.key_;
@@ -386,12 +365,14 @@ void VLogManager::BGWorkGarbageCollection() {
     // pmem_persist(header, VLogHeaderSize);
 
     free_pages_.emplace_back((char*)header_gc);
-    num_free_pages_.fetch_add(1, std::memory_order_relaxed);
+    free_pages_.emplace_front((char*)new_segment);
     gc_ = false;
+
+    printf("GC done.\n");
   }
 }
 
-char* VLogManager::ChooseSegmentGC() {
+char* VLogManager::ChooseSegmentToGC() {
   auto num_used = free_pages_.size();
   bool forceGC = num_used < ForceGCThreshold;
 
@@ -441,7 +422,7 @@ void VLogManager::TestGC() {
   auto* header_gc = (VLogSegmentHeader*)segment_gc;
 
   std::lock_guard<SpinMutex> gc_lock(header_gc->lock.mutex_);
-  std::vector<GCData> gc_data = ReadAndSortData(segment_gc, pmemptr_);
+  std::vector<GCData> gc_data = ReadAndSortData(segment_gc);
 
   auto new_segment = free_pages_.pop_front();
 
@@ -521,7 +502,6 @@ void VLogManager::TestGC() {
   // pmem_persist(header, VLogHeaderSize);
 
   free_pages_.emplace_back((char*)header_gc);
-  num_free_pages_.fetch_add(1, std::memory_order_relaxed);
   gc_ = false;
 }
 

@@ -13,8 +13,6 @@
 
 namespace ROCKSDB_NAMESPACE {
 
-float Timestamps::DecayFactor[32] = {0};
-
 int32_t GetTimestamp() {
   static std::atomic<int32_t> Timestamp{16384};
   return Timestamp.fetch_add(1, std::memory_order_relaxed) >> 14;
@@ -76,8 +74,7 @@ void Timestamps::DecayHeat() {
           _mm_loadu_si128((__m128i_u *)(timestamps + 4)),
           _mm_set1_epi32(delta)));
 #endif
-  delta /= LayerTsInterval;
-  accumulate_ *= delta < 32 ? DecayFactor[delta] : 0;
+  accumulate_ *= GetDecayFactor(delta);
 }
 
 void Timestamps::UpdateHeat() {

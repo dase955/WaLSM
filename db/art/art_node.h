@@ -5,6 +5,7 @@
 #pragma once
 #include <cstdint>
 #include <vector>
+#include <string>
 #include <rocksdb/rocksdb_namespace.h>
 
 namespace ROCKSDB_NAMESPACE {
@@ -26,38 +27,38 @@ struct ArtNodeHeader{
 
 struct ArtNode4 {
   ArtNodeHeader header_;
-  unsigned char keys_[4];
-  InnerNode*    children_[4];
+  unsigned char keys_[4]{};
+  InnerNode*    children_[4]{};
 
   ArtNode4();
 };
 
 struct ArtNode16 {
   ArtNodeHeader header_;
-  unsigned char keys_[16];
-  InnerNode*    children_[16];
+  unsigned char keys_[16]{};
+  InnerNode*    children_[16]{};
 
   ArtNode16();
 };
 
 struct ArtNode48 {
   ArtNodeHeader header_;
-  unsigned char keys_[256];
-  InnerNode*    children_[48];
+  unsigned char keys_[256]{};
+  InnerNode*    children_[48]{};
 
   ArtNode48();
 };
 
 struct ArtNode256 {
   ArtNodeHeader header_;
-  InnerNode*    children_[256];
+  InnerNode*    children_[256]{};
 
   ArtNode256();
 };
 
 /* Helper functions */
 
-ArtNodeType ChooseArtNodeType(int size);
+ArtNodeType ChooseArtNodeType(size_t size);
 
 ArtNodeHeader* AllocateArtNode(ArtNodeType node_type);
 

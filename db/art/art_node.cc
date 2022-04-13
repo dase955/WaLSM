@@ -33,7 +33,7 @@ ArtNode256::ArtNode256() {
   memset(children_, 0, sizeof(void*) * 256);
 }
 
-ArtNodeType ChooseArtNodeType(int size) {
+ArtNodeType ChooseArtNodeType(size_t size) {
   // precalculate node type
   static int type[256] = {
       1, 1, 1, 1, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 3, 3,

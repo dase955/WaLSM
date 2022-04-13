@@ -17,22 +17,18 @@ class Compactor;
 
 class HeatGroupManager {
  public:
+  HeatGroupManager(const DBOptions& options);
+
+  ~HeatGroupManager();
+
   void SetCompactor(Compactor* compactor);
 
-  void InitGroupQueue();
-
-  void StartHeatThread();
-
-  void StopHeatThread();
+  void InitGroupQueue(float coeff);
 
   // Operation with high priority will be put in front
   void AddOperation(HeatGroup* group, GroupOperator op, bool highPri = false);
 
   void InsertIntoLayer(HeatGroup* inserted, int level);
-
-  void MoveGroup(HeatGroup* group);
-
-  void MoveAllGroupsToLayer(int from, int to);
 
   void TestChooseCompaction();
 
@@ -41,11 +37,18 @@ class HeatGroupManager {
 
   void ChooseCompaction();
 
+  // Split heat group
+  void SplitGroup(HeatGroup* group);
+
+  void MoveGroup(HeatGroup* group);
+
   // Different from GroupLevelDown,
   // groups in layer1 will be moved to layer0 even if layer0 is not empty
   void ForceGroupLevelDown();
 
   void GroupLevelDown();
+
+  void MoveAllGroupsToLayer(int from, int to);
 
   Compactor* compactor_;
 

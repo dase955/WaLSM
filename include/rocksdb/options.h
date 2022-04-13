@@ -1171,25 +1171,42 @@ struct DBOptions {
 
   // Amount of data in global memtable before trigger compaction.
   // Default: 512M
-  int compaction_threshold = 512 << 20;
+  size_t compaction_threshold = 512 << 20;
 
   // A threshold for the max size of a group,
   // larger size will trigger group split.
-  // Default: 24M
-  int group_split_threshold = 24 << 20;
+  // Default: 12M
+  int group_split_threshold = 12 << 20;
 
   // A threshold for the size of a group that can chosen to do compaction.
-  // Default: 8M
+  // Default: 4M
   int group_min_size = 4 << 20;
 
   // Size of vlog file.
-  // Default: 4G
-  int64_t vlog_file_size = 4ULL << 30;
+  // Default: 2G
+  int64_t vlog_file_size = 2ULL << 30;
 
   // Vlog file is divided into several segments,
   // in order to do garbage collection.
   // Default: 1M
   int64_t vlog_segment_size = 1ULL << 20;
+
+  // Trigger garbage collection when
+  // ratio of free segments less than threshold.
+  // default: 0.5
+  float vlog_force_gc_ratio_ = 0.5f;
+
+  // Why choose 1.021897 ?
+  // Because 1.021897 ^ 32 = 2.
+  // default: 1.021897
+  float heat_update_coeff = 1.021897f;
+
+  // When global timestamp exceed waterline, we need to do heat decay.
+  // default: 1024
+  int timestamp_waterline = 1024;
+
+  // default: 100
+  int layer_ts_interval = 100;
 };
 
 // Options to control the behavior of a database (passed to DB::Open)

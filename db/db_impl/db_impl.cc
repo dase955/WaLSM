@@ -271,15 +271,16 @@ DBImpl::DBImpl(const DBOptions& options, const std::string& dbname,
 
   vlog_manager_ = new VLogManager(options);
 
-  group_manager_.InitGroupQueue();
-  group_manager_.SetCompactor(&compactor_);
-  compactor_.SetGroupManager(&group_manager_);
-  compactor_.SetVLogManager(vlog_manager_);
-  compactor_.SetDB(this);
+  group_manager_ = new HeatGroupManager(options);
+  group_manager_->SetCompactor(&compactor_);
 
   global_memtable_ = new GlobalMemtable(
-      vlog_manager_, &group_manager_, env_);
-  group_manager_.StartHeatThread();
+      vlog_manager_, group_manager_, env_);
+
+  Compactor::compaction_threshold_ = options.compaction_threshold;
+  compactor_.SetDB(this);
+  compactor_.SetGroupManager(group_manager_);
+  compactor_.SetVLogManager(vlog_manager_);
   compactor_.StartCompactionThread();
 }
 
@@ -667,13 +668,13 @@ Status DBImpl::CloseImpl() { return CloseHelper(); }
 
 DBImpl::~DBImpl() {
   compactor_.StopCompactionThread();
-  group_manager_.StopHeatThread();
   if (!closed_) {
     closed_ = true;
     CloseHelper().PermitUncheckedError();
   }
-  delete global_memtable_;
+  delete group_manager_;
   delete vlog_manager_;
+  delete global_memtable_;
 }
 
 void DBImpl::MaybeIgnoreError(Status* s) const {
@@ -5010,7 +5011,7 @@ Status DBImpl::GetCreationTimeOfOldestFile(uint64_t* creation_time) {
 }
 
 void DBImpl::TestCompaction() {
-  group_manager_.TestChooseCompaction();
+  group_manager_->TestChooseCompaction();
   compactor_.DoCompaction();
 }
 

@@ -59,11 +59,17 @@ struct HeatGroup {
   HeatGroup*               prev;
   char padding2[8];
 
-  explicit HeatGroup(InnerNode* initialNode = nullptr)
-      : group_size_(0),
-        first_node_(initialNode), last_node_(initialNode),
-        status_(kGroupNone), in_base_layer_(false),
-        next(nullptr), prev(nullptr) {};
+  static int group_min_size_;
+
+  static int group_split_threshold_;
+
+  static int force_decay_waterline_;
+
+  static int layer_ts_interval_;
+
+  static float decay_factor_[32];
+
+  explicit HeatGroup(InnerNode* initial_node = nullptr);
 
   bool InsertNewNode(InnerNode* last, std::vector<InnerNode*>& inserts);
 
@@ -84,15 +90,17 @@ struct MultiLayerGroupQueue {
 
 float CalculateHeat(int32_t ts);
 
-// Estimate heat bound by current timestamp.
-void EstimateLowerAndUpperBound(
-    Timestamps& ts, float& lower_bound, float& upper_bound);
-
-// Split heat group
-void SplitGroup(HeatGroup* group);
+inline float GetDecayFactor(int delta) {
+  delta /= HeatGroup::layer_ts_interval_;
+  return delta < 32 ? HeatGroup::decay_factor_[delta] : 0;
+}
 
 // Choose new level of heat group by estimated upper and lower bound.
 int ChooseGroupLevel(HeatGroup* group);
+
+// Estimate heat bound by current timestamp.
+void EstimateLowerAndUpperBound(
+    Timestamps& ts, float& lower_bound, float& upper_bound);
 
 // Insert new nodes to heat group of previous node.
 void InsertNodesToGroup(InnerNode* node, InnerNode* inserts);

@@ -27,6 +27,8 @@ void UpdateTotalSize(size_t update_size) {
 
 ////////////////////////////////////////////////////////////
 
+size_t Compactor::compaction_threshold_;
+
 void Compactor::SetGroupManager(HeatGroupManager* group_manager) {
   group_manager_ = group_manager;
 }
@@ -55,7 +57,7 @@ void Compactor::BGWorkDoCompaction() {
       break;
     }
 
-    if (MemTotalSize.load(std::memory_order_relaxed) < CompactionThreshold) {
+    if (MemTotalSize.load(std::memory_order_relaxed) < compaction_threshold_) {
       std::this_thread::sleep_for(std::chrono::milliseconds (100));
       continue;
     }

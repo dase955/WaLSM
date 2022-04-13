@@ -87,13 +87,13 @@ void MultiThreadTest(DB *db, std::vector<std::string> *sampled_keys, int thread_
   std::string keyStr("0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz!@#$%^&*()-_=+[{]}|<,>.?/~`' ");
 
   std::vector<std::string> sampledKeys;
-  for (int i = 0; i < 16384 * 72; ++i) {
+  for (int i = 0; i < 16384 * 128; ++i) {
     std::shuffle(keyStr.begin(), keyStr.end(), generator);
     std::string key = keyStr.substr(0, keyDis(gen));    // assumes 32 < number of characters in str
     std::string value = key + key;
 
     ASSERT_OK(db->Put(WriteOptions(), key, value));
-    if (i % 64 == 0) {
+    if (i % 128 == 0) {
       sampled_keys->push_back(key);
     }
   }
