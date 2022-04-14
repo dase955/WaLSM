@@ -127,7 +127,7 @@ void GlobalMemtable::InitFirstTwoLevel() {
   std::unordered_set<int> used_ascii;
   used_ascii.insert(0);
   used_ascii.insert(LAST_CHAR);
-  for (auto &c : ascii) {
+  for (auto& c : ascii) {
     used_ascii.insert((int)c);
   }
 
@@ -150,7 +150,7 @@ void GlobalMemtable::InitFirstTwoLevel() {
     art256_l2->header_.prefix_length_ = 2;
     art256_l2->header_.num_children_ = pre_allocate_children;
 
-    auto heatGroup = new HeatGroup();
+    auto heat_group = new HeatGroup();
 
     for (int second_char = LAST_CHAR; second_char >= 0; --second_char) {
       if (used_ascii.find(second_char) == used_ascii.end()) {
@@ -159,14 +159,15 @@ void GlobalMemtable::InitFirstTwoLevel() {
 
       art256_l2->children_[second_char] = AllocateLeafNode(
           2, static_cast<unsigned char>(second_char), next_inner_node);
-      art256_l2->children_[second_char]->heat_group_ = heatGroup;
+      art256_l2->children_[second_char]->heat_group_ = heat_group;
       next_inner_node = art256_l2->children_[second_char];
     }
 
-    heatGroup->group_manager_ = group_manager_;
-    heatGroup->first_node_ = art256_l2->children_[0];
-    heatGroup->last_node_ = art256_l2->children_[LAST_CHAR];
-    group_manager_->InsertIntoLayer(heatGroup, BASE_LAYER);
+    heat_group->group_manager_ = group_manager_;
+    heat_group->first_node_ = art256_l2->children_[0];
+    SET_GROUP_START(heat_group->first_node_->status_);
+    heat_group->last_node_ = art256_l2->children_[LAST_CHAR];
+    group_manager_->InsertIntoLayer(heat_group, BASE_LAYER);
   }
 
   head_ = next_inner_node;
@@ -176,7 +177,7 @@ void GlobalMemtable::Put(Slice& slice, uint64_t base_vptr, size_t count) {
   uint64_t vptr = base_vptr;
   slice.remove_prefix(WriteBatchInternal::kHeader);
   for (size_t c = 0; c < count; ++c) {
-    auto start = slice.data();
+    auto record_start = slice.data();
     Slice key, value;
     ValueType type = ((ValueType *)slice.data())[0];
     slice.remove_prefix(RecordPrefixSize);
@@ -187,30 +188,27 @@ void GlobalMemtable::Put(Slice& slice, uint64_t base_vptr, size_t count) {
 
     auto hash = Hash(key.data(), key.size());
     KVStruct kv_info(hash, vptr);
-    kv_info.kv_size_ = (slice.data() - start) - RecordPrefixSize;
+    kv_info.kv_size_ =
+        type == kTypeDeletion
+            ? 0 : (slice.data() - record_start) - RecordPrefixSize;
     Put(key, kv_info);
-    vptr += (slice.data() - start);
+    vptr += (slice.data() - record_start);
   }
 }
 
 void GlobalMemtable::Put(Slice& key, KVStruct& kv_info) {
-  size_t maxDepth = key.size();
+  size_t max_level = key.size();
 
   bool need_restart;
-  size_t level = 0;
+  size_t level = 1;
   uint32_t version;
-  InnerNode* current = root_;
+  InnerNode* current = FindChild(root_, key[0]);
   InnerNode* next_node;
 
   while (true) {
   Restart:
     need_restart = false;
     version = current->opt_lock_.AwaitNodeUnlocked();
-    next_node = FindChild(current, key[level]);
-    current->opt_lock_.CheckOrRestart(version, need_restart);
-    if (need_restart) {
-      goto Restart;
-    }
 
     if (IS_LEAF(current->status_)) {
       current->opt_lock_.UpgradeToWriteLockOrRestart(version, need_restart);
@@ -220,6 +218,20 @@ void GlobalMemtable::Put(Slice& key, KVStruct& kv_info) {
 
       InsertIntoLeaf(current, kv_info, level);
       return;
+    }
+
+    // level > maxDepth means key need to be stored in vptr_
+    if (level == max_level) {
+      current->opt_lock_.UpgradeToWriteLock();
+      current->vptr_ = kv_info.vptr_;
+      current->opt_lock_.WriteUnlock(true);
+      return;
+    }
+
+    next_node = FindChild(current, key[level]);
+    current->opt_lock_.CheckOrRestart(version, need_restart);
+    if (need_restart) {
+      goto Restart;
     }
 
     if (!next_node) {
@@ -249,43 +261,34 @@ void GlobalMemtable::Put(Slice& key, KVStruct& kv_info) {
       return;
     }
 
-    // level > maxDepth means key need to be stored in vptr_
-    // TODO: how to persistence data stored in vptr_
     current = next_node;
-    if (level++ == maxDepth) {
-      current->vptr_ = kv_info.vptr_;
-      return;
-    }
+    ++level;
   }
 }
 
-bool GlobalMemtable::Get(std::string& key, std::string& value) {
-  size_t maxDepth = key.length();
-
-  size_t level = 0;
-  InnerNode* current = root_;
-  InnerNode* nextNode;
+bool GlobalMemtable::Get(std::string& key, std::string& value, Status* s) {
+  size_t max_level = key.length();
+  size_t level = 1;
+  InnerNode* current = FindChild(root_, key[0]);
 
   while (true) {
-    nextNode = FindChild(current, key[level]);
     if (IS_LEAF(current->status_)) {
-      return FindKey(current, key, value);
+      return FindKeyInInnerNode(current, key, value, s);
     }
 
-    if (!nextNode) {
-      return false;
-    }
-
-    // level > maxDepth means key need to be stored in vptr_
-    // TODO: how to persistence data stored in vptr_
-    current = nextNode;
-    if (level++ == maxDepth) {
+    if (level == max_level) {
       if (current->vptr_ == 0) {
         return false;
       }
 
-      vlog_manager_->GetKeyValue(current->vptr_, key, value);
+      auto type = vlog_manager_->GetKeyValue(current->vptr_, key, value);
+      *s = type == kTypeValue ? Status::OK() : Status::NotFound();
       return true;
+    }
+
+    current = FindChild(current, key[level++]);
+    if (!current) {
+      return false;
     }
   }
 }
@@ -392,7 +395,7 @@ void GlobalMemtable::SplitLeafBelowLevel5(InnerNode* leaf) {
     new_leaf->oldest_key_time_ = oldest_key_time;
     auto nvm_node = new_leaf->nvm_node_;
     int pos = 0, fpos = 0;
-    uint32_t leaf_size = 0;
+    int32_t leaf_size = 0;
     memset(nvm_node->meta.fingerprints_, 0, 224);
     for (auto& kv_info : split_buckets[c]) {
       nvm_node->meta.fingerprints_[fpos++] = static_cast<uint8_t>(kv_info.hash_);
@@ -444,9 +447,9 @@ void GlobalMemtable::SplitLeafBelowLevel5(InnerNode* leaf) {
   SET_NON_LEAF(leaf->status_);
 }
 
-void GlobalMemtable::SplitLeaf(InnerNode *leaf) {
+void GlobalMemtable::SplitLeaf(InnerNode* leaf) {
   auto node = leaf->nvm_node_;
-  auto* data = node->data;
+  auto data = node->data;
   autovector<KVStruct> split_buckets[256];
 
   // TODO: remove duplication
@@ -458,12 +461,12 @@ void GlobalMemtable::SplitLeaf(InnerNode *leaf) {
     if (!vptr) {
       continue;
     }
-    std::string key, value;
-    vlog_manager_->GetKeyValue(vptr, key, value);
+    std::string key;
+    vlog_manager_->GetKey(vptr, key);
     split_buckets[static_cast<unsigned char>(key[level])].emplace_back(hash, vptr);
   }
 
-  leaf->vptr_ = split_buckets[0].empty() ? 0 : split_buckets[0].back().vptr_;
+  int64_t oldest_key_time = leaf->oldest_key_time_;
 
   // 0, 1 and 255 are always created
   int32_t split_num = 3;
@@ -477,6 +480,7 @@ void GlobalMemtable::SplitLeaf(InnerNode *leaf) {
       level + 1, static_cast<unsigned char>(LAST_CHAR), nullptr);
   auto last_node = final_node;
   auto first_node = final_node;
+  final_node->oldest_key_time_ = oldest_key_time;
 
   std::vector<InnerNode*> new_leaves{final_node};
   std::vector<unsigned char> prefixes{LAST_CHAR};
@@ -489,9 +493,10 @@ void GlobalMemtable::SplitLeaf(InnerNode *leaf) {
     }
     auto new_leaf = AllocateLeafNode(
         level + 1, static_cast<unsigned char>(c), last_node);
+    new_leaf->oldest_key_time_ = oldest_key_time;
     auto nvm_node = new_leaf->nvm_node_;
     int pos = 0, fpos = 0;
-    uint32_t leaf_size = 0;
+    int32_t leaf_size = 0;
     memset(nvm_node->meta.fingerprints_, 0, 224);
     for (auto& kv_info : split_buckets[c]) {
       nvm_node->meta.fingerprints_[fpos++] = static_cast<uint8_t>(kv_info.hash_);
@@ -524,13 +529,15 @@ void GlobalMemtable::SplitLeaf(InnerNode *leaf) {
   std::reverse(new_leaves.begin(), new_leaves.end());
   std::reverse(prefixes.begin(), prefixes.end());
   auto art = AllocateArtAfterSplit(new_leaves, prefixes, leaf);
-  art->prefix_length_ = (uint8_t)(level + 1);
+  art->prefix_length_ = level + 1;
 
   leaf->art = art;
+  leaf->vptr_ = split_buckets[0].empty() ? 0 : split_buckets[0].back().vptr_;
   SET_ART_NON_FULL(leaf->status_);
 
   InsertSplitInnerNode(leaf, first_node, final_node, level + 1);
   // _mm_sfence(); clwb(node->meta); _mm_sfence();
+  leaf->estimated_size_ = 0;
   InsertNodesToGroup(leaf, new_leaves);
 
   SET_NON_LEAF(leaf->status_);
@@ -538,7 +545,8 @@ void GlobalMemtable::SplitLeaf(InnerNode *leaf) {
 
 // "4b prefix + 4b hash + 8b pointer" OR "4b SeqNum + 4b hash + 8b pointer"
 // This function is responsible for unlocking opt_lock_
-void GlobalMemtable::InsertIntoLeaf(InnerNode* leaf, KVStruct& kv_info, size_t level) {
+void GlobalMemtable::InsertIntoLeaf(
+    InnerNode* leaf, KVStruct& kv_info, size_t level) {
   int writePos = GET_NODE_BUFFER_SIZE(++leaf->status_) << 1;
   assert(writePos <= 32);
 
@@ -594,9 +602,11 @@ void GlobalMemtable::InsertIntoLeaf(InnerNode* leaf, KVStruct& kv_info, size_t l
   }
 }
 
-bool GlobalMemtable::FindKey(InnerNode* leaf, std::string& key, std::string& value) {
+bool GlobalMemtable::FindKeyInInnerNode(
+    InnerNode* leaf, std::string& key, std::string& value, Status* s) {
   std::string find_key;
   uint64_t vptr;
+  ValueType type;
 
   uint64_t hash = Hash(key.c_str(), key.length(), kTypeValue);
   int pos = GET_NODE_BUFFER_SIZE(leaf->status_);
@@ -606,17 +616,23 @@ bool GlobalMemtable::FindKey(InnerNode* leaf, std::string& key, std::string& val
     if (buffer[i * 2] != hash) {
       continue;
     }
-    vlog_manager_->GetKeyValue(
+    type = vlog_manager_->GetKeyValue(
         buffer[i * 2 + 1], find_key, value);
     if (find_key == key) {
+      *s = type == kTypeValue ? Status::OK() : Status::NotFound();
       return true;
     }
   }
 
   __m256i target = _mm256_set1_epi8((uint8_t)hash);
 
-  auto nvm_node = leaf->nvm_node_;
-  {
+  std::vector<NVMNode*> nvm_nodes{leaf->nvm_node_};
+  auto backup_nvm_node = leaf->backup_nvm_node_;
+  if (backup_nvm_node && backup_nvm_node != nvm_nodes[0]) {
+    nvm_nodes.push_back(backup_nvm_node);
+  }
+
+  for (auto& nvm_node : nvm_nodes) {
     auto data = nvm_node->data;
     auto fingerprints = nvm_node->meta.fingerprints_;
     int rows = GET_ROWS(nvm_node->meta.header);
@@ -637,42 +653,9 @@ bool GlobalMemtable::FindKey(InnerNode* leaf, std::string& key, std::string& val
         if (index >= size || data[index * 2] != hash) {
           continue;
         }
-        vlog_manager_->GetKeyValue(vptr, find_key, value);
+        type = vlog_manager_->GetKeyValue(vptr, find_key, value);
         if (key == find_key) {
-          return true;
-        }
-      }
-    }
-  }
-
-  auto nvm_node_backup = leaf->backup_nvm_node_;
-  if (!nvm_node_backup || nvm_node_backup == nvm_node) {
-    return false;
-  }
-  nvm_node = nvm_node_backup;
-  {
-    auto data = nvm_node->data;
-    auto fingerprints = nvm_node->meta.fingerprints_;
-    int rows = GET_ROWS(nvm_node->meta.header);
-
-    int search_rows = (rows + 1) / 2 - 1;
-    int size = rows * 16;
-
-    for (int i = search_rows; i >= 0; --i) {
-      int base = i << 5;
-      __m256i f = _mm256_loadu_si256(reinterpret_cast<const __m256i *>(fingerprints + base));
-      __m256i r = _mm256_cmpeq_epi8(f, target);
-      auto res = (unsigned int)_mm256_movemask_epi8(r);
-      while (res > 0) {
-        int found = 31 - __builtin_clz(res);
-        res -= (1 << found);
-        int index = found + base;
-        vptr = data[index * 2 + 1];
-        if (index >= size || data[index * 2] != hash) {
-          continue;
-        }
-        vlog_manager_->GetKeyValue(vptr, find_key, value);
-        if (key == find_key) {
+          *s = type == kTypeValue ? Status::OK() : Status::NotFound();
           return true;
         }
       }
@@ -682,29 +665,27 @@ bool GlobalMemtable::FindKey(InnerNode* leaf, std::string& key, std::string& val
   return false;
 }
 
-InnerNode* GlobalMemtable::FindInnerNodeByKey(std::string& key, size_t& level,
-                                              bool& stored_in_nvm) {
-  size_t maxDepth = key.size();
+InnerNode* GlobalMemtable::FindInnerNodeByKey(
+    std::string& key, size_t& level, bool& stored_in_nvm) {
+  size_t max_level = key.size();
 
-  level = 0;
+  level = 1;
   stored_in_nvm = true;
-  InnerNode* current = root_;
-  InnerNode* nextNode;
+  InnerNode* current = FindChild(root_, key[0]);
 
   while (true) {
-    nextNode = FindChild(current, key[level]);
     if (IS_LEAF(current->status_)) {
       return current;
     }
 
-    if (!nextNode) {
-      return nullptr;
-    }
-
-    current = nextNode;
-    if (level++ == maxDepth) {
+    if (level == max_level) {
       stored_in_nvm = false;
       return current;
+    }
+
+    current = FindChild(current, key[level++]);
+    if (!current) {
+      return nullptr;
     }
   }
 }

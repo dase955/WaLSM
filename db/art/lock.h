@@ -20,7 +20,7 @@ struct OptLock {
 
   void UpgradeToWriteLockOrRestart(uint32_t &version, bool &need_restart);
 
-  void UpgradeToWriteLock(uint32_t &version);
+  void UpgradeToWriteLock();
 
   void WriteUnlock(bool reverse = false);
 

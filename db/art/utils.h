@@ -101,8 +101,6 @@ ArtNodeHeader* AllocateArtAfterSplit(
 
 ArtNodeHeader* ReallocateArtNode(ArtNodeHeader* art);
 
-InnerNode* FindChild(InnerNode* node, unsigned char c);
-
 void InsertToArtNode(ArtNodeHeader* art, InnerNode* leaf,
                      unsigned char c, bool insert_to_group = true);
 

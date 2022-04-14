@@ -21,11 +21,11 @@ NodeAllocator& GetNodeAllocator() {
 NodeAllocator::NodeAllocator(bool recover) {
   total_size_ = num_free_ * (int64_t)PAGE_SIZE;
 
-  int fd = open("/tmp/NodeMemory", O_RDWR|O_CREAT, 00777);
+  int fd = open("/home/joechen/NodeMemory", O_RDWR|O_CREAT, 00777);
   assert(-1 != fd);
-  lseek(fd, total_size_ - 1, SEEK_END);
+  lseek(fd, total_size_ - 1, SEEK_SET);
   write(fd, "", 1);
-  pmemptr_ = (char *)mmap(NULL, total_size_, PROT_READ | PROT_WRITE,MAP_SHARED, fd, 0);
+  pmemptr_ = (char*)mmap(nullptr, total_size_, PROT_READ | PROT_WRITE,MAP_SHARED, fd, 0);
   close(fd);
 
   if (recover) {
@@ -33,7 +33,7 @@ NodeAllocator::NodeAllocator(bool recover) {
     return;
   }
 
-  char *cur_ptr = pmemptr_;
+  char* cur_ptr = pmemptr_;
   for (int i = 0; i < num_free_; ++i) {
     free_pages_.emplace_back(cur_ptr);
     cur_ptr += PAGE_SIZE;
@@ -45,8 +45,9 @@ NodeAllocator::~NodeAllocator() {
 }
 
 NVMNode* NodeAllocator::AllocateNode() {
-  char* addr = free_pages_.pop_front();
-  return (NVMNode*)addr;
+  char* ptr = free_pages_.pop_front();
+  memset(ptr, 0, PAGE_SIZE);
+  return (NVMNode*)ptr;
 }
 
 void NodeAllocator::DeallocateNode(NVMNode* node) {

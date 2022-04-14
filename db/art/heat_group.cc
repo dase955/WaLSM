@@ -364,8 +364,16 @@ void HeatGroupManager::SplitGroup(HeatGroup* group) {
 
   auto right_group = new HeatGroup();
   right_group->lock.lock();
+
+  // For each heat group, we need a dummy start node
+  // which doesn't store any data. So we can switch between
+  // nvm node and its backup node
+  InnerNode* dummy_right_start = AllocateLeafNode(0, 0, nullptr);
+  InsertInnerNode(left_end, dummy_right_start);
+  SET_GROUP_START(dummy_right_start->status_);
+
   right_group->ts = cur_ts;
-  auto right_start = left_end->next_node_;
+  auto right_start = dummy_right_start;
   right_group->first_node_ = right_start;
   right_group->last_node_ = right_end;
   right_group->group_size_ = total_size - left_size;

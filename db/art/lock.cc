@@ -46,7 +46,8 @@ void OptLock::UpgradeToWriteLockOrRestart(uint32_t &version, bool &need_restart)
   }
 }
 
-void OptLock::UpgradeToWriteLock(uint32_t &version) {
+void OptLock::UpgradeToWriteLock() {
+  uint32_t version;
   while (true) {
     version = AwaitNodeUnlocked();
     if (type_version_lock_.compare_exchange_strong(

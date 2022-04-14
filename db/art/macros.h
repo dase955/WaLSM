@@ -23,18 +23,22 @@ namespace ROCKSDB_NAMESPACE {
 
 // Macro for InnerNode status_
 #define IS_LEAF(s)                ((s) & 0x80000000)
-#define SET_LEAF(s)               (s) |= 0x80000000;
-#define SET_NON_LEAF(s)           (s) &= ~(0x80000000);
+#define SET_LEAF(s)               (s) |= 0x80000000
+#define SET_NON_LEAF(s)           (s) &= ~(0x80000000)
 
 #define IS_ART_FULL(s)            ((s) & 0x40000000)
-#define SET_ART_FULL(s)           (s) |= 0x40000000;
-#define SET_ART_NON_FULL(s)       (s) &= ~(0x40000000);
+#define SET_ART_FULL(s)           (s) |= 0x40000000
+#define SET_ART_NON_FULL(s)       (s) &= ~(0x40000000)
+
+#define IS_GROUP_START(s)         ((s) & 0x20000000)
+#define SET_GROUP_START(s)        (s) |= 0x20000000
+#define SET_NON_GROUP_START(s)    (s) &= ~(0x20000000)
 
 #define GET_GC_FLUSH_SIZE(s)        (((s) >> 16) & 0x000000ff)
-#define SET_GC_FLUSH_SIZE(s, size)  (s) &= 0xff00ffff; (s) |= ((size) << 16);
+#define SET_GC_FLUSH_SIZE(s, size)  (s) &= 0xff00ffff; (s) |= ((size) << 16)
 
 #define GET_NODE_BUFFER_SIZE(s)        ((s) & 0x0000ffff)
-#define SET_NODE_BUFFER_SIZE(s, size)  (s) &= 0xffff0000; (s) |= (size);
+#define SET_NODE_BUFFER_SIZE(s, size)  (s) &= 0xffff0000; (s) |= (size)
 
 /*
  * Macros for nvm_Node.h
@@ -45,8 +49,8 @@ namespace ROCKSDB_NAMESPACE {
 #define CLEAR_VALUE(hdr, pos) hdr &= ~((uint64_t)0xff << ((pos) << 3));
 #define GET_VALUE(hdr, pos)   (((hdr) >> ((pos) << 3)) & 0xff)
 #define SET_VALUE(hdr, pos, val) \
-    CLEAR_VALUE(hdr, pos);       \
-    (hdr) |= ((uint64_t)(val) << ((pos) << 3));
+    CLEAR_VALUE(hdr, pos)       \
+    (hdr) |= ((uint64_t)(val) << ((pos) << 3))
 
 #define GET_SIZE(hdr)           GET_VALUE((hdr), 6)
 #define SET_SIZE(hdr, val)      SET_VALUE((hdr), 6, (val))

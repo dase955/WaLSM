@@ -1704,7 +1704,7 @@ Status DBImpl::GetImpl(const ReadOptions& read_options, const Slice& key,
   // Change
 #ifdef ART
   std::string art_key(key.data(), key.size());
-  done = global_memtable_->Get(art_key, *get_impl_options.value->GetSelf());
+  done = global_memtable_->Get(art_key, *get_impl_options.value->GetSelf(), &s);
 #else
   if (!skip_memtable) {
     // Get value associated with key

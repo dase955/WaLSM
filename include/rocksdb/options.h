@@ -1183,7 +1183,7 @@ struct DBOptions {
   int group_min_size = 4 << 20;
 
   // Size of vlog file.
-  // Default: 2G
+  // Default: 4G
   int64_t vlog_file_size = 2ULL << 30;
 
   // Vlog file is divided into several segments,

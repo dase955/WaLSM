@@ -59,10 +59,13 @@ InnerNode* AllocateLeafNode(uint8_t prefix_length,
                             unsigned char last_prefix,
                             InnerNode* next_node) {
   auto inode = new InnerNode();
-  SET_LEAF(inode->status_);
-  SET_ART_NON_FULL(inode->status_);
-  SET_NODE_BUFFER_SIZE(inode->status_, 0);
-  SET_GC_FLUSH_SIZE(inode->status_, 0);
+  uint32_t status = inode->status_;
+  SET_LEAF(status);
+  SET_NON_GROUP_START(status);
+  SET_ART_NON_FULL(status);
+  SET_NODE_BUFFER_SIZE(status, 0);
+  SET_GC_FLUSH_SIZE(status, 0);
+  inode->status_ = status;
 
   auto& mgr = GetNodeAllocator();
 
@@ -154,6 +157,8 @@ void InsertNewNVMNode(InnerNode* node, NVMNode* new_nvm_node) {
   SET_TAG(hdr, ALT_FIRST_TAG);
   SET_ROWS(hdr, 0);
   SET_SIZE(hdr, 0);
+  memset(new_nvm_node->data, 0, 3584);
+  memset(new_nvm_node->meta.fingerprints_, 0, 224);
   new_nvm_node->meta.header = hdr;
   new_nvm_node->meta.dram_pointer_ = node;
 

@@ -919,6 +919,14 @@ Status WriteBatchInternal::Delete(WriteBatch* b, uint32_t column_family_id,
     b->rep_.push_back(static_cast<char>(kTypeColumnFamilyDeletion));
     PutVarint32(&b->rep_, column_family_id);
   }
+
+  // Reserve space for sequence number
+  SequenceNumber dummy_number = 0;
+  RecordIndex dummy_index = 0;
+  b->sequence_number_pos_.push_back(b->rep_.size());
+  PutFixed64(&b->rep_, dummy_number);
+  PutFixed32(&b->rep_, dummy_index);
+
   if (0 == b->timestamp_size_) {
     PutLengthPrefixedSlice(&b->rep_, key);
   } else {
@@ -948,13 +956,6 @@ Status WriteBatchInternal::Delete(WriteBatch* b, uint32_t column_family_id,
     b->rep_.push_back(static_cast<char>(kTypeColumnFamilyDeletion));
     PutVarint32(&b->rep_, column_family_id);
   }
-
-  // Reserve space for sequence number
-  SequenceNumber dummy_number = 0;
-  RecordIndex dummy_index = 0;
-  b->sequence_number_pos_.push_back(b->rep_.size());
-  PutFixed64(&b->rep_, dummy_number);
-  PutFixed32(&b->rep_, dummy_index);
 
   if (0 == b->timestamp_size_) {
     PutLengthPrefixedSliceParts(&b->rep_, key);

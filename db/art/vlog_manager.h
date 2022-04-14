@@ -11,37 +11,21 @@
 
 namespace ROCKSDB_NAMESPACE {
 
-#define SEG_HDR_SIZE 128
-
-// Size of vlog file
-const constexpr int64_t VLogFileSize = 4ULL << 30; // 4G
-
-// Size of vlog segment
-const constexpr int64_t VLogSegmentSize = 1 << 20; // 1M
-
-const constexpr int64_t SegmentIDMask = 0x7ffffffffff00000;
-
-const constexpr int64_t SegmentOffsetMask = 0x00000000000fffff;
-
-// Number of vlog segment
-const constexpr int64_t VLogSegmentNum = VLogFileSize / VLogSegmentSize;
-
-const constexpr int64_t VLogHeaderSize = VLogSegmentSize / 128;
-
-const constexpr int64_t VLogBitmapSize = VLogHeaderSize - SEG_HDR_SIZE;
-
-// GC is needed when used space of vlog is larger than threshold.
-const constexpr int ForceGCThreshold = (int)(0.5 * VLogSegmentNum);
-
-const float CompactedRatioThreshold = 0.5;
-
 struct alignas(CACHE_LINE_SIZE) AlignedLock {
   SpinMutex mutex_;
 };
 
+enum SegmentStatus : uint8_t {
+  kSegmentFree,     // Initial status
+  kSegmentWriting,  // Writing records to segment
+  kSegmentWriten,   // Segment is full, and wait for gc
+  kSegmentGC,       // Segment is doing gc
+};
+
 struct VLogSegmentHeader {
   struct alignas(CACHE_LINE_SIZE) {
-    uint32_t offset_ = 0 ;
+    SegmentStatus status_ : 8;
+    uint32_t offset_: 24;
     uint16_t total_count_ = 0;
     uint16_t compacted_count_ = 0;
   };
@@ -98,6 +82,8 @@ class VLogManager {
 
   void BGWorkGarbageCollection();
 
+  void ChangeStatus(char* segment, SegmentStatus status);
+
   void PopFreeSegment();
 
   char* WriteToNewSegment(
@@ -124,6 +110,20 @@ class VLogManager {
   TQueueConcurrent<char*> free_pages_;
 
   TQueueConcurrent<char*> used_pages_;
+
+  uint64_t vlog_file_size_;
+
+  uint64_t vlog_segment_size_;
+
+  size_t vlog_segment_num_;
+
+  uint64_t vlog_header_size_;
+
+  uint64_t vlog_bitmap_size_;
+
+  size_t force_gc_ratio_;
+
+  const float compacted_ratio_threshold_ = 0.5;
 
   // Mutex and condvar for gc thread
   port::Mutex gc_mu_;

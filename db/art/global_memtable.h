@@ -89,7 +89,7 @@ class GlobalMemtable {
 
   void Put(Slice& slice, uint64_t base_vptr, size_t count);
 
-  bool Get(std::string& key, std::string& value);
+  bool Get(std::string& key, std::string& value, Status* s);
 
   void InitFirstTwoLevel();
 
@@ -99,7 +99,8 @@ class GlobalMemtable {
  private:
   void Put(Slice& key, KVStruct& kv_info);
 
-  bool FindKey(InnerNode* leaf, std::string& key, std::string& value);
+  bool FindKeyInInnerNode(
+      InnerNode* leaf, std::string& key, std::string& value, Status* s);
 
   void SqueezeNode(InnerNode* leaf);
 
