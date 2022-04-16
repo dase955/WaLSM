@@ -5,6 +5,8 @@
 #include "vlog_manager.h"
 
 #include <sys/mman.h>
+#include <sys/types.h>
+#include <unistd.h>
 #include <fcntl.h>
 #include <cassert>
 #include <csignal>
@@ -20,7 +22,7 @@
 namespace ROCKSDB_NAMESPACE {
 
 char* OpenVLogFile(int64_t total_size) {
-  int fd = open("/home/joechen/vlog", O_RDWR|O_CREAT, 00777);
+  int fd = open(VLOG_PATH, O_RDWR|O_CREAT, 00777);
   assert(-1 != fd);
 
   //posix_fallocate(fd, 0, total_size);

@@ -299,7 +299,6 @@ InnerNode* FindChildInNode48(ArtNodeHeader* art, unsigned char c) {
 
 InnerNode* FindChildInNode256(ArtNodeHeader* art, unsigned char c) {
   auto node256 = (ArtNode256*)art;
-  assert(static_cast<int>(c) < 256);
   return node256->children_[static_cast<int>(c)];
 }
 

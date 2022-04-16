@@ -88,13 +88,13 @@ void MultiThreadTest(DB *db, std::vector<std::string> *sampled_keys, int thread_
 
   std::vector<std::string> sampledKeys;
   sampled_keys->reserve(16384 * 4);
-  for (int i = 0; i < 16384 * 64; ++i) {
+  for (int i = 0; i < 16384 * 128; ++i) {
     std::shuffle(keyStr.begin(), keyStr.end(), generator);
     std::string key = keyStr.substr(0, keyDis(gen));    // assumes 32 < number of characters in str
     std::string value = key + key;
 
     ASSERT_OK(db->Put(WriteOptions(), key, value));
-    if (i % 16 == 0) {
+    if (i % 32 == 0) {
       sampled_keys->push_back(key);
     }
   }
@@ -105,11 +105,8 @@ TEST_F(DBTest3, MockEnvTest) {
   Options options;
   options.force_consistency_checks = false;
   options.create_if_missing = true;
-  options.vlog_file_size = 1072ULL << 20;
+  options.vlog_file_size = 2ULL << 30;
   options.vlog_force_gc_ratio_ = 0.25;
-  options.compaction_threshold = 256 << 20;
-  options.group_split_threshold = 6 << 20;
-  options.group_min_size = 2 << 20;
   options.env = env.get();
   DB* db;
 

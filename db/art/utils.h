@@ -133,5 +133,27 @@ int64_t GetNextRelativeNode(NVMNode* node);
 
 int64_t GetNextRelativeNode(int64_t offset);
 
+/////////////////////////////////////////////////////
+// PMem
+
+#ifndef USE_PMEM
+#define VLOG_PATH "/home/joechen/vlog"
+#define MEMORY_PATH "/home/joechen/nodememory"
+
+#define MEMCPY(des, src, size) memcpy(des, src, size)
+#define MEMCPY_PERSIST(des, src, size) memcpy(des, src, size)
+#define SFENCE (void*)0
+#define CLWB(ptr, len) (void*)0
+#else
+#define VLOG_PATH "/mnt/chen/vlog"
+#define MEMORY_PATH "/mnt/chen/nodememory"
+
+#define MEMCPY(des, src, size) memcpy(des, src, size)
+#define MEMCPY_PERSIST(des, src, size) \
+  pmem_memcpy(des, src, size, PMEM_F_MEM_NONTEMPORAL)
+#define SFENCE _mm_sfence();
+#define CLWB(ptr, len) (void*)0
+#endif
+
 } // namespace ROCKSDB_NAMESPACE
 

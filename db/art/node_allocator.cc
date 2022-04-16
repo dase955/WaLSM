@@ -5,11 +5,13 @@
 #include "node_allocator.h"
 
 #include <sys/mman.h>
+#include <sys/types.h>
 #include <fcntl.h>
 #include <cassert>
-#include <csignal>
+#include <unistd.h>
 
 #include "nvm_node.h"
+#include "utils.h"
 
 namespace ROCKSDB_NAMESPACE {
 
@@ -21,7 +23,7 @@ NodeAllocator& GetNodeAllocator() {
 NodeAllocator::NodeAllocator(bool recover) {
   total_size_ = num_free_ * (int64_t)PAGE_SIZE;
 
-  int fd = open("/home/joechen/NodeMemory", O_RDWR|O_CREAT, 00777);
+  int fd = open(MEMORY_PATH, O_RDWR|O_CREAT, 00777);
   assert(-1 != fd);
   lseek(fd, total_size_ - 1, SEEK_SET);
   write(fd, "", 1);
