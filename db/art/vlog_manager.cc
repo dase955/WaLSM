@@ -21,6 +21,23 @@
 
 namespace ROCKSDB_NAMESPACE {
 
+#ifdef USE_PMEM
+char* OpenVLogFile(int64_t total_size) {
+  int fd = open(VLOG_PATH, O_CREAT|O_RDWR, 0666);
+  assert(-1 != fd);
+
+  posix_fallocate(fd, 0, total_size);
+  close(fd);
+
+  int is_pmem;
+  size_t mapped_len;
+  char* ptr = (char*)pmem_map_file(
+      VLOG_PATH, total_size, PMEM_FILE_CREATE, 0666, &mapped_len, &is_pmem);
+  assert(is_pmem && mapped_len == (size_t)total_size);
+
+  return ptr;
+}
+#else
 char* OpenVLogFile(int64_t total_size) {
   int fd = open(VLOG_PATH, O_RDWR|O_CREAT, 00777);
   assert(-1 != fd);
@@ -33,6 +50,7 @@ char* OpenVLogFile(int64_t total_size) {
   close(fd);
   return ptr;
 }
+#endif
 
 int SearchVptr(
     InnerNode* inner_node, uint64_t hash, int rows, uint64_t vptr) {
@@ -114,10 +132,12 @@ VLogManager::VLogManager(const DBOptions& options)
     header->offset_ = vlog_header_size_;
     header->total_count_ = header->compacted_count_ = 0;
     memset(header->bitmap_, -1, vlog_bitmap_size_);
-    // pmem_persist(cur_ptr, VLogHeaderSize);
+    FLUSH(cur_ptr, vlog_header_size_);
     free_pages_.emplace_back(cur_ptr);
     cur_ptr += vlog_segment_size_;
   }
+
+  MEMORY_BARRIER;
 
   PopFreeSegment();
 
@@ -147,8 +167,7 @@ uint64_t VLogManager::AddRecord(const Slice& slice, uint32_t record_count) {
   }
 
   uint64_t vptr = (cur_segment_ - pmemptr_) + offset_;
-  memcpy(cur_segment_ + offset_, slice.data(), left);
-  // pmem_memcpy (pmemptr + offset_, slice.data(), left, PMEM_F_MEM_NONTEMPORAL);
+  MEMCPY(cur_segment_ + offset_, slice.data(), left, PMEM_F_MEM_NONTEMPORAL);
 
   offset_ += left;
   segment_remain_ -= left;
@@ -157,7 +176,7 @@ uint64_t VLogManager::AddRecord(const Slice& slice, uint32_t record_count) {
 
   header_->total_count_ = count_in_segment_;
   header_->offset_ = offset_;
-  // pmem_persist((void*)header, 32);
+  PERSIST(header_, 32);
 
   return vptr;
 }
@@ -445,13 +464,12 @@ char* VLogManager::WriteToNewSegment(char* segment, std::string& record,
   assert(offset < vlog_segment_size_);
   assert(record.size() >= 16);
   *(RecordIndex*)(record.data() + 9) = count;
-  memcpy(segment + offset, record.data(), left);
-  // pmem_memcpy (pmemptr + offset_, slice.data(), left, PMEM_F_MEM_NONTEMPORAL);
+  MEMCPY(segment + offset, record.data(), left, PMEM_F_MEM_NONTEMPORAL);
 
   new_vptr = (segment - pmemptr_) + offset;
   ++header->total_count_;
   header->offset_ += left;
-  // pmem_persist((void*)header, 32);
+  PERSIST(header, CACHE_LINE_SIZE);
 
   return segment;
 }

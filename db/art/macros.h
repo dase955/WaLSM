@@ -12,12 +12,17 @@ namespace ROCKSDB_NAMESPACE {
 #define ART_LITTLE_ENDIAN (__BYTE_ORDER == __LITTLE_ENDIAN)
 #endif
 
+#define ALIGN_UP(x, align)  (((x) + ((align) - 1)) & ~((align) - 1))
+#define SIZE_TO_ROWS(size)  ((size) >> 4)
+#define SIZE_TO_BYTES(size) ((size) << 4)
+#define ROW_TO_SIZE(rows)   ((rows) << 4)
+
 /*
  * Macros for global_memtable.h
  */
 
-#define LAST_CHAR 255
-
+#define LAST_CHAR                 255
+#define ROW_SIZE                  256
 #define NVM_MAX_ROWS              14
 #define NVM_MAX_SIZE              224
 
@@ -52,6 +57,7 @@ namespace ROCKSDB_NAMESPACE {
     CLEAR_VALUE(hdr, pos)       \
     (hdr) |= ((uint64_t)(val) << ((pos) << 3))
 
+// Currently, size is actually unused
 #define GET_SIZE(hdr)           GET_VALUE((hdr), 6)
 #define SET_SIZE(hdr, val)      SET_VALUE((hdr), 6, (val))
 

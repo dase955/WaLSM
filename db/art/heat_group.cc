@@ -94,8 +94,9 @@ void HeatGroup::UpdateSize(int32_t size) {
 }
 
 void HeatGroup::UpdateHeat() {
-  ts.UpdateHeat();
-  MaybeScheduleHeatDecay(ts.last_ts_);
+  if (ts.UpdateHeat()) {
+    MaybeScheduleHeatDecay(ts.last_ts_);
+  }
 }
 
 inline void HeatGroup::MaybeScheduleHeatDecay(int32_t last_ts) {

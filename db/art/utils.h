@@ -9,6 +9,10 @@
 #include <db/dbformat.h>
 #include "macros.h"
 
+#ifdef USE_PMEM
+#include <libpmem.h>
+#endif
+
 namespace ROCKSDB_NAMESPACE {
 
 constexpr size_t RecordPrefixSize
@@ -53,7 +57,7 @@ struct KVStruct {
   KVStruct(uint64_t hash, uint64_t vptr) : hash_(hash), vptr_(vptr) {};
 };
 
-inline char GetPrefix(int level, const KVStruct& kvInfo) {
+inline char GetPrefix(const KVStruct& kvInfo, int level) {
   return kvInfo.prefixes_[level - 2];
 }
 
@@ -121,7 +125,7 @@ void InsertSplitInnerNode(InnerNode* node, InnerNode* first_inserted,
 void InsertInnerNode(InnerNode* node, InnerNode* inserted);
 
 // These two functions are used in compaction.
-void InsertNewNVMNode(InnerNode* node, NVMNode* new_nvm_node);
+void InsertNewNVMNode(InnerNode* node, NVMNode* inserted);
 
 void RemoveOldNVMNode(InnerNode* node);
 
@@ -137,22 +141,25 @@ int64_t GetNextRelativeNode(int64_t offset);
 // PMem
 
 #ifndef USE_PMEM
-#define VLOG_PATH "/home/joechen/vlog"
-#define MEMORY_PATH "/home/joechen/nodememory"
+#define VLOG_PATH "/tmp/vlog"
+#define MEMORY_PATH "/tmp/nodememory"
 
-#define MEMCPY(des, src, size) memcpy(des, src, size)
-#define MEMCPY_PERSIST(des, src, size) memcpy(des, src, size)
-#define SFENCE (void*)0
-#define CLWB(ptr, len) (void*)0
+#define MEMCPY(des, src, size, flag) memcpy((des), (src), (size))
+#define PERSIST(ptr, len)
+#define FLUSH(addr, len)
+#define MEMORY_BARRIER
+#define CLWB(ptr, len)
 #else
 #define VLOG_PATH "/mnt/chen/vlog"
 #define MEMORY_PATH "/mnt/chen/nodememory"
 
-#define MEMCPY(des, src, size) memcpy(des, src, size)
-#define MEMCPY_PERSIST(des, src, size) \
-  pmem_memcpy(des, src, size, PMEM_F_MEM_NONTEMPORAL)
-#define SFENCE _mm_sfence();
-#define CLWB(ptr, len) (void*)0
+#define MEMCPY(des, src, size, flags) \
+  pmem_memcpy((des), (src), (size), flags)
+// PERSIST = FLUSH + FENCE
+#define PERSIST(addr, len) pmem_persist((addr), (len))
+#define FLUSH(addr, len) pmem_flush(addr, len)
+#define MEMORY_BARRIER pmem_drain()
+#define CLWB(ptr, len)
 #endif
 
 } // namespace ROCKSDB_NAMESPACE

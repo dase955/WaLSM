@@ -37,12 +37,4 @@ struct OptLock {
   static bool IsObsolete(uint32_t version);
 };
 
-struct SpinLock {
-  std::atomic<bool> lock_ = {false};
-
-  void lock();
-
-  void unlock();
-};
-
 }  // namespace ROCKSDB_NAMESPACE

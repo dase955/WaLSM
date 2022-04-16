@@ -42,7 +42,7 @@ struct InnerNode {
 
   // Pointer to art node, backup is used for reallocate
   ArtNodeHeader* art;
-  ArtNodeHeader* artBackup;
+  ArtNodeHeader* art_backup;
 
   // Pointer to NVM node, backup is used for compaction
   NVMNode*       nvm_node_;

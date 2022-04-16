@@ -31,7 +31,8 @@ struct Timestamps {
 
   void DecayHeat();
 
-  void UpdateHeat();
+  // Return true if timestamp is updated.
+  bool UpdateHeat();
 
   bool GetCurrentHeatAndTs(
       int32_t& begin_ts, int32_t& mid_ts, int32_t& end_ts, float& heat);

@@ -91,3 +91,4 @@ clang-format-diff.py
 .py3/
 
 cmake-build-debug
+cmake-build-release

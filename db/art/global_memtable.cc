@@ -4,7 +4,6 @@
 
 #include "global_memtable.h"
 
-#include <iostream>
 #include <cassert>
 #include <unordered_map>
 #include <unordered_set>
@@ -14,7 +13,6 @@
 #include "utils.h"
 #include "nvm_node.h"
 #include "art_node.h"
-#include "node_allocator.h"
 #include "vlog_manager.h"
 #include "heat_group.h"
 #include "heat_group_manager.h"
@@ -23,7 +21,8 @@
 namespace ROCKSDB_NAMESPACE {
 
 InnerNode::InnerNode()
-    : heat_group_(nullptr), art(nullptr), artBackup(nullptr),
+    : heat_group_(nullptr), art(nullptr),
+      art_backup(nullptr),
       nvm_node_(nullptr), backup_nvm_node_(nullptr), last_child_node_(nullptr),
       next_node_(nullptr), vptr_(0), status_(0), estimated_size_(0),
       buffer_size_(0) {
@@ -49,9 +48,11 @@ void FlushBuffer(InnerNode* leaf, int row) {
     hll[bucket] = std::max(hll[bucket], digit);
   }
 
-  memcpy(node->data + (row << 5), buffer, 256);
-  memcpy(node->meta.fingerprints_ + (row << 4), fingerprints, 16);
-  // _mm_clwb(data); _mm_sfence();
+  auto data_flush_start = node->data + (row << 5);
+  auto finger_flush_start = node->meta.fingerprints_ + ROW_TO_SIZE(row);
+  MEMCPY(data_flush_start, buffer, ROW_SIZE, PMEM_F_MEM_NODRAIN);
+  MEMCPY(finger_flush_start, fingerprints, 16, PMEM_F_MEM_NODRAIN);
+  MEMORY_BARRIER;
 
   // Write metadata
   uint64_t hdr = node->meta.header;
@@ -59,34 +60,38 @@ void FlushBuffer(InnerNode* leaf, int row) {
   SET_SIZE(hdr, size + 16);
   SET_ROWS(hdr, row + 1);
   node->meta.header = hdr;
-  // _mm_clwb(node->meta.header); _mm_sfence();
+  PERSIST(node, 8);
 }
 
 void FlushBufferAndRelease(InnerNode* leaf, int row) {
   NVMNode* node = leaf->nvm_node_;
   uint8_t* hll = leaf->hll_;
 
+  uint8_t fingerprints[16];
   uint64_t buffer[32];
-  memcpy(buffer, leaf->buffer_, 256);
+  memcpy(buffer, leaf->buffer_, ROW_SIZE);
 
   leaf->opt_lock_.WriteUnlock(true);
 
   int h, bucket;
   uint8_t digit;
-  uint8_t fingerprints[16];
   for (size_t i = 0; i < 16; ++i) {
     auto hash = buffer[i << 1];
     fingerprints[i] = static_cast<uint8_t>(hash);
-
     bucket = (int)(hash & 63);
     h = (int)(hash >> 6);
     digit = h == 0 ? 0 : __builtin_ctz(h) + 1;
     hll[bucket] = std::max(hll[bucket], digit);
   }
 
-  memcpy(node->data + (row << 5), buffer, 256);
-  memcpy(node->meta.fingerprints_ + (row << 4), fingerprints, 16);
-  // _mm_clwb(data); _mm_sfence();
+  auto data_flush_start = node->data + (row << 5);
+  auto finger_flush_start = node->meta.fingerprints_ + ROW_TO_SIZE(row);
+  MEMCPY(data_flush_start, buffer, 256,
+         PMEM_F_MEM_NODRAIN | PMEM_F_MEM_NONTEMPORAL);
+  MEMCPY(finger_flush_start, fingerprints, 16,
+         PMEM_F_MEM_NODRAIN | PMEM_F_MEM_NONTEMPORAL);
+
+  MEMORY_BARRIER;
 
   // Write metadata
   uint64_t hdr = node->meta.header;
@@ -94,7 +99,7 @@ void FlushBufferAndRelease(InnerNode* leaf, int row) {
   SET_SIZE(hdr, size + 16);
   SET_ROWS(hdr, row + 1);
   node->meta.header = hdr;
-  // _mm_clwb(node->meta.header); _mm_sfence();
+  PERSIST(node, 8);
 }
 
 //////////////////////////////////////////////////////////
@@ -106,7 +111,7 @@ GlobalMemtable::GlobalMemtable(
       env_(env) {
   vlog_manager->SetMemtable(this);
   InitFirstTwoLevel();
-};
+}
 
 void GlobalMemtable::InitFirstTwoLevel() {
   root_ = new InnerNode();
@@ -161,6 +166,7 @@ void GlobalMemtable::InitFirstTwoLevel() {
           2, static_cast<unsigned char>(second_char), next_inner_node);
       art256_l2->children_[second_char]->heat_group_ = heat_group;
       next_inner_node = art256_l2->children_[second_char];
+      PERSIST(art256_l2->children_[second_char]->nvm_node_, CACHE_LINE_SIZE);
     }
 
     heat_group->group_manager_ = group_manager_;
@@ -170,20 +176,25 @@ void GlobalMemtable::InitFirstTwoLevel() {
     group_manager_->InsertIntoLayer(heat_group, BASE_LAYER);
   }
 
+  MEMORY_BARRIER;
+
   head_ = next_inner_node;
 }
 
 void GlobalMemtable::Put(Slice& slice, uint64_t base_vptr, size_t count) {
   uint64_t vptr = base_vptr;
+  uint32_t val_len = 0;
+  Slice key;
+
   slice.remove_prefix(WriteBatchInternal::kHeader);
   for (size_t c = 0; c < count; ++c) {
     auto record_start = slice.data();
-    Slice key, value;
     ValueType type = ((ValueType *)slice.data())[0];
     slice.remove_prefix(RecordPrefixSize);
     GetLengthPrefixedSlice(&slice, &key);
     if (type == kTypeValue) {
-      GetLengthPrefixedSlice(&slice, &value);
+      GetVarint32(&slice, &val_len);
+      slice.remove_prefix(val_len);
     }
 
     auto hash = Hash(key.data(), key.size());
@@ -247,12 +258,12 @@ void GlobalMemtable::Put(Slice& key, KVStruct& kv_info) {
       leaf->buffer_[1] = kv_info.vptr_;
 
       if (IS_ART_FULL(current->status_)) {
-        auto artNew = ReallocateArtNode(current->art);
+        auto last_art = current->art;
+        auto art_new = ReallocateArtNode(last_art);
+        delete current->art_backup;
+        current->art = art_new;
+        current->art_backup = last_art;
         SET_ART_NON_FULL(current->status_);
-        auto last = current->art;
-        current->art = artNew;
-        delete current->artBackup;
-        current->artBackup = last;
       }
 
       InsertToArtNode(current->art, leaf, key[level], true);
@@ -295,8 +306,7 @@ bool GlobalMemtable::Get(std::string& key, std::string& value, Status* s) {
 
 void GlobalMemtable::SqueezeNode(InnerNode* leaf) {
   auto node = leaf->nvm_node_;
-  uint64_t* data = node->data;
-  uint8_t* fingerprints = node->meta.fingerprints_;
+  auto data = node->data;
   memset(leaf->hll_, 0, 64);
 
   // Maybe we can use vector instead of map.
@@ -313,15 +323,18 @@ void GlobalMemtable::SqueezeNode(InnerNode* leaf) {
     map[key] = KVStruct(hash, vptr);
   }
 
-  int count = 0, fpos = 0;
-  auto prev_size = leaf->estimated_size_;
+  int32_t prev_size = leaf->estimated_size_;
   int32_t cur_size = 0;
-  memset(fingerprints, 0, 224);
-  for (auto &pair: map) {
-    auto & kv_info = pair.second;
-    fingerprints[fpos++] = static_cast<uint8_t>(kv_info.hash_);
-    data[count++] = kv_info.hash_;
-    data[count++] = kv_info.vptr_;
+
+  int count = 0, fpos = 0;
+  uint8_t temp_fingerprints[224] = {0};
+  uint64_t temp_data[448] = {0};
+
+  for (auto& pair: map) {
+    auto& kv_info = pair.second;
+    temp_fingerprints[fpos++] = static_cast<uint8_t>(kv_info.hash_);
+    temp_data[count++] = kv_info.hash_;
+    temp_data[count++] = kv_info.vptr_;
     cur_size += kv_info.kv_size_;
 
     int bucket = kv_info.hash_ & 63;
@@ -336,38 +349,38 @@ void GlobalMemtable::SqueezeNode(InnerNode* leaf) {
   leaf->estimated_size_ = cur_size;
   leaf->heat_group_->UpdateSize(cur_size - prev_size);
 
-  int rows = ((fpos - 1) >> 4) + 1;
-  int size = rows << 4;
-  memset(data + count, 0, (size - fpos) << 4);
-  // _mm_clwb(data);
-  // _mm_sfence();
+  int flush_size = ALIGN_UP(fpos, 16);
+  int flush_rows = SIZE_TO_ROWS(flush_size);
+  MEMCPY(node->data, temp_data,
+         SIZE_TO_BYTES(flush_size), PMEM_F_MEM_NODRAIN);
+  MEMCPY(node->meta.fingerprints_,
+         temp_fingerprints, flush_size, PMEM_F_MEM_NODRAIN);
 
   uint64_t hdr = node->meta.header;
-  SET_SIZE(hdr, size);
-  SET_ROWS(hdr, rows);
+  SET_SIZE(hdr, flush_size);
+  SET_ROWS(hdr, flush_rows);
   node->meta.header = hdr;
-  // _mm_clwb(&node->meta);
-  // _mm_sfence();
+  PERSIST(node, 8);
 }
 
 void GlobalMemtable::SplitLeafBelowLevel5(InnerNode* leaf) {
-  auto node = leaf->nvm_node_;
-  auto* data = node->data;
-  autovector<KVStruct> split_buckets[256];
+  auto old_nvm_node = leaf->nvm_node_;
+  auto old_leaf_data = old_nvm_node->data;
+  int level = GET_PRELEN(old_nvm_node->meta.header);
 
-  int level = GET_PRELEN(node->meta.header);
+  autovector<KVStruct> split_buckets[256];
   for (size_t i = 0; i < NVM_MAX_SIZE; ++i) {
-    KVStruct kv_info(data[(i << 1)], data[(i << 1) + 1]);
+    KVStruct kv_info(old_leaf_data[(i << 1)], old_leaf_data[(i << 1) + 1]);
     if (!kv_info.vptr_) {
       continue;
     }
-    split_buckets[static_cast<unsigned int>(GetPrefix(level, kv_info))]
-        .push_back(kv_info); // ??
+    split_buckets[static_cast<unsigned int>(GetPrefix(kv_info, level))]
+        .push_back(kv_info);
   }
 
   int64_t oldest_key_time = leaf->oldest_key_time_;
 
-  // 0, 1 and 255
+  // 0, 1 and 255 are always created
   int32_t split_num = 3;
   for (size_t i = 2; i < LAST_CHAR; ++i) {
     if (!split_buckets[i].empty()) {
@@ -386,6 +399,9 @@ void GlobalMemtable::SplitLeafBelowLevel5(InnerNode* leaf) {
   new_leaves.reserve(split_num);
   prefixes.reserve(split_num);
 
+  uint8_t temp_fingerprints[224] = {0};
+  uint64_t temp_data[448] = {0};
+
   for (int c = LAST_CHAR - 1; c > 0; --c) {
     if (split_buckets[c].empty() && c != 1) {
       continue;
@@ -396,39 +412,42 @@ void GlobalMemtable::SplitLeafBelowLevel5(InnerNode* leaf) {
     auto nvm_node = new_leaf->nvm_node_;
     int pos = 0, fpos = 0;
     int32_t leaf_size = 0;
-    memset(nvm_node->meta.fingerprints_, 0, 224);
     for (auto& kv_info : split_buckets[c]) {
-      nvm_node->meta.fingerprints_[fpos++] = static_cast<uint8_t>(kv_info.hash_);
-      nvm_node->data[pos++] = kv_info.hash_;
-      nvm_node->data[pos++] = kv_info.vptr_;
+      temp_fingerprints[fpos++] = static_cast<uint8_t>(kv_info.hash_);
+      temp_data[pos++] = kv_info.hash_;
+      temp_data[pos++] = kv_info.vptr_;
       leaf_size += kv_info.kv_size_;
     }
     new_leaf->estimated_size_ = leaf_size;
-    assert(fpos <= NVM_MAX_SIZE);
-    assert(pos <= (NVM_MAX_SIZE << 1));
 
     last_node = new_leaf;
     first_node = new_leaf;
 
-    int rows = fpos > 0 ? ((fpos - 1) >> 4) + 1 : 0;
-    int size = rows << 4;
-    memset(nvm_node->data + pos,
-           0, (size - fpos) << 4);
+    int flush_size = ALIGN_UP(fpos, 16);
+    int flush_rows = SIZE_TO_ROWS(flush_size);
+    assert(flush_rows <= NVM_MAX_ROWS);
+    assert(flush_size <= NVM_MAX_SIZE);
+
+    memset(temp_data + pos, 0, SIZE_TO_BYTES(flush_size - fpos));
+    memset(temp_fingerprints + fpos, 0, flush_size - fpos);
+    MEMCPY(nvm_node->data, temp_data,
+           SIZE_TO_BYTES(flush_size), PMEM_F_MEM_NODRAIN);
+    MEMCPY(nvm_node->meta.fingerprints_, temp_fingerprints,
+           flush_size, PMEM_F_MEM_NODRAIN);
 
     auto hdr = nvm_node->meta.header;
-    SET_SIZE(hdr, size);
-    SET_ROWS(hdr, rows);
+    SET_SIZE(hdr, flush_size);
+    SET_ROWS(hdr, flush_rows);
     SET_LAST_PREFIX(hdr, c);
     SET_PRELEN(hdr, level + 1);
     nvm_node->meta.header = hdr;
-    // _mm_clwb(nvm_node_->meta); _mm_clwb(hdr);
-
-    assert(rows <= NVM_MAX_ROWS);
-    assert(size <= NVM_MAX_SIZE);
+    FLUSH(nvm_node, 8);
 
     new_leaves.push_back(new_leaf);
     prefixes.push_back(static_cast<unsigned char>(c));
   }
+
+  MEMORY_BARRIER;
 
   std::reverse(new_leaves.begin(), new_leaves.end());
   std::reverse(prefixes.begin(), prefixes.end());
@@ -440,7 +459,6 @@ void GlobalMemtable::SplitLeafBelowLevel5(InnerNode* leaf) {
   SET_ART_NON_FULL(leaf->status_);
 
   InsertSplitInnerNode(leaf, first_node, final_node, level + 1);
-  // _mm_sfence(); clwb(node->meta); _mm_sfence();
   leaf->estimated_size_ = 0;
   InsertNodesToGroup(leaf, new_leaves);
 
@@ -448,22 +466,22 @@ void GlobalMemtable::SplitLeafBelowLevel5(InnerNode* leaf) {
 }
 
 void GlobalMemtable::SplitLeaf(InnerNode* leaf) {
-  auto node = leaf->nvm_node_;
-  auto data = node->data;
+  auto old_nvm_node = leaf->nvm_node_;
+  auto old_leaf_data = old_nvm_node->data;
   autovector<KVStruct> split_buckets[256];
 
   // TODO: remove duplication
-  int level = GET_PRELEN(node->meta.header);
-  uint8_t p = GET_LAST_PREFIX(node->meta.header);
+  int level = GET_PRELEN(old_nvm_node->meta.header);
   for (int i = NVM_MAX_SIZE - 1; i >= 0; --i) {
-    uint64_t hash = data[(i << 1)];
-    uint64_t vptr = data[(i << 1) + 1];
+    uint64_t hash = old_leaf_data[(i << 1)];
+    uint64_t vptr = old_leaf_data[(i << 1) + 1];
     if (!vptr) {
       continue;
     }
     std::string key;
     vlog_manager_->GetKey(vptr, key);
-    split_buckets[static_cast<unsigned char>(key[level])].emplace_back(hash, vptr);
+    split_buckets[static_cast<unsigned char>(key[level])]
+        .emplace_back(hash, vptr);
   }
 
   int64_t oldest_key_time = leaf->oldest_key_time_;
@@ -487,6 +505,9 @@ void GlobalMemtable::SplitLeaf(InnerNode* leaf) {
   new_leaves.reserve(split_num);
   prefixes.reserve(split_num);
 
+  uint8_t temp_fingerprints[224] = {0};
+  uint64_t temp_data[448] = {0};
+
   for (int c = LAST_CHAR - 1; c > 0; --c) {
     if (split_buckets[c].empty() && c != 1) {
       continue;
@@ -497,11 +518,10 @@ void GlobalMemtable::SplitLeaf(InnerNode* leaf) {
     auto nvm_node = new_leaf->nvm_node_;
     int pos = 0, fpos = 0;
     int32_t leaf_size = 0;
-    memset(nvm_node->meta.fingerprints_, 0, 224);
     for (auto& kv_info : split_buckets[c]) {
-      nvm_node->meta.fingerprints_[fpos++] = static_cast<uint8_t>(kv_info.hash_);
-      nvm_node->data[pos++] = kv_info.hash_;
-      nvm_node->data[pos++] = kv_info.vptr_;
+      temp_fingerprints[fpos++] = static_cast<uint8_t>(kv_info.hash_);
+      temp_data[pos++] = kv_info.hash_;
+      temp_data[pos++] = kv_info.vptr_;
       leaf_size += kv_info.kv_size_;
     }
     new_leaf->estimated_size_ = leaf_size;
@@ -509,22 +529,31 @@ void GlobalMemtable::SplitLeaf(InnerNode* leaf) {
     last_node = new_leaf;
     first_node = new_leaf;
 
-    int rows = fpos > 0 ? ((fpos - 1) >> 4) + 1 : 0;
-    int size = rows << 4;
-    memset(nvm_node->data + pos,
-           0, (size - fpos) << 4);
+    int flush_size = ALIGN_UP(fpos, 16);
+    int flush_rows = SIZE_TO_ROWS(flush_size);
+    assert(flush_rows <= NVM_MAX_ROWS);
+    assert(flush_size <= NVM_MAX_SIZE);
+
+    memset(temp_data + pos, 0, SIZE_TO_BYTES(flush_size - fpos));
+    memset(temp_fingerprints + fpos, 0, flush_size - fpos);
+    MEMCPY(nvm_node->data, temp_data,
+           SIZE_TO_BYTES(flush_size), PMEM_F_MEM_NODRAIN);
+    MEMCPY(nvm_node->meta.fingerprints_, temp_fingerprints,
+           flush_size, PMEM_F_MEM_NODRAIN);
 
     auto hdr = nvm_node->meta.header;
-    SET_SIZE(hdr, size);
-    SET_ROWS(hdr, rows);
+    SET_SIZE(hdr, flush_size);
+    SET_ROWS(hdr, flush_rows);
     SET_LAST_PREFIX(hdr, c);
     SET_PRELEN(hdr, level + 1);
     nvm_node->meta.header = hdr;
-    // _mm_clwb(nvm_node_->meta); _mm_clwb(hdr);
+    FLUSH(nvm_node, 8);
 
     new_leaves.push_back(new_leaf);
     prefixes.push_back(static_cast<unsigned char>(c));
   }
+
+  MEMORY_BARRIER;
 
   std::reverse(new_leaves.begin(), new_leaves.end());
   std::reverse(prefixes.begin(), prefixes.end());
@@ -536,7 +565,6 @@ void GlobalMemtable::SplitLeaf(InnerNode* leaf) {
   SET_ART_NON_FULL(leaf->status_);
 
   InsertSplitInnerNode(leaf, first_node, final_node, level + 1);
-  // _mm_sfence(); clwb(node->meta); _mm_sfence();
   leaf->estimated_size_ = 0;
   InsertNodesToGroup(leaf, new_leaves);
 
@@ -575,13 +603,9 @@ void GlobalMemtable::InsertIntoLeaf(
   SET_NODE_BUFFER_SIZE(leaf->status_, 0);
   assert(GET_NODE_BUFFER_SIZE(leaf->status_) == 0);
 
-  auto nvmNode = leaf->nvm_node_;
-  auto& nvmMeta = nvmNode->meta;
-  int rows = GET_ROWS(nvmMeta.header);
-  bool need_split = rows == NVM_MAX_ROWS - 1;
-
-  if (likely(!need_split)) {
-    // We cannot release the lock directly,
+  int rows = GET_ROWS(leaf->nvm_node_->meta.header);
+  if (likely(rows < NVM_MAX_ROWS - 1)) {
+    // We can't release the lock directly,
     // because we will use data in buffer
     // Two solutions:
     // 1. release opt lock after flushing data
@@ -640,9 +664,10 @@ bool GlobalMemtable::FindKeyInInnerNode(
     int search_rows = (rows + 1) / 2 - 1;
     int size = rows * 16;
 
-    for (int i = search_rows; i >= 0; --i) {
-      int base = i << 5;
-      __m256i f = _mm256_loadu_si256(reinterpret_cast<const __m256i *>(fingerprints + base));
+    for (int row = search_rows; row >= 0; --row) {
+      int base = row << 5;
+      __m256i f = _mm256_loadu_si256(
+          reinterpret_cast<const __m256i *>(fingerprints + base));
       __m256i r = _mm256_cmpeq_epi8(f, target);
       auto res = (unsigned int)_mm256_movemask_epi8(r);
       while (res > 0) {

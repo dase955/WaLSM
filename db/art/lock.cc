@@ -6,6 +6,8 @@
 
 #include <immintrin.h>
 
+#include "port/port.h"
+
 namespace ROCKSDB_NAMESPACE {
 
 bool OptLock::IsLocked(uint32_t version) {
@@ -48,14 +50,17 @@ void OptLock::UpgradeToWriteLockOrRestart(uint32_t &version, bool &need_restart)
 
 void OptLock::UpgradeToWriteLock() {
   uint32_t version;
-  while (true) {
-    version = AwaitNodeUnlocked();
-    if (type_version_lock_.compare_exchange_strong(
+  for (size_t tries = 0;; ++tries) {
+    version = type_version_lock_.load(std::memory_order_acquire);
+    if ((version & 0b10) != 0b10 &&
+        type_version_lock_.compare_exchange_strong(
             version, version + 0b10, std::memory_order_release)) {
       version = version + 0b10;
       return;
-    } else {
-      _mm_pause();
+    }
+    port::AsmVolatilePause();
+    if (tries > 100) {
+      std::this_thread::yield();
     }
   }
 }
@@ -83,24 +88,16 @@ void OptLock::WriteUnlockObsolete() {
 
 uint32_t OptLock::AwaitNodeUnlocked() {
   uint32_t version;
-  while (((version = type_version_lock_.load(std::memory_order_acquire)) & 0b10) == 0b10) {
-    _mm_pause();
-  }
-  return version;
-}
-
-void SpinLock::lock() {
-  for (;;) {
-    if (!lock_.exchange(true, std::memory_order_acquire)) {
-      break;
+  for (size_t tries = 0;; ++tries) {
+    if (((version = type_version_lock_.load(std::memory_order_acquire))
+         & 0b10) != 0b10) {
+      return version;
     }
-    while (lock_.load(std::memory_order_release)) {
-      __builtin_ia32_pause();
+    port::AsmVolatilePause();
+    if (tries > 100) {
+      std::this_thread::yield();
     }
   }
 }
 
-void SpinLock::unlock() {
-  lock_.store(false, std::memory_order_release);
-}
 }  // namespace ROCKSDB_NAMESPACE

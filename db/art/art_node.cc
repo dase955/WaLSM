@@ -155,7 +155,7 @@ ArtNodeHeader* AllocateArtAfterSplit(
 }
 
 ArtNodeHeader* AllocateArtNode(ArtNodeType node_type) {
-  ArtNodeHeader* node;
+  ArtNodeHeader* node = nullptr;
   switch (node_type) {
     case kNode4:
       node = (ArtNodeHeader*)(new ArtNode4());
@@ -303,10 +303,6 @@ InnerNode* FindChildInNode256(ArtNodeHeader* art, unsigned char c) {
 }
 
 InnerNode* FindChild(InnerNode* node, unsigned char c) {
-  if (IS_LEAF(node->status_)) {
-    return nullptr;
-  }
-
   auto art = node->art;
   switch (art->art_type_) {
     case kNode4:
@@ -429,7 +425,7 @@ void InsertToArtNode(
     ArtNodeHeader* art, InnerNode* leaf, unsigned char c, bool insert_to_group) {
   static int fullNum[5] = {0, 4, 16, 48, 256};
 
-  InnerNode* left_node;
+  InnerNode* left_node = nullptr;
   switch (art->art_type_) {
     case kNode4:
       left_node = InsertToArtNode4(art, leaf, c);

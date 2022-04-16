@@ -21,7 +21,8 @@ uint64_t Hash(const char* key, size_t n, [[maybe_unused]] ValueType value_type) 
   uint32_t prefix = 0;
   // We don't store first two char
   memcpy((char*)&prefix + 1, key + 2, std::max(0, std::min((int)n - 2, 3)));
-  // TODO: Store type in hash is unnecessary because we always need to read vlog when searching
+  // TODO: Store type in hash is unnecessary
+  // since we always need to read vlog when searching
   ((char*)&prefix)[0] = static_cast<char>(0);
   return (static_cast<uint64_t>(prefix) << 32) + Hash(key, n, 397);
 }
@@ -29,14 +30,22 @@ uint64_t Hash(const char* key, size_t n, [[maybe_unused]] ValueType value_type) 
 int EstimateDistinctCount(const uint8_t hyperLogLog[64]) {
   static float alpha = 0.709 * 64 * 64;
   static float factor[32] = {
-      1.0f, 0.5f, 0.25f, 0.125f,
-      0.0625f, 0.03125f, 0.015625f, 0.0078125f,
-      0.00390625f, 0.001953125f, 0.0009765625f, 0.00048828125f,
-      0.000244140625f, 0.0001220703125f, 6.103515625e-05f, 3.0517578125e-05f,
-      1.52587890625e-05f, 7.62939453125e-06f, 3.814697265625e-06f, 1.9073486328125e-06f,
-      9.5367431640625e-07f, 4.76837158203125e-07f, 2.384185791015625e-07f, 1.1920928955078125e-07f,
-      5.960464477539063e-08f, 2.9802322387695312e-08f, 1.4901161193847656e-08f, 7.450580596923828e-09f,
-      3.725290298461914e-09f, 1.862645149230957e-09f, 9.313225746154785e-10f, 4.656612873077393e-10f,
+      1.0f, 0.5f,
+      0.25f, 0.125f,
+      0.0625f, 0.03125f,
+      0.015625f, 0.0078125f,
+      0.00390625f, 0.001953125f,
+      0.0009765625f, 0.00048828125f,
+      0.000244140625f, 0.0001220703125f,
+      6.103515625e-05f, 3.0517578125e-05f,
+      1.52587890625e-05f, 7.62939453125e-06f,
+      3.814697265625e-06f, 1.9073486328125e-06f,
+      9.5367431640625e-07f, 4.76837158203125e-07f,
+      2.384185791015625e-07f, 1.1920928955078125e-07f,
+      5.960464477539063e-08f, 2.9802322387695312e-08f,
+      1.4901161193847656e-08f, 7.450580596923828e-09f,
+      3.725290298461914e-09f, 1.862645149230957e-09f,
+      9.313225746154785e-10f, 4.656612873077393e-10f,
   };
 
   float sum = 0.f;
@@ -84,7 +93,6 @@ InnerNode* AllocateLeafNode(uint8_t prefix_length,
   nvm_node->meta.dram_pointer_ = inode;
   nvm_node->meta.next1 = next_node ? mgr.relative(next_node->nvm_node_) : -1;
 
-  // pmem_persist
   return inode;
 }
 
@@ -110,7 +118,8 @@ void InsertInnerNode(InnerNode* node, InnerNode* inserted) {
     prev_nvm_node->meta.next2 =
         GetNodeAllocator().relative(inserted_nvm_node);
   }
-  // pmem_persist(prev_nvm_node, 32);
+  PERSIST(inserted_nvm_node, CACHE_LINE_SIZE);
+  PERSIST(prev_nvm_node, CACHE_LINE_SIZE);
 }
 
 void InsertSplitInnerNode(InnerNode* node, InnerNode* first_inserted,
@@ -135,14 +144,14 @@ void InsertSplitInnerNode(InnerNode* node, InnerNode* first_inserted,
         GetNodeAllocator().relative(inserted_first_nvm_node);
     inserted_last_nvm_node->meta.next1 = prev_nvm_node->meta.next2;
   }
-  // _mm_clwb(inserted_last_nvm_node->meta); _mm_sfence();
+  PERSIST(inserted_last_nvm_node, CACHE_LINE_SIZE);
 
   SET_LAST_PREFIX(new_hdr, 0);
   SET_PRELEN(new_hdr, prefix_length);
   SET_SIZE(new_hdr, 0);
   SET_ROWS(new_hdr, 0);
   prev_nvm_node->meta.header = new_hdr;
-  // _mm_clwb(node->meta); _mm_sfence();
+  PERSIST(prev_nvm_node, CACHE_LINE_SIZE);
 
   last_inserted->next_node_ = prev_node->next_node_;
   prev_node->next_node_ = first_inserted;
@@ -151,37 +160,36 @@ void InsertSplitInnerNode(InnerNode* node, InnerNode* first_inserted,
   node->last_child_node_ = last_inserted;
 }
 
-void InsertNewNVMNode(InnerNode* node, NVMNode* new_nvm_node) {
+void InsertNewNVMNode(InnerNode* node, NVMNode* inserted) {
   auto old_nvm_node = node->nvm_node_;
-  auto hdr = old_nvm_node->meta.header;
-  SET_TAG(hdr, ALT_FIRST_TAG);
-  SET_ROWS(hdr, 0);
-  SET_SIZE(hdr, 0);
-  memset(new_nvm_node->data, 0, 3584);
-  memset(new_nvm_node->meta.fingerprints_, 0, 224);
-  new_nvm_node->meta.header = hdr;
-  new_nvm_node->meta.dram_pointer_ = node;
+  auto inserted_hdr = old_nvm_node->meta.header;
+  SET_TAG(inserted_hdr, ALT_FIRST_TAG);
+  SET_ROWS(inserted_hdr, 0);
+  SET_SIZE(inserted_hdr, 0);
 
   {
     std::lock_guard<SpinMutex> link_lk(node->link_lock_);
 
     node->backup_nvm_node_ = old_nvm_node;
-    node->nvm_node_ = new_nvm_node;
+    node->nvm_node_ = inserted;
 
     auto old_hdr = old_nvm_node->meta.header;
     auto new_hdr = old_hdr;
 
     if (GET_TAG(old_hdr, ALT_FIRST_TAG)) {
-      new_nvm_node->meta.next1 = old_nvm_node->meta.next1;
-      old_nvm_node->meta.next1 = GetNodeAllocator().relative(new_nvm_node);
+      inserted->meta.next1 = old_nvm_node->meta.next1;
+      old_nvm_node->meta.next1 = GetNodeAllocator().relative(inserted);
     } else {
-      new_nvm_node->meta.next1 = old_nvm_node->meta.next2;
-      old_nvm_node->meta.next2 = GetNodeAllocator().relative(new_nvm_node);
+      inserted->meta.next1 = old_nvm_node->meta.next2;
+      old_nvm_node->meta.next2 = GetNodeAllocator().relative(inserted);
     }
-    // _mm_clwb(nvmNode->meta); _mm_sfence();
+
+    inserted->meta.header = inserted_hdr;
+    inserted->meta.dram_pointer_ = node;
+    PERSIST(inserted, CACHE_LINE_SIZE);
 
     old_nvm_node->meta.header = new_hdr;
-    // _mm_clwb(node->meta); _mm_sfence();
+    PERSIST(old_nvm_node, CACHE_LINE_SIZE);
   }
 }
 
@@ -197,7 +205,8 @@ void RemoveOldNVMNode(InnerNode* node) {
     nvm_node->meta.next2 = GetNextRelativeNode(nvm_node->meta.next2);
   }
 
-  // _mm_clwb(node->nvm_node_->meta); _mm_sfence();
+  PERSIST(nvm_node, CACHE_LINE_SIZE);
+
   auto backup_nvm_node = next_node->backup_nvm_node_;
   next_node->backup_nvm_node_ = nullptr;
   GetNodeAllocator().DeallocateNode(backup_nvm_node);

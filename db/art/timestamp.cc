@@ -77,15 +77,15 @@ void Timestamps::DecayHeat() {
   accumulate_ *= GetDecayFactor(delta);
 }
 
-void Timestamps::UpdateHeat() {
+bool Timestamps::UpdateHeat() {
   auto cur_ts = GetTimestamp();
   if (likely(cur_ts <= last_ts_)) {
-    return;
+    return false;
   }
 
   std::lock_guard<SpinMutex> lk(update_lock_);
   if (unlikely(cur_ts <= last_ts_)) {
-    return;
+    return false;
   }
   last_ts_ = cur_ts;
 
@@ -94,12 +94,14 @@ void Timestamps::UpdateHeat() {
   cur_ts -= last_global_dec_;
   if (size_ < 8) {
     timestamps[size_++] = cur_ts;
-    return;
+    return true;
   }
 
   accumulate_ += CalculateHeat(timestamps[last_insert_]);
   timestamps[last_insert_++] = cur_ts;
   last_insert_ %= 8;
+
+  return true;
 }
 
 bool Timestamps::GetCurrentHeatAndTs(

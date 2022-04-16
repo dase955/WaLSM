@@ -48,7 +48,6 @@ NodeAllocator::~NodeAllocator() {
 
 NVMNode* NodeAllocator::AllocateNode() {
   char* ptr = free_pages_.pop_front();
-  memset(ptr, 0, PAGE_SIZE);
   return (NVMNode*)ptr;
 }
 
