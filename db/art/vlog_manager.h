@@ -18,7 +18,7 @@ struct alignas(CACHE_LINE_SIZE) AlignedLock {
 enum SegmentStatus : uint8_t {
   kSegmentFree,     // Initial status
   kSegmentWriting,  // Writing records to segment
-  kSegmentWriten,   // Segment is full, and wait for gc
+  kSegmentWritten,  // Segment is full, and wait for gc
   kSegmentGC,       // Segment is doing gc
 };
 
@@ -75,11 +75,11 @@ class VLogManager {
 
   RecordIndex GetFirstIndex(size_t wal_size) const;
 
+  void FreeQueue();
+
   void TestGC();
 
  private:
-  void RecoverOnRestart();
-
   void BGWorkGarbageCollection();
 
   void ChangeStatus(char* segment, SegmentStatus status);
@@ -110,6 +110,10 @@ class VLogManager {
   TQueueConcurrent<char*> free_pages_;
 
   TQueueConcurrent<char*> used_pages_;
+
+  // segment should push into a separate queue after gc,
+  // because compaction thread may still need these segments.
+  TQueueConcurrent<char*> gc_pages_;
 
   uint64_t vlog_file_size_;
 

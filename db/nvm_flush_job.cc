@@ -167,8 +167,9 @@ Status NVMFlushJob::Run(LogsWithPrepTracker* prep_tracker,
     IOStatus tmp_io_s;
     s = cfd_->imm()->TryInstallNVMFlushResults(
         cfd_, mutable_cf_options_, cfd_->mem(), prep_tracker, versions_, db_mutex_,
-        meta_.fd.GetNumber(), &job_context_->memtables_to_free, db_directory_,
-        log_buffer_, &committed_flush_jobs_info_, &tmp_io_s);
+        meta_.fd.GetNumber(),
+        // &job_context_->memtables_to_free,
+        db_directory_, log_buffer_, &committed_flush_jobs_info_, &tmp_io_s);
     if (!tmp_io_s.ok()) {
       io_status_ = tmp_io_s;
     }
@@ -233,14 +234,14 @@ Status NVMFlushJob::WriteLevel0Table() {
       log_buffer_->FlushBufferToLog();
     }
 
-    event_logger_->Log() << "job" << job_context_->job_id << "event"
+    /*event_logger_->Log() << "job" << job_context_->job_id << "event"
                          << "flush_started"
                          << "num_memtables" << 1 << "num_entries"
                          << job_->total_num_entries_ << "num_deletes"
                          << job_->total_num_deletes_ << "total_data_size"
                          << job_->total_data_size_ << "memory_usage"
                          << job_->total_memory_usage_ << "flush_reason"
-                         << "Art compaction";
+                         << "Art compaction";*/
 
     {
       ROCKS_LOG_INFO(db_options_.info_log,
@@ -271,15 +272,16 @@ Status NVMFlushJob::WriteLevel0Table() {
 
       IOStatus io_s;
       s = BuildTableFromArt(
-          job_, dbname_, versions_,
-          db_options_.env, db_options_.fs.get(),
+          job_, dbname_, db_options_.env, db_options_.fs.get(),
           *cfd_->ioptions(), mutable_cf_options_, file_options_,
           cfd_->table_cache(), &meta_,
           cfd_->internal_comparator(),
           cfd_->int_tbl_prop_collector_factories(), cfd_->GetID(),
-          cfd_->GetName(), existing_snapshots_,
-          earliest_write_conflict_snapshot_, snapshot_checker_,
-          output_compression_, mutable_cf_options_.sample_for_compression,
+          cfd_->GetName(),
+          // existing_snapshots_,
+          // earliest_write_conflict_snapshot_, snapshot_checker_,
+          output_compression_,
+          mutable_cf_options_.sample_for_compression,
           mutable_cf_options_.compression_opts,
           mutable_cf_options_.paranoid_file_checks, cfd_->internal_stats(),
           TableFileCreationReason::kFlush, &io_s, io_tracer_, event_logger_,

@@ -20,29 +20,16 @@ class VLogManager;
 struct NVMNode;
 class DBImpl;
 
-struct CompactionRec {
-  std::string key;
-  std::string value;
-  uint64_t seq_num_;
-  ValueType   type;
-
-  CompactionRec() = default;
-
-  CompactionRec(std::string& key_, std::string& value_, uint64_t seq_num, ValueType type_)
-      : key(key_), value(value_), seq_num_(seq_num), type(type_){};
-
-  friend bool operator<(const CompactionRec& l, const CompactionRec& r) {
-    return l.key < r.key;
-  }
-};
-
 struct ArtCompactionJob {
-  uint64_t total_num_entries_ = 0;
+  /*uint64_t total_num_entries_ = 0;
   uint64_t total_num_deletes_ = 0;
   uint64_t total_data_size_ = 0;
-  size_t total_memory_usage_ = 0;
+  size_t total_memory_usage_ = 0;*/
   uint64_t oldest_key_time_;
-  std::vector<CompactionRec> compacted_data_;
+
+  VLogManager* vlog_manager_;
+  std::vector<NVMNode*> nvm_nodes_;
+  std::vector<RecordIndex>* compacted_indexes_;
 };
 
 class Compactor {

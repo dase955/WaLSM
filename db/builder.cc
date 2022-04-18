@@ -14,6 +14,10 @@
 #include <vector>
 
 #include "db/art/compactor.h"
+#include "db/art/macros.h"
+#include "db/art/nvm_node.h"
+#include "db/art/utils.h"
+#include "db/art/vlog_manager.h"
 #include "db/blob/blob_file_builder.h"
 #include "db/compaction/compaction_iterator.h"
 #include "db/dbformat.h"
@@ -348,9 +352,77 @@ Status BuildTable(
   return s;
 }
 
+struct CompactionRec {
+  std::string key;
+  std::string value;
+  uint64_t    seq_num_;
+  ValueType   type;
+
+  CompactionRec() = default;
+
+  CompactionRec(std::string& key_, std::string& value_,
+                uint64_t seq_num, ValueType type_)
+      : key(key_), value(value_), seq_num_(seq_num), type(type_){};
+
+  friend bool operator<(const CompactionRec& l, const CompactionRec& r) {
+    return l.key < r.key;
+  }
+};
+
+void ReadAndBuild(ArtCompactionJob* job,
+                  TableBuilder* builder,
+                  FileMetaData* meta) {
+  const size_t kReportFlushIOStatsEvery = 1048576;
+
+  SequenceNumber seq_num = 0;
+  RecordIndex record_index = 0;
+  std::string dummy_string;
+  std::vector<CompactionRec> kvs;
+
+  for (auto nvm_node : job->nvm_nodes_) {
+    auto data = nvm_node->data;
+    size_t size = GET_SIZE(nvm_node->meta.header);
+
+    kvs.clear();
+    for (size_t i = 0; i < size; ++i) {
+      auto vptr = data[i * 2 + 1];
+      if (!vptr) {
+        continue;
+      }
+
+      std::string key, value;
+      auto value_type = job->vlog_manager_->GetKeyValue(
+          vptr, key, value, seq_num, record_index);
+      kvs.emplace_back(key, value, seq_num, value_type);
+
+      GetActualVptr(vptr);
+      job->compacted_indexes_[vptr >> 20].push_back(record_index);
+    }
+
+    std::stable_sort(kvs.begin(), kvs.end());
+
+    std::string& last_key = dummy_string;
+    for (auto& kv : kvs) {
+      if (kv.key != last_key) {
+        last_key = kv.key;
+        InternalKey ikey(kv.key, kv.seq_num_, kv.type);
+        builder->Add(ikey.Encode(), kv.value);
+        meta->UpdateBoundaries(
+            ikey.Encode(), kv.value, kv.seq_num_, kv.type);
+      }
+    }
+
+    // TODO(noetzli): Update stats after flush, too.
+    if (IOSTATS(bytes_written) >= kReportFlushIOStatsEvery) {
+      ThreadStatusUtil::SetThreadOperationProperty(
+          ThreadStatus::FLUSH_BYTES_WRITTEN, IOSTATS(bytes_written));
+    }
+  }
+}
+
 Status BuildTableFromArt(
     ArtCompactionJob *job,
-    const std::string& dbname, VersionSet* versions, Env* env, FileSystem* fs,
+    const std::string& dbname, Env* env, FileSystem* fs,
     const ImmutableCFOptions& ioptions,
     const MutableCFOptions& mutable_cf_options, const FileOptions& file_options,
     TableCache* table_cache,
@@ -359,9 +431,10 @@ Status BuildTableFromArt(
     const std::vector<std::unique_ptr<IntTblPropCollectorFactory>>*
         int_tbl_prop_collector_factories,
     uint32_t column_family_id, const std::string& column_family_name,
-    std::vector<SequenceNumber> snapshots,
-    SequenceNumber earliest_write_conflict_snapshot,
-    SnapshotChecker* snapshot_checker, const CompressionType compression,
+    // std::vector<SequenceNumber> snapshots,
+    // SequenceNumber earliest_write_conflict_snapshot,
+    // SnapshotChecker* snapshot_checker,
+    const CompressionType compression,
     uint64_t sample_for_compression, const CompressionOptions& compression_opts,
     bool paranoid_file_checks, InternalStats* internal_stats,
     TableFileCreationReason reason, IOStatus* io_status,
@@ -373,7 +446,6 @@ Status BuildTableFromArt(
     const std::string& db_session_id) {
 
   // Reports the IOStats for flush for every following bytes.
-  const size_t kReportFlushIOStatsEvery = 1048576;
   OutputValidator output_validator(
       internal_comparator,
       /*enable_order_check=*/
@@ -398,7 +470,10 @@ Status BuildTableFromArt(
   compression_opts_for_flush.zstd_max_train_bytes = 0;
   {
     std::unique_ptr<FSWritableFile> file;
+#ifndef NDEBUG
     bool use_direct_writes = file_options.use_direct_writes;
+    TEST_SYNC_POINT_CALLBACK("BuildTable:create_file", &use_direct_writes);
+#endif  // !NDEBUG
     IOStatus io_s = NewWritableFile(fs, fname, &file, file_options);
     assert(s.ok());
     s = io_s;
@@ -422,32 +497,7 @@ Status BuildTableFromArt(
         0 /*target_file_size*/, file_creation_time, db_id, db_session_id);
   }
 
-  for (auto &rec : job->compacted_data_) {
-    InternalKey ikey(rec.key, rec.seq_num_, rec.type);
-    builder->Add(ikey.Encode(), rec.value);
-    meta->UpdateBoundaries(
-        ikey.Encode(), rec.value, rec.seq_num_, rec.type);
-  }
-
-  /*for (; c_iter.Valid(); c_iter.Next()) {
-    const Slice& key = c_iter.key();
-    const Slice& value = c_iter.value();
-    const ParsedInternalKey& ikey = c_iter.ikey();
-    // Generate a rolling 64-bit hash of the key and values
-    s = output_validator.Add(key, value);
-    if (!s.ok()) {
-      break;
-    }
-    builder->Add(key, value);
-    meta->UpdateBoundaries(key, value, ikey.sequence, ikey.type);
-
-    // TODO(noetzli): Update stats after flush, too.
-    if (io_priority == Env::IO_HIGH &&
-        IOSTATS(bytes_written) >= kReportFlushIOStatsEvery) {
-      ThreadStatusUtil::SetThreadOperationProperty(
-          ThreadStatus::FLUSH_BYTES_WRITTEN, IOSTATS(bytes_written));
-    }
-  }*/
+  ReadAndBuild(job, builder, meta);
 
   TEST_SYNC_POINT("BuildTable:BeforeFinishBuildTable");
   s = builder->Finish();

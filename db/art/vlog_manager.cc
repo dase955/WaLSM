@@ -5,55 +5,23 @@
 #include "vlog_manager.h"
 
 #include <sys/mman.h>
-#include <sys/types.h>
-#include <unistd.h>
-#include <fcntl.h>
 #include <cassert>
-#include <csignal>
 #include <string>
 #include <cstring>
 
+#include <util/hash.h>
+#include <util/autovector.h>
+#include "db/write_batch_internal.h"
+#include "db/art/nvm_manager.h"
 #include "db/art/nvm_node.h"
 #include "db/art/utils.h"
 #include "db/art/global_memtable.h"
 #include "db/art/node_allocator.h"
-#include "util/autovector.h"
 
 namespace ROCKSDB_NAMESPACE {
 
-#ifdef USE_PMEM
-char* OpenVLogFile(int64_t total_size) {
-  int fd = open(VLOG_PATH, O_CREAT|O_RDWR, 0666);
-  assert(-1 != fd);
-
-  posix_fallocate(fd, 0, total_size);
-  close(fd);
-
-  int is_pmem;
-  size_t mapped_len;
-  char* ptr = (char*)pmem_map_file(
-      VLOG_PATH, total_size, PMEM_FILE_CREATE, 0666, &mapped_len, &is_pmem);
-  assert(is_pmem && mapped_len == (size_t)total_size);
-
-  return ptr;
-}
-#else
-char* OpenVLogFile(int64_t total_size) {
-  int fd = open(VLOG_PATH, O_RDWR|O_CREAT, 00777);
-  assert(-1 != fd);
-
-  //posix_fallocate(fd, 0, total_size);
-  lseek(fd, total_size - 1, SEEK_SET);
-  write(fd, "", 1);
-
-  char* ptr = (char *)mmap(nullptr, total_size, PROT_READ | PROT_WRITE,MAP_SHARED, fd, 0);
-  close(fd);
-  return ptr;
-}
-#endif
-
 int SearchVptr(
-    InnerNode* inner_node, uint64_t hash, int rows, uint64_t vptr) {
+    InnerNode* inner_node, uint8_t hash, int rows, uint64_t vptr) {
 
   int buffer_size = GET_NODE_BUFFER_SIZE(inner_node->status_);
   for (int i = 0; i < buffer_size; ++i) {
@@ -69,7 +37,7 @@ int SearchVptr(
   int search_rows = (rows + 1) / 2 - 1;
   int size = rows * 16;
 
-  __m256i target = _mm256_set1_epi8((uint8_t)hash);
+  __m256i target = _mm256_set1_epi8(hash);
   for (int i = search_rows; i >= 0; --i) {
     int base = i << 5;
     __m256i f = _mm256_loadu_si256(reinterpret_cast<const __m256i *>(fingerprints + base));
@@ -90,9 +58,7 @@ int SearchVptr(
 
 /////////////////////////////////////////////////////////
 
-void VLogManager::RecoverOnRestart() {
-
-}
+auto RecordPrefixSize = WriteBatchInternal::kRecordPrefixSize;
 
 void VLogManager::PopFreeSegment() {
   cur_segment_ = free_pages_.pop_front();
@@ -124,7 +90,7 @@ VLogManager::VLogManager(const DBOptions& options)
       force_gc_ratio_((size_t)(options.vlog_force_gc_ratio_ * vlog_segment_num_)),
       gc_mu_(), gc_cv_(&gc_mu_), thread_stop_(false) {
 
-  pmemptr_ = OpenVLogFile(vlog_file_size_);
+  pmemptr_ = GetMappedAddress("vlog");
   char* cur_ptr = pmemptr_;
   for (size_t i = 0; i < vlog_segment_num_; ++i) {
     auto header = new (cur_ptr) VLogSegmentHeader();
@@ -148,7 +114,6 @@ VLogManager::~VLogManager() {
   thread_stop_ = true;
   gc_cv_.Signal();
   gc_thread_.join();
-  munmap(pmemptr_, vlog_file_size_);
 }
 
 void VLogManager::SetMemtable(GlobalMemtable* mem) {
@@ -161,7 +126,7 @@ uint64_t VLogManager::AddRecord(const Slice& slice, uint32_t record_count) {
 
   uint32_t left = slice.size();
   while (segment_remain_ < left) {
-    ChangeStatus(cur_segment_, kSegmentWriten);
+    ChangeStatus(cur_segment_, kSegmentWritten);
     used_pages_.emplace_back(cur_segment_);
     PopFreeSegment();
   }
@@ -391,7 +356,7 @@ void VLogManager::BGWorkGarbageCollection() {
           }
 
           auto& key = cur_data.key_;
-          auto hash = Hash(key.data(), key.size());
+          auto hash = (uint8_t)Hash(key.data(), key.size(), 397);
           auto found_index = SearchVptr(
               inner_node, hash, rows, cur_data.vptr_);
           if (found_index != -1) {
@@ -415,7 +380,7 @@ void VLogManager::BGWorkGarbageCollection() {
     memset(header_gc->bitmap_, -1, vlog_bitmap_size_);
     // pmem_persist(header, VLogHeaderSize);
 
-    free_pages_.emplace_back((char*)header_gc);
+    gc_pages_.emplace_back((char*)header_gc);
     free_pages_.emplace_front((char*)new_segment);
     header_gc->status_ = kSegmentGC;
     gc_ = false;
@@ -451,7 +416,7 @@ char* VLogManager::WriteToNewSegment(char* segment, std::string& record,
   auto count = header->total_count_;
   size_t remain = vlog_segment_size_ - offset;
   while (remain < left) {
-    ChangeStatus(segment, kSegmentWriten);
+    ChangeStatus(segment, kSegmentWritten);
     used_pages_.emplace_back(segment);
     segment = free_pages_.pop_front();
     ChangeStatus(segment, kSegmentWriting);
@@ -472,6 +437,14 @@ char* VLogManager::WriteToNewSegment(char* segment, std::string& record,
   PERSIST(header, CACHE_LINE_SIZE);
 
   return segment;
+}
+
+void VLogManager::FreeQueue() {
+  size_t size = gc_pages_.size();
+  while (size--) {
+    auto segment = gc_pages_.pop_front();
+    free_pages_.emplace_back(segment);
+  }
 }
 
 void VLogManager::TestGC() {
@@ -525,7 +498,7 @@ void VLogManager::TestGC() {
 
       do {
         auto& key = cur_data.key_;
-        auto hash = Hash(key.data(), key.size());
+        auto hash = (uint8_t)Hash(key.data(), key.size(), 397);
         auto found_index = SearchVptr(
             inner_node, hash, rows, cur_data.vptr_);
         if (found_index != -1) {

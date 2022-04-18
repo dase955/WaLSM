@@ -57,6 +57,8 @@ void Compactor::BGWorkDoCompaction() {
       break;
     }
 
+    vlog_manager_->FreeQueue();
+
     if (MemTotalSize.load(std::memory_order_relaxed) < compaction_threshold_) {
       std::this_thread::sleep_for(std::chrono::milliseconds (100));
       continue;
@@ -91,7 +93,6 @@ void Compactor::DoCompaction() {
   InnerNode* end_node = chosen_group_->last_node_;
   assert(IS_GROUP_START(start_node->status_));
 
-  NVMNode* first_nvm_backup = GetNodeAllocator().AllocateNode();
   int32_t compacted_size = chosen_group_->group_size_.load(std::memory_order_relaxed);
   std::deque<InnerNode*> candidates;
   std::vector<NVMNode*> nvm_nodes;
@@ -105,22 +106,19 @@ void Compactor::DoCompaction() {
   auto vlog_segment_size = vlog_manager_->vlog_segment_size_;
   auto vlog_bitmap_size = vlog_manager_->vlog_bitmap_size_;
 
-  ArtCompactionJob compaction_job;
-  autovector<RecordIndex> compacted_records[vlog_segment_num];
-
   auto node_after_end = end_node->next_node_;
   auto cur_node = start_node->next_node_;
 
+  // Get candidate nodes
   while (cur_node != node_after_end) {
     std::lock_guard<std::mutex> flush_lk(cur_node->flush_mutex_);
-
     if (unlikely(!IS_LEAF(cur_node->status_) ||
                  cur_node->heat_group_ != chosen_group_)) {
       cur_node = cur_node->next_node_;
       continue;
     }
 
-    auto new_nvm_node = GetNodeAllocator().AllocateNode();
+    auto new_nvm_node = GetNodeAllocator()->AllocateNode();
     InsertNewNVMNode(cur_node, new_nvm_node);
     candidates.push_back(cur_node);
     nvm_nodes.push_back(cur_node->backup_nvm_node_);
@@ -133,66 +131,13 @@ void Compactor::DoCompaction() {
     cur_node = cur_node->next_node_;
   }
 
-  // Sort data
-  SequenceNumber seq_num = 0;
-  RecordIndex record_index = 0;
-
-  std::vector<CompactionRec> kvs;
-  kvs.reserve(NVM_MAX_SIZE);
-
-  std::string last_prefix;
-  for (auto& nvm_node : nvm_nodes) {
-    auto meta = nvm_node->meta;
-    auto data = nvm_node->data;
-    size_t size = GET_SIZE(meta.header);
-
-    kvs.clear();
-    for (size_t i = 0; i < size; ++i) {
-      auto vptr = data[i * 2 + 1];
-      if (!vptr) {
-        continue;
-      }
-
-      std::string key, value;
-      auto value_type = vlog_manager_->GetKeyValue(
-          vptr, key, value, seq_num, record_index);
-      kvs.emplace_back(key, value, seq_num, value_type);
-
-      GetActualVptr(vptr);
-      compacted_records[vptr >> 20].push_back(record_index);
-    }
-
-    std::stable_sort(kvs.begin(), kvs.end());
-    std::string last_key;
-    if (kvs.empty()) {
-      continue;
-    }
-
-    //int pre_len = GET_PRELEN(nvm_node->meta.header);
-    //std::string cur_prefix = kvs[0].key.substr(0, pre_len);
-
-    for (auto& kv : kvs) {
-      if (kv.key != last_key) {
-        //assert(kv.key.substr(0, pre_len) == cur_prefix);
-        last_key = kv.key;
-        num_entries += kv.type == kTypeValue;
-        num_deletes += kv.type == kTypeDeletion;
-        total_data_size += (kv.key.length() + kv.value.length());
-        compaction_job.compacted_data_.emplace_back(kv);
-      }
-    }
-
-    //assert(last_prefix < cur_prefix);
-    //last_prefix = cur_prefix;
-  }
-
-  compaction_job.oldest_key_time_ = oldest_key_time;
-  compaction_job.total_num_deletes_ = num_deletes;
-  compaction_job.total_num_entries_ = num_entries;
-  compaction_job.total_memory_usage_ = total_data_size;
-  compaction_job.total_data_size_ = total_data_size;
-
   // Compaction
+  ArtCompactionJob compaction_job;
+  compaction_job.vlog_manager_ = vlog_manager_;
+  compaction_job.nvm_nodes_ = std::vector<NVMNode*>(
+      nvm_nodes.begin(), nvm_nodes.end());
+  compaction_job.compacted_indexes_ =
+      new std::vector<RecordIndex>[vlog_segment_num];
   db_impl_->SyncCallFlush(&compaction_job);
 
   // remove compacted node form list
@@ -210,39 +155,40 @@ void Compactor::DoCompaction() {
     cur_node = cur_node->next_node_;
   }
 
-  GetNodeAllocator().DeallocateNode(first_nvm_backup);
-
   for (size_t i = 0; i < vlog_segment_num; ++i) {
-    auto& vec = compacted_records[i];
-    std::sort(vec.begin(), vec.end());
+    auto& indexes = compaction_job.compacted_indexes_[i];
     auto header = (VLogSegmentHeader*)(vlog_manager_->pmemptr_ + vlog_segment_size * i);
     if (!header->lock.mutex_.try_lock()) {
       continue;
     }
-    if (header->status_ != kSegmentWriten) {
+    if (header->status_ != kSegmentWritten) {
       header->lock.mutex_.unlock();
       continue;
     }
     auto bitmap = header->bitmap_;
-    for (auto& index : vec) {
+    for (auto& index : indexes) {
       assert(index / 8 < vlog_bitmap_size);
       bitmap[index / 8] &= ~(1 << (index % 8));
     }
-    header->compacted_count_ += vec.size();
-    // Just clwb, not use sfence
-    // pmem_persist(header, VLogHeaderSize);
+    header->compacted_count_ += indexes.size();
+    PERSIST(header, vlog_manager_->vlog_header_size_);
 
     header->lock.mutex_.unlock();
   }
 
   // Use sfence after all vlog are modified
-  // _mm_sfence();
+  MEMORY_BARRIER;
 
 #ifndef NDEBUG
-  printf("%p Compaction done: size_=%d, number of free pages: %zu\n",
-         chosen_group_, compacted_size, GetNodeAllocator().GetNumFreePages());
+  printf("%p Compaction done: size_=%d, number of free pages: "
+         "%zu, free vlog pages: %zu\n",
+         chosen_group_, compacted_size,
+         GetNodeAllocator()->GetNumFreePages(),
+         vlog_manager_->free_pages_.size());
 #endif
   chosen_group_->UpdateSize(-compacted_size);
+
+  delete[] compaction_job.compacted_indexes_;
 }
 
 } // namespace ROCKSDB_NAMESPACE

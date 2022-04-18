@@ -10,7 +10,11 @@
 // WriteBatch::rep_ :=
 //    sequence: fixed64
 //    count: fixed32
-//    data: record[count]
+//    data: record_data[count]
+// record_data :=
+//    SequenceNumber: fix64
+//    RecordIndex: fixed32
+//    record
 // record :=
 //    kTypeValue varstring varstring
 //    kTypeDeletion varstring
@@ -383,7 +387,7 @@ bool WriteBatch::HasMerge() const {
 bool ReadKeyFromWriteBatchEntry(Slice* input, Slice* key, bool cf_record) {
   assert(input != nullptr && key != nullptr);
   // Skip tag byte
-  input->remove_prefix(1);
+  input->remove_prefix(WriteBatchInternal::kRecordPrefixSize);
 
   if (cf_record) {
     // Skip column_family bytes
@@ -418,7 +422,7 @@ Status ReadRecordFromWriteBatch(Slice* input, char* tag,
                                 Slice* value, Slice* blob, Slice* xid) {
   assert(key != nullptr && value != nullptr);
   *tag = (*input)[0];
-  input->remove_prefix(1);
+  input->remove_prefix(WriteBatchInternal::kRecordPrefixSize);
   *column_family = 0;  // default
   switch (*tag) {
     case kTypeColumnFamilyValue:

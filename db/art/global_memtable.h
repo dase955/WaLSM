@@ -5,9 +5,7 @@
 // Inner nodes(non-leaf nodes) are stored in dram, and leaf nodes are stored in NVM.
 // Data in nodes are unsorted, fingerprints_ are used to speed up query efficiency.
 // There have some assumption about input data:
-// 1. 0th and 255th node will never be used
-// 2. extended ascii are not used
-// 3. Key value size_ cannot exceed 64M
+// 1. Key value size_ cannot exceed 64M
 // TODO:
 // 1. keys smaller than 8byte can be directly stored in node
 
@@ -19,6 +17,7 @@
 #include <atomic>
 #include <mutex>
 #include <util/mutexlock.h>
+#include <util/autovector.h>
 #include <rocksdb/rocksdb_namespace.h>
 #include <rocksdb/slice.h>
 #include "timestamp.h"
@@ -28,101 +27,91 @@ namespace ROCKSDB_NAMESPACE {
 // Forward declarations
 struct NVMNode;
 struct HeatGroup;
-struct ArtNodeHeader;
+struct ArtNode;
 class HeatGroupManager;
 class VLogManager;
 struct KVStruct;
 
 struct InnerNode {
-  uint64_t       buffer_[32];             // 256B buffer_
-  uint8_t        hll_[64];        // 64B hyper log log
+  uint64_t   buffer_[32];     // 256B buffer
+  uint8_t    hll_[64];        // hyper log log use 64 buckets
 
-  // Pointer to heat group
-  HeatGroup*     heat_group_;
+  HeatGroup* heat_group_;
+  ArtNode*   art;
 
-  // Pointer to art node, backup is used for reallocate
-  ArtNodeHeader* art;
-  ArtNodeHeader* art_backup;
+  // Backup is used for compaction
+  NVMNode*   nvm_node_;
+  NVMNode*   backup_nvm_node_;
 
-  // Pointer to NVM node, backup is used for compaction
-  NVMNode*       nvm_node_;
-  NVMNode*       backup_nvm_node_;
-  InnerNode*     last_child_node_;
-  InnerNode*     next_node_;
-  uint64_t       vptr_;
+  // Used for inserting new node
+  SpinMutex  link_lock_;
+  InnerNode* last_child_node_;
 
-  // node status_, see macros.h
-  uint32_t       status_;
+  InnerNode* next_node_;
+  uint64_t   vptr_;
 
-  // estimated size_ of key and value in this node
-  int32_t        estimated_size_;
-
-  // total size_ in buffer_
-  int32_t        buffer_size_;
-
-  OptLock        opt_lock_;
-
-  // Used for inserting new node into linked list
-  SpinMutex      link_lock_;
-
-  // Used for flush and split operation
-  std::mutex     flush_mutex_;
-
-  // Hold gc_mutex when doing gc,
-  // also hold this when node need split or squeeze.
-  std::mutex     gc_mutex_;
-
-  int64_t        oldest_key_time_ = 0;
+  std::mutex flush_mutex_;      // Used for flush and split operation
+  OptLock    opt_lock_;
+  int32_t    estimated_size_;   // Estimated kv size in this node
+  int32_t    buffer_size_;      // Total size in buffer
+  uint32_t   status_;           // node status, see macros.h
+  int64_t    oldest_key_time_;  // Just for compatibility
 
   InnerNode();
 };
 
 class GlobalMemtable {
  public:
+  void InitFirstLevel();
+
   GlobalMemtable()
       : root_(nullptr), head_(nullptr), tail_(nullptr),
         vlog_manager_(nullptr), group_manager_(nullptr),
         env_(nullptr) {}
 
   GlobalMemtable(VLogManager* vlog_manager,
-                 HeatGroupManager* group_manager, Env* env);
+                 HeatGroupManager* group_manager,
+                 Env* env);
 
   void Put(Slice& slice, uint64_t base_vptr, size_t count);
 
   bool Get(std::string& key, std::string& value, Status* s);
 
-  void InitFirstTwoLevel();
-
-  InnerNode* FindInnerNodeByKey(
-      std::string& key, size_t& level, bool& stored_in_nvm);
+  InnerNode* FindInnerNodeByKey(std::string& key, size_t& level,
+                                bool& stored_in_nvm);
 
  private:
   void Put(Slice& key, KVStruct& kv_info);
 
-  bool FindKeyInInnerNode(
-      InnerNode* leaf, std::string& key, std::string& value, Status* s);
+  bool FindKeyInInnerNode(InnerNode* leaf, size_t level,
+                          std::string& key, std::string& value, Status* s);
+
+  void InsertIntoLeaf(InnerNode* leaf, KVStruct& kv_info, size_t level);
 
   void SqueezeNode(InnerNode* leaf);
 
-  void SplitLeaf(InnerNode* leaf);
+  // Split leaf node and store node that still need split
+  void SplitLeaf(InnerNode* leaf, size_t level,
+                 InnerNode** node_need_split);
 
-  // Optimize split below level 5,
-  // since we store first three prefixes in hash(key)
-  void SplitLeafBelowLevel5(InnerNode* leaf);
+  void ReadFromNVM(NVMNode* nvm_node, size_t level,
+                   uint64_t& leaf_vptr, autovector<KVStruct>* data);
 
-  void InsertIntoLeaf(InnerNode* leaf, KVStruct& kv_info, size_t level);
+  void ReadFromVLog(NVMNode* nvm_node, size_t level,
+                    uint64_t& leaf_vptr, autovector<KVStruct>* data);
 
   InnerNode* root_;
   InnerNode* head_;
   InnerNode* tail_;
+
+  // TODO: Use prefixes to fast search inner nodes
+  std::unordered_map<std::string, InnerNode*> prefixes_;
 
   VLogManager* vlog_manager_;
 
   HeatGroupManager* group_manager_;
 
   Env* env_;
-
-  int squeeze_threshold_ = 112;
 };
 
 } // namespace ROCKSDB_NAMESPACE

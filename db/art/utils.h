@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <immintrin.h>
 #include <rocksdb/rocksdb_namespace.h>
+#include <util/hash.h>
 #include <db/dbformat.h>
 #include "macros.h"
 
@@ -15,22 +16,46 @@
 
 namespace ROCKSDB_NAMESPACE {
 
-constexpr size_t RecordPrefixSize
-    = 1 + sizeof(SequenceNumber) + sizeof(RecordIndex);
+/*constexpr size_t RecordPrefixSize
+    = 1 + sizeof(SequenceNumber) + sizeof(RecordIndex);*/
 
 // Forward declaration
 struct InnerNode;
 struct NVMNode;
-struct ArtNodeHeader;
+struct ArtNode;
 
 #define likely(x)       __builtin_expect(!!(x), 1)
 #define unlikely(x)     __builtin_expect(!!(x), 0)
 
-uint64_t Hash(
-    const char* key, size_t n,
-    [[maybe_unused]] ValueType value_type = kTypeValue);
+inline uint64_t HashOnly(const char* key, size_t n) {
+  assert(n < 256);
+  uint32_t prefix = 0;
+  ((uint8_t*)&prefix)[0] = (uint8_t)(n & 255);
+  return (static_cast<uint64_t>(prefix) << 32) + Hash(key, n, 397);
+}
 
-int EstimateDistinctCount(const uint8_t hyperLogLog[64]);
+inline uint64_t HashAndPrefix(const char* key, size_t n, size_t level) {
+  assert(n < 256);
+  assert(level > 0);
+  level -= (level - 1) % 3;
+  uint32_t prefix = 0;
+  memcpy((char*)&prefix + 1, key + level,
+         std::max(level, std::min(n, level + 3)) - level);
+  ((uint8_t*)&prefix)[0] = (uint8_t)(n & 255);
+  return (static_cast<uint64_t>(prefix) << 32) + Hash(key, n, 397);
+}
+
+// Maybe this function name is misleading,
+// but it just modifies prefix part in hash.
+inline void Rehash(const char* key, size_t n, uint64_t& hash, size_t level) {
+  assert(level > 0);
+  level -= (level - 1) % 3;
+  memset((uint8_t*)&hash + 5, 0, 3);
+  memcpy((uint8_t*)&hash + 5, key + level,
+         std::max(level, std::min(n, level + 3)) - level);
+}
+
+int EstimateDistinctCount(const uint8_t hll[64]);
 
 /////////////////////////////////////////////////////
 
@@ -40,7 +65,7 @@ struct KVStruct {
     uint64_t hash_;
     struct {
       char padding[4];
-      unsigned char type_;
+      uint8_t key_length_;
       char prefixes_[3];
     };
   };
@@ -57,8 +82,9 @@ struct KVStruct {
   KVStruct(uint64_t hash, uint64_t vptr) : hash_(hash), vptr_(vptr) {};
 };
 
-inline char GetPrefix(const KVStruct& kvInfo, int level) {
-  return kvInfo.prefixes_[level - 2];
+inline char GetPrefix(const KVStruct& kvInfo, size_t level) {
+  assert(level > 0);
+  return kvInfo.prefixes_[(level - 1) % 3];
 }
 
 inline void GetActualVptr(uint64_t& vptr) {
@@ -98,14 +124,12 @@ inline void UpdateActualVptr(uint64_t old_vptr, uint64_t& new_vptr) {
 
 // Allocate art node and insert inner nodes.
 // Inner nodes should be in order.
-ArtNodeHeader* AllocateArtAfterSplit(
+ArtNode* AllocateArtAfterSplit(
     const std::vector<InnerNode*>& inserted_nodes,
     const std::vector<unsigned char>& c,
     InnerNode* first_node_in_art);
 
-ArtNodeHeader* ReallocateArtNode(ArtNodeHeader* art);
-
-void InsertToArtNode(ArtNodeHeader* art, InnerNode* leaf,
+void InsertToArtNode(ArtNode* art, InnerNode* leaf,
                      unsigned char c, bool insert_to_group = true);
 
 /////////////////////////////////////////////////////
@@ -119,7 +143,7 @@ InnerNode* AllocateLeafNode(uint8_t prefix_length,
 
 // inserted must be initialized
 void InsertSplitInnerNode(InnerNode* node, InnerNode* first_inserted,
-                          InnerNode* last_inserted, int prefix_length);
+                          InnerNode* last_inserted, size_t prefix_length);
 
 // inserted must be initialized
 void InsertInnerNode(InnerNode* node, InnerNode* inserted);
@@ -141,7 +165,6 @@ int64_t GetNextRelativeNode(int64_t offset);
 // PMem
 
 #ifndef USE_PMEM
-#define VLOG_PATH "/tmp/vlog"
 #define MEMORY_PATH "/tmp/nodememory"
 
 #define MEMCPY(des, src, size, flag) memcpy((des), (src), (size))
@@ -150,7 +173,6 @@ int64_t GetNextRelativeNode(int64_t offset);
 #define MEMORY_BARRIER
 #define CLWB(ptr, len)
 #else
-#define VLOG_PATH "/mnt/chen/vlog"
 #define MEMORY_PATH "/mnt/chen/nodememory"
 
 #define MEMCPY(des, src, size, flags) \

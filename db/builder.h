@@ -94,7 +94,7 @@ extern Status BuildTable(
 
 extern Status BuildTableFromArt(
     ArtCompactionJob *job,
-    const std::string& dbname, VersionSet* versions, Env* env, FileSystem* fs,
+    const std::string& dbname, Env* env, FileSystem* fs,
     const ImmutableCFOptions& options,
     const MutableCFOptions& mutable_cf_options, const FileOptions& file_options,
     TableCache* table_cache,
@@ -103,9 +103,10 @@ extern Status BuildTableFromArt(
     const std::vector<std::unique_ptr<IntTblPropCollectorFactory>>*
         int_tbl_prop_collector_factories,
     uint32_t column_family_id, const std::string& column_family_name,
-    std::vector<SequenceNumber> snapshots,
-    SequenceNumber earliest_write_conflict_snapshot,
-    SnapshotChecker* snapshot_checker, const CompressionType compression,
+    // std::vector<SequenceNumber> snapshots,
+    // SequenceNumber earliest_write_conflict_snapshot,
+    // SnapshotChecker* snapshot_checker,
+    const CompressionType compression,
     const uint64_t sample_for_compression,
     const CompressionOptions& compression_opts, bool paranoid_file_checks,
     InternalStats* internal_stats, TableFileCreationReason reason,

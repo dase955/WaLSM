@@ -2509,7 +2509,7 @@ void DBImpl::SyncCallFlush(ArtCompactionJob* job) {
         pending_outputs_inserted_elem(new std::list<uint64_t>::iterator(
             CaptureCurrentFileNumberInPendingOutputs()));
 
-    FlushReason reason = FlushReason::kSizeExceedThreshold;
+    // FlushReason reason = FlushReason::kSizeExceedThreshold;
 
     /*
     Status s = BackgroundFlush(&made_progress, &job_context, &log_buffer,

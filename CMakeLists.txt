@@ -595,6 +595,7 @@ set(SOURCES
         db/art/timestamp.cc
         db/art/utils.cc
         db/art/vlog_manager.cc
+        db/art/nvm_manager.cc
         db/compaction/compaction.cc
         db/compaction/compaction_iterator.cc
         db/compaction/compaction_picker.cc

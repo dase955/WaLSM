@@ -12,10 +12,11 @@ namespace ROCKSDB_NAMESPACE {
 #define ART_LITTLE_ENDIAN (__BYTE_ORDER == __LITTLE_ENDIAN)
 #endif
 
-#define ALIGN_UP(x, align)  (((x) + ((align) - 1)) & ~((align) - 1))
-#define SIZE_TO_ROWS(size)  ((size) >> 4)
-#define SIZE_TO_BYTES(size) ((size) << 4)
-#define ROW_TO_SIZE(rows)   ((rows) << 4)
+#define ALIGN_UP(x, align)   (((x) + ((align) - 1)) & ~((align) - 1))
+#define ALIGN_DOWN(x, align) ((x) & ~((align) - 1))
+#define SIZE_TO_ROWS(size)   ((size) >> 4)
+#define SIZE_TO_BYTES(size)  ((size) << 4)
+#define ROW_TO_SIZE(rows)    ((rows) << 4)
 
 /*
  * Macros for global_memtable.h
@@ -64,8 +65,8 @@ namespace ROCKSDB_NAMESPACE {
 #define GET_ROWS(hdr)           GET_VALUE((hdr), 5)
 #define SET_ROWS(hdr, val)      SET_VALUE((hdr), 5, (val))
 
-#define GET_PRELEN(hdr)         GET_VALUE((hdr), 4)
-#define SET_PRELEN(hdr, val)    SET_VALUE((hdr), 4, (val))
+#define GET_LEVEL(hdr)          GET_VALUE((hdr), 4)
+#define SET_LEVEL(hdr, val)     SET_VALUE((hdr), 4, (val))
 
 #ifdef ART_LITTLE_ENDIAN
 #define SET_LAST_PREFIX(hdr, c) ((uint8_t *)&(hdr))[0] = (c)

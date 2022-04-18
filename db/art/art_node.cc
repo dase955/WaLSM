@@ -57,156 +57,134 @@ ArtNodeType ChooseArtNodeType(size_t size) {
   return static_cast<ArtNodeType>(type[size - 1]);
 }
 
-ArtNodeHeader* AllocateArt4AndInsertNodes(
+ArtNode* AllocateArt4AndInsertNodes(
     const std::vector<InnerNode*>& inner_nodes,
-    const std::vector<unsigned char>& c,
-    InnerNode* first_node_in_art) {
+    const std::vector<unsigned char>& c) {
   auto node4 = new ArtNode4();
   for (size_t i = 0; i < c.size(); ++i) {
-    node4->children_[i + 1] = inner_nodes[i];
-    node4->keys_[i + 1] = c[i];
+    node4->children_[i] = inner_nodes[i];
+    node4->keys_[i] = c[i];
   }
 
-  node4->children_[0] = first_node_in_art;
-  node4->keys_[0] = 0;
-
-  auto header = (ArtNodeHeader*)node4;
-  header->num_children_ = inner_nodes.size() + 1;
+  auto header = (ArtNode*)node4;
+  header->num_children_ = inner_nodes.size();
   header->art_type_ = kNode4;
   return header;
 }
 
-ArtNodeHeader* AllocateArt16AndInsertNodes(
+ArtNode* AllocateArt16AndInsertNodes(
     const std::vector<InnerNode*>& inner_nodes,
-    const std::vector<unsigned char>& c,
-    InnerNode* first_node_in_art) {
+    const std::vector<unsigned char>& c) {
   auto node16 = new ArtNode16();
   for (size_t i = 0; i < c.size(); ++i) {
-    node16->keys_[i + 1] = c[i];
-    node16->children_[i + 1] = inner_nodes[i];
+    node16->keys_[i] = c[i];
+    node16->children_[i] = inner_nodes[i];
   }
 
-  node16->children_[0] = first_node_in_art;
-  node16->keys_[0] = 0;
-
-  auto header = (ArtNodeHeader*)node16;
-  header->num_children_ = inner_nodes.size() + 1;
+  auto header = (ArtNode*)node16;
+  header->num_children_ = inner_nodes.size();
   header->art_type_ = kNode16;
   return header;
 }
 
-ArtNodeHeader* AllocateArt48AndInsertNodes(
-    const ::std::vector<InnerNode*>& inner_nodes,
-    const ::std::vector<unsigned char>& c,
-    InnerNode* first_node_in_art) {
+ArtNode* AllocateArt48AndInsertNodes(
+    const std::vector<InnerNode*>& inner_nodes,
+    const std::vector<unsigned char>& c) {
   auto node48 = new ArtNode48();
   for (size_t i = 0; i < c.size(); ++i) {
     node48->keys_[c[i]] = i + 1;
-    node48->children_[i + 1] = inner_nodes[i];
+    node48->children_[i] = inner_nodes[i];
   }
 
-  node48->children_[0] = first_node_in_art;
-  node48->keys_[0] = 1;
-
-  auto header = (ArtNodeHeader*)node48;
-  header->num_children_ = inner_nodes.size() + 1;
+  auto header = (ArtNode*)node48;
+  header->num_children_ = inner_nodes.size();
   header->art_type_ = kNode48;
   return header;
 }
 
-ArtNodeHeader* AllocateArt256AndInsertNodes(
-    const ::std::vector<InnerNode*>& inner_nodes,
-    const ::std::vector<unsigned char>& c,
-    InnerNode* first_node_in_art) {
+ArtNode* AllocateArt256AndInsertNodes(
+    const std::vector<InnerNode*>& inner_nodes,
+    const std::vector<unsigned char>& c) {
   auto node256 = new ArtNode256;
   for (size_t i = 0; i < c.size(); ++i) {
     node256->children_[c[i]] = inner_nodes[i];
   }
 
-  node256->children_[0] = first_node_in_art;
-  node256->header_.num_children_ = inner_nodes.size() + 1;
+  node256->header_.num_children_ = inner_nodes.size();
   node256->header_.art_type_ = kNode256;
-  return (ArtNodeHeader*)node256;
+  return (ArtNode*)node256;
 }
 
-ArtNodeHeader* AllocateArtAfterSplit(
-    const ::std::vector<InnerNode*>& inserted_nodes,
-    const ::std::vector<unsigned char>& c,
-    InnerNode* first_node_in_art) {
-  size_t num_children = inserted_nodes.size() + 1;
+ArtNode* AllocateArtAfterSplit(
+    const std::vector<InnerNode*>& inserted_nodes,
+    const std::vector<unsigned char>& c) {
+  size_t num_children = inserted_nodes.size();
   auto nodeType = ChooseArtNodeType(num_children);
 
   switch (nodeType) {
     case kNode4:
-      return AllocateArt4AndInsertNodes(inserted_nodes, c,
-                                        first_node_in_art);
+      return AllocateArt4AndInsertNodes(inserted_nodes, c);
     case kNode16:
-      return AllocateArt16AndInsertNodes(inserted_nodes, c,
-                                         first_node_in_art);
+      return AllocateArt16AndInsertNodes(inserted_nodes, c);
     case kNode48:
-      return AllocateArt48AndInsertNodes(inserted_nodes, c,
-                                         first_node_in_art);
+      return AllocateArt48AndInsertNodes(inserted_nodes, c);
     case kNode256:
-      return AllocateArt256AndInsertNodes(inserted_nodes, c,
-                                          first_node_in_art);
+      return AllocateArt256AndInsertNodes(inserted_nodes, c);
   }
 
   return nullptr;
 }
 
-ArtNodeHeader* AllocateArtNode(ArtNodeType node_type) {
-  ArtNodeHeader* node = nullptr;
+ArtNode* AllocateArtNode(ArtNodeType node_type) {
+  ArtNode* node = nullptr;
   switch (node_type) {
     case kNode4:
-      node = (ArtNodeHeader*)(new ArtNode4());
+      node = (ArtNode*)(new ArtNode4());
       break;
     case kNode16:
-      node = (ArtNodeHeader*)(new ArtNode16());
+      node = (ArtNode*)(new ArtNode16());
       break;
     case kNode48:
-      node = (ArtNodeHeader*)(new ArtNode48());
+      node = (ArtNode*)(new ArtNode48());
       break;
     case kNode256:
-      node = (ArtNodeHeader*)(new ArtNode256());
+      node = (ArtNode*)(new ArtNode256());
       break;
     default:
       assert(false);
   }
   node->art_type_ = node_type;
-  node->prefix_length_ = 0;
   node->num_children_ = 0;
   return node;
 }
 
-ArtNodeHeader* ReallocateArtNode16(ArtNodeHeader* art) {
+ArtNode* ReallocateArtNode16(ArtNode* art) {
   auto new_art = AllocateArtNode(kNode16);
   auto node16 = (ArtNode16*)new_art;
   auto node4 = (ArtNode4*)art;
 
-  memcpy(node4->children_, node16->children_,
+  memcpy(node16->children_, node4->children_,
          sizeof(void*) * art->num_children_);
-  memcpy(node4->keys_, node16->keys_, art->num_children_);
+  memcpy(node16->keys_, node4->keys_, art->num_children_);
   new_art->num_children_ = art->num_children_;
-  new_art->prefix_length_ = art->prefix_length_;
   return new_art;
 }
 
-ArtNodeHeader* ReallocateArtNode48(ArtNodeHeader* art) {
+ArtNode* ReallocateArtNode48(ArtNode* art) {
   auto new_art = AllocateArtNode(kNode48);
   auto node48 = (ArtNode48*)new_art;
   auto node16 = (ArtNode16*)art;
 
   memcpy(node48->children_, node16->children_,
-         sizeof(void *) * art->num_children_);
+         sizeof(void*) * art->num_children_);
   for (int i = 0; i < art->num_children_; i++) {
     node48->keys_[node16->keys_[i]] = i + 1;
   }
   new_art->num_children_ = art->num_children_;
-  new_art->prefix_length_ = art->prefix_length_;
   return new_art;
 }
 
-ArtNodeHeader* ReallocateArtNode256(ArtNodeHeader* art) {
+ArtNode* ReallocateArtNode256(ArtNode* art) {
   auto new_art = AllocateArtNode(kNode256);
   auto node256 = (ArtNode256*)new_art;
   auto node48 = (ArtNode48*)art;
@@ -217,24 +195,31 @@ ArtNodeHeader* ReallocateArtNode256(ArtNodeHeader* art) {
     }
   }
   new_art->num_children_ = art->num_children_;
-  new_art->prefix_length_ = art->prefix_length_;
   return new_art;
 }
 
-ArtNodeHeader* ReallocateArtNode(ArtNodeHeader* art) {
+ArtNode* ReallocateArtNode(ArtNode* art) {
+  ArtNode* new_art = nullptr;
   switch (art->art_type_) {
     case kNode4:
-      return ReallocateArtNode16(art);
+      new_art = ReallocateArtNode16(art);
+      break;
     case kNode16:
-      return ReallocateArtNode48(art);
+      new_art = ReallocateArtNode48(art);
+      break;
     case kNode48:
-      return ReallocateArtNode256(art);
+      new_art = ReallocateArtNode256(art);
+      break;
     default:
-      return art;
+      assert(false);
   }
+
+  delete art->backup_;
+  new_art->backup_ = art;
+  return new_art;
 }
 
-InnerNode* FindChildInNode4(ArtNodeHeader* art, unsigned char c) {
+InnerNode* FindChildInNode4(ArtNode* art, unsigned char c) {
   auto node4 = (ArtNode4*)art;
   for (int i = 0; i < art->num_children_; i++) {
     if (node4->keys_[i] == c) {
@@ -244,7 +229,7 @@ InnerNode* FindChildInNode4(ArtNodeHeader* art, unsigned char c) {
   return nullptr;
 }
 
-InnerNode* FindChildInNode16(ArtNodeHeader* art, unsigned char c) {
+InnerNode* FindChildInNode16(ArtNode* art, unsigned char c) {
   auto node16 = (ArtNode16*)art;
 
   // Copy from
@@ -291,13 +276,13 @@ InnerNode* FindChildInNode16(ArtNodeHeader* art, unsigned char c) {
   return bitfield ? node16->children_[__builtin_ctz(bitfield)] : nullptr;
 }
 
-InnerNode* FindChildInNode48(ArtNodeHeader* art, unsigned char c) {
+InnerNode* FindChildInNode48(ArtNode* art, unsigned char c) {
   auto node48 = (ArtNode48*)art;
   int pos = node48->keys_[c];
   return pos ? node48->children_[pos - 1] : nullptr;
 }
 
-InnerNode* FindChildInNode256(ArtNodeHeader* art, unsigned char c) {
+InnerNode* FindChildInNode256(ArtNode* art, unsigned char c) {
   auto node256 = (ArtNode256*)art;
   return node256->children_[static_cast<int>(c)];
 }
@@ -319,8 +304,7 @@ InnerNode* FindChild(InnerNode* node, unsigned char c) {
 }
 
 // Insert new leaf node into art, and return prefix node. Prefix node will always exist.
-InnerNode* InsertToArtNode4(
-    ArtNodeHeader* art, InnerNode* leaf, unsigned char c) {
+InnerNode* InsertToArtNode4(ArtNode* art, InnerNode* leaf, unsigned char c) {
   auto node4 = (ArtNode4*)art;
   int idx;
   for (idx = 0; idx < art->num_children_; idx++) {
@@ -340,8 +324,7 @@ InnerNode* InsertToArtNode4(
   return idx > 0 ? node4->children_[idx - 1] : nullptr;
 }
 
-InnerNode* InsertToArtNode16(
-    ArtNodeHeader* art, InnerNode* leaf, unsigned char c) {
+InnerNode* InsertToArtNode16(ArtNode* art, InnerNode* leaf, unsigned char c) {
   auto node16 = (ArtNode16*)art;
   unsigned mask = (1 << art->num_children_) - 1;
 
@@ -395,21 +378,19 @@ InnerNode* InsertToArtNode16(
   return idx > 0 ? node16->children_[idx - 1] : nullptr;
 }
 
-InnerNode* InsertToArtNode48(
-    ArtNodeHeader *art, InnerNode *leaf, unsigned char c) {
-  auto node48 = (ArtNode48 *)art;
+InnerNode* InsertToArtNode48(ArtNode* art, InnerNode* leaf, unsigned char c) {
+  auto node48 = (ArtNode48*)art;
   int pos = 0;
   while (node48->children_[pos]) {
     pos++;
   }
   node48->children_[pos] = leaf;
   node48->keys_[c] = pos + 1;
-  return pos > 0 ? node48->children_[node48->keys_[c] - 1] : nullptr;
+  return pos > 0 ? node48->children_[node48->keys_[c] - 2] : nullptr;
 }
 
-InnerNode* InsertToArtNode256(
-    ArtNodeHeader *art, InnerNode *leaf, unsigned char c) {
-  auto node256 = (ArtNode256 *)art;
+InnerNode* InsertToArtNode256(ArtNode* art, InnerNode* leaf, unsigned char c) {
+  auto node256 = (ArtNode256*)art;
   int pos = static_cast<int>(c);
   assert(pos < 256);
   node256->children_[pos] = leaf;
@@ -421,11 +402,12 @@ InnerNode* InsertToArtNode256(
   return nullptr;
 }
 
-void InsertToArtNode(
-    ArtNodeHeader* art, InnerNode* leaf, unsigned char c, bool insert_to_group) {
-  static int fullNum[5] = {0, 4, 16, 48, 256};
+void InsertToArtNode(InnerNode* current, InnerNode* leaf, unsigned char c,
+                     bool insert_to_group) {
+  static int full_num[5] = {0, 4, 16, 48, 256};
 
   InnerNode* left_node = nullptr;
+  auto art = current->art;
   switch (art->art_type_) {
     case kNode4:
       left_node = InsertToArtNode4(art, leaf, c);
@@ -445,8 +427,8 @@ void InsertToArtNode(
 
   InsertInnerNode(left_node, leaf);
 
-  if ((++art->num_children_) == fullNum[art->art_type_]) {
-    SET_ART_FULL(leaf->status_);
+  if ((++art->num_children_) == full_num[art->art_type_]) {
+    SET_ART_FULL(current->status_);
   }
 
   if (insert_to_group) {

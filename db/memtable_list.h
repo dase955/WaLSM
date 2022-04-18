@@ -276,7 +276,8 @@ class MemTableList {
       ColumnFamilyData* cfd, const MutableCFOptions& mutable_cf_options,
       MemTable* mem, LogsWithPrepTracker* prep_tracker,
       VersionSet* vset, InstrumentedMutex* mu, uint64_t file_number,
-      autovector<MemTable*>* to_delete, FSDirectory* db_directory,
+      // autovector<MemTable*>* to_delete,
+      FSDirectory* db_directory,
       LogBuffer* log_buffer,
       std::list<std::unique_ptr<FlushJobInfo>>* committed_flush_jobs_info,
       IOStatus* io_s);

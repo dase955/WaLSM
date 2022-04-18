@@ -377,7 +377,7 @@ Status DBImpl::WriteImpl(const WriteOptions& write_options,
         auto batch_count = WriteBatchInternal::Count(writer->batch);
         for (size_t i = 0; i < batch_count; ++i) {
           writer->batch->SetSequenceNumber(next_sequence + i, i);
-          writer->batch->SetRecordIndex( next_index + i, i);
+          writer->batch->SetRecordIndex(next_index + i, i);
         }
         next_index += batch_count;
 
@@ -543,6 +543,14 @@ Status DBImpl::PipelinedWriteImpl(const WriteOptions& write_options,
     size_t total_count = 0;
     size_t total_byte_size = 0;
 
+    // Precalculate wal size to determine RecordIndex for each record.
+    size_t wal_size = 0;
+    for (auto* writer : wal_write_group) {
+      wal_size +=
+          (writer->batch->GetDataSize() - WriteBatchInternal::kHeader);
+    }
+    RecordIndex next_index = vlog_manager_->GetFirstIndex(wal_size);
+
     if (w.status.ok()) {
       SequenceNumber next_sequence = current_sequence;
       for (auto writer : wal_write_group) {
@@ -550,6 +558,12 @@ Status DBImpl::PipelinedWriteImpl(const WriteOptions& write_options,
           if (writer->ShouldWriteToMemtable()) {
             writer->sequence = next_sequence;
             size_t count = WriteBatchInternal::Count(writer->batch);
+
+            for (size_t i = 0; i < count; ++i) {
+              writer->batch->SetSequenceNumber(next_sequence + i, i);
+              writer->batch->SetRecordIndex(next_index + i, i);
+            }
+            next_index += count;
             next_sequence += count;
             total_count += count;
           }
@@ -611,13 +625,21 @@ Status DBImpl::PipelinedWriteImpl(const WriteOptions& write_options,
     write_thread_.EnterAsMemTableWriter(&w, &memtable_write_group);
     if (memtable_write_group.size > 1 &&
         immutable_db_options_.allow_concurrent_memtable_write) {
-      write_thread_.LaunchParallelMemTableWriters(&memtable_write_group);
+      write_thread_.LaunchParallelMemTableWriters(& memtable_write_group);
     } else {
+#ifdef ART
+      for (auto writer : memtable_write_group) {
+        Slice input = WriteBatchInternal::Contents(writer->batch);
+        global_memtable_->Put(
+            input, writer->batch->GetVptr(), writer->batch->Count());
+      }
+#else
       memtable_write_group.status = WriteBatchInternal::InsertInto(
           memtable_write_group, w.sequence, column_family_memtables_.get(),
           &flush_scheduler_, &trim_history_scheduler_,
           write_options.ignore_missing_column_families, 0 /*log_number*/, this,
           false /*concurrent_memtable_writes*/, seq_per_batch_, batch_per_txn_);
+#endif
       versions_->SetLastSequence(memtable_write_group.last_sequence);
       write_thread_.ExitAsMemTableWriter(&w, memtable_write_group);
     }
@@ -625,6 +647,10 @@ Status DBImpl::PipelinedWriteImpl(const WriteOptions& write_options,
 
   if (w.state == WriteThread::STATE_PARALLEL_MEMTABLE_WRITER) {
     assert(w.ShouldWriteToMemtable());
+#ifdef ART
+    Slice input = WriteBatchInternal::Contents(w.batch);
+    global_memtable_->Put(input, w.batch->GetVptr(), w.batch->Count());
+#else
     ColumnFamilyMemTablesImpl column_family_memtables(
         versions_->GetColumnFamilySet());
     w.status = WriteBatchInternal::InsertInto(
@@ -633,6 +659,7 @@ Status DBImpl::PipelinedWriteImpl(const WriteOptions& write_options,
         0 /*log_number*/, this, true /*concurrent_memtable_writes*/,
         false /*seq_per_batch*/, 0 /*batch_cnt*/, true /*batch_per_txn*/,
         write_options.memtable_insert_hint_per_batch);
+#endif
     if (write_thread_.CompleteParallelMemTableWriter(&w)) {
       MemTableInsertStatusCheck(w.status);
       versions_->SetLastSequence(w.write_group->last_sequence);
@@ -643,7 +670,7 @@ Status DBImpl::PipelinedWriteImpl(const WriteOptions& write_options,
     *seq_used = w.sequence;
   }
 
-  assert(w.state == WriteThread::STATE_COMPLETED);
+  // assert(w.state == WriteThread::STATE_COMPLETED);
   return w.FinalStatus();
 }
 

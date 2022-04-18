@@ -1184,7 +1184,7 @@ struct DBOptions {
 
   // Size of vlog file.
   // Default: 4G
-  int64_t vlog_file_size = 2ULL << 30;
+  int64_t vlog_file_size = 4ULL << 30;
 
   // Vlog file is divided into several segments,
   // in order to do garbage collection.
@@ -1207,6 +1207,9 @@ struct DBOptions {
 
   // default: 100
   int layer_ts_interval = 100;
+
+  // default: 4G
+  int64_t node_memory_size = 4ULL << 30;
 };
 
 // Options to control the behavior of a database (passed to DB::Open)
