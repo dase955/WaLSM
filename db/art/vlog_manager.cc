@@ -5,14 +5,11 @@
 #include "vlog_manager.h"
 
 #include <sys/mman.h>
-#include <sys/types.h>
-#include <unistd.h>
-#include <fcntl.h>
 #include <cassert>
-#include <csignal>
 #include <string>
 #include <cstring>
 
+#include "db/art/nvm_manager.h"
 #include "db/art/nvm_node.h"
 #include "db/art/utils.h"
 #include "db/art/global_memtable.h"
@@ -20,37 +17,6 @@
 #include "util/autovector.h"
 
 namespace ROCKSDB_NAMESPACE {
-
-#ifdef USE_PMEM
-char* OpenVLogFile(int64_t total_size) {
-  int fd = open(VLOG_PATH, O_CREAT|O_RDWR, 0666);
-  assert(-1 != fd);
-
-  posix_fallocate(fd, 0, total_size);
-  close(fd);
-
-  int is_pmem;
-  size_t mapped_len;
-  char* ptr = (char*)pmem_map_file(
-      VLOG_PATH, total_size, PMEM_FILE_CREATE, 0666, &mapped_len, &is_pmem);
-  assert(is_pmem && mapped_len == (size_t)total_size);
-
-  return ptr;
-}
-#else
-char* OpenVLogFile(int64_t total_size) {
-  int fd = open(VLOG_PATH, O_RDWR|O_CREAT, 00777);
-  assert(-1 != fd);
-
-  //posix_fallocate(fd, 0, total_size);
-  lseek(fd, total_size - 1, SEEK_SET);
-  write(fd, "", 1);
-
-  char* ptr = (char *)mmap(nullptr, total_size, PROT_READ | PROT_WRITE,MAP_SHARED, fd, 0);
-  close(fd);
-  return ptr;
-}
-#endif
 
 int SearchVptr(
     InnerNode* inner_node, uint64_t hash, int rows, uint64_t vptr) {
@@ -90,10 +56,6 @@ int SearchVptr(
 
 /////////////////////////////////////////////////////////
 
-void VLogManager::RecoverOnRestart() {
-
-}
-
 void VLogManager::PopFreeSegment() {
   cur_segment_ = free_pages_.pop_front();
   ChangeStatus(cur_segment_, kSegmentWriting);
@@ -124,7 +86,7 @@ VLogManager::VLogManager(const DBOptions& options)
       force_gc_ratio_((size_t)(options.vlog_force_gc_ratio_ * vlog_segment_num_)),
       gc_mu_(), gc_cv_(&gc_mu_), thread_stop_(false) {
 
-  pmemptr_ = OpenVLogFile(vlog_file_size_);
+  pmemptr_ = GetMappedAddress("vlog");
   char* cur_ptr = pmemptr_;
   for (size_t i = 0; i < vlog_segment_num_; ++i) {
     auto header = new (cur_ptr) VLogSegmentHeader();
@@ -148,7 +110,6 @@ VLogManager::~VLogManager() {
   thread_stop_ = true;
   gc_cv_.Signal();
   gc_thread_.join();
-  munmap(pmemptr_, vlog_file_size_);
 }
 
 void VLogManager::SetMemtable(GlobalMemtable* mem) {

@@ -16,13 +16,7 @@ struct NVMNode;
 
 class NodeAllocator {
  public:
-  NodeAllocator(bool recover = false);
-
-  ~NodeAllocator();
-
-  char* GetBase() {
-    return pmemptr_;
-  }
+  NodeAllocator(const DBOptions& options);
 
   size_t GetNumFreePages() {
     return free_pages_.size();
@@ -32,8 +26,6 @@ class NodeAllocator {
 
   void DeallocateNode(NVMNode* node);
 
-  void recoverOnRestart();
-
   int64_t relative(NVMNode* node);
 
   NVMNode* absolute(int64_t offset);
@@ -41,13 +33,15 @@ class NodeAllocator {
  private:
   char* pmemptr_;
 
-  std::atomic<int> num_free_{1048576};
-
   int64_t total_size_;
+
+  std::atomic<int> num_free_;
 
   TQueueConcurrent<char*> free_pages_;
 };
 
-NodeAllocator& GetNodeAllocator();
+void InitializeNodeAllocator(const DBOptions& options);
+
+NodeAllocator* GetNodeAllocator();
 
 } // namespace ROCKSDB_NAMESPACE

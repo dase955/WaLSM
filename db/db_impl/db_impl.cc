@@ -25,6 +25,8 @@
 #include <utility>
 #include <vector>
 
+#include "db/art/node_allocator.h"
+#include "db/art/nvm_manager.h"
 #include "db/arena_wrapped_db_iter.h"
 #include "db/builder.h"
 #include "db/compaction/compaction_job.h"
@@ -269,6 +271,12 @@ DBImpl::DBImpl(const DBOptions& options, const std::string& dbname,
   // is called by client and this seqnum is advanced.
   preserve_deletes_seqnum_.store(0);
 
+  std::unordered_map<std::string, int64_t> memory_usages;
+  memory_usages["vlog"] = options.vlog_file_size;
+  memory_usages["nodememory"] = options.node_memory_size;
+  InitializeMemory(memory_usages);
+
+  InitializeNodeAllocator(options);
   vlog_manager_ = new VLogManager(options);
 
   group_manager_ = new HeatGroupManager(options);
@@ -675,6 +683,7 @@ DBImpl::~DBImpl() {
   delete group_manager_;
   delete vlog_manager_;
   delete global_memtable_;
+  UnmapMemory();
 }
 
 void DBImpl::MaybeIgnoreError(Status* s) const {

@@ -91,7 +91,7 @@ void Compactor::DoCompaction() {
   InnerNode* end_node = chosen_group_->last_node_;
   assert(IS_GROUP_START(start_node->status_));
 
-  NVMNode* first_nvm_backup = GetNodeAllocator().AllocateNode();
+  NVMNode* first_nvm_backup = GetNodeAllocator()->AllocateNode();
   int32_t compacted_size = chosen_group_->group_size_.load(std::memory_order_relaxed);
   std::deque<InnerNode*> candidates;
   std::vector<NVMNode*> nvm_nodes;
@@ -120,7 +120,7 @@ void Compactor::DoCompaction() {
       continue;
     }
 
-    auto new_nvm_node = GetNodeAllocator().AllocateNode();
+    auto new_nvm_node = GetNodeAllocator()->AllocateNode();
     InsertNewNVMNode(cur_node, new_nvm_node);
     candidates.push_back(cur_node);
     nvm_nodes.push_back(cur_node->backup_nvm_node_);
@@ -210,7 +210,7 @@ void Compactor::DoCompaction() {
     cur_node = cur_node->next_node_;
   }
 
-  GetNodeAllocator().DeallocateNode(first_nvm_backup);
+  GetNodeAllocator()->DeallocateNode(first_nvm_backup);
 
   for (size_t i = 0; i < vlog_segment_num; ++i) {
     auto& vec = compacted_records[i];
@@ -240,7 +240,7 @@ void Compactor::DoCompaction() {
 
 #ifndef NDEBUG
   printf("%p Compaction done: size_=%d, number of free pages: %zu\n",
-         chosen_group_, compacted_size, GetNodeAllocator().GetNumFreePages());
+         chosen_group_, compacted_size, GetNodeAllocator()->GetNumFreePages());
 #endif
   chosen_group_->UpdateSize(-compacted_size);
 }

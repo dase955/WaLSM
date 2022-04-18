@@ -10,30 +10,27 @@
 #include <cassert>
 #include <unistd.h>
 
+#include "nvm_manager.h"
 #include "nvm_node.h"
 #include "utils.h"
 
 namespace ROCKSDB_NAMESPACE {
 
-NodeAllocator& GetNodeAllocator() {
-  static NodeAllocator manager;
-  return manager;
+NodeAllocator* Allocator;
+
+void InitializeNodeAllocator(const DBOptions& options) {
+  Allocator = new NodeAllocator(options);
 }
 
-NodeAllocator::NodeAllocator(bool recover) {
-  total_size_ = num_free_ * (int64_t)PAGE_SIZE;
+NodeAllocator* GetNodeAllocator() {
+  return Allocator;
+}
 
-  int fd = open(MEMORY_PATH, O_RDWR|O_CREAT, 00777);
-  assert(-1 != fd);
-  lseek(fd, total_size_ - 1, SEEK_SET);
-  write(fd, "", 1);
-  pmemptr_ = (char*)mmap(nullptr, total_size_, PROT_READ | PROT_WRITE,MAP_SHARED, fd, 0);
-  close(fd);
+NodeAllocator::NodeAllocator(const DBOptions& options)
+    : total_size_(options.node_memory_size),
+      num_free_(total_size_ / (int64_t)PAGE_SIZE){
 
-  if (recover) {
-    recoverOnRestart();
-    return;
-  }
+  pmemptr_ = GetMappedAddress("nodememory");
 
   char* cur_ptr = pmemptr_;
   for (int i = 0; i < num_free_; ++i) {
@@ -42,21 +39,13 @@ NodeAllocator::NodeAllocator(bool recover) {
   }
 }
 
-NodeAllocator::~NodeAllocator() {
-  munmap(pmemptr_, total_size_);
-}
-
 NVMNode* NodeAllocator::AllocateNode() {
   char* ptr = free_pages_.pop_front();
-  return (NVMNode*)ptr;
+  return new (ptr) NVMNode();
 }
 
 void NodeAllocator::DeallocateNode(NVMNode* node) {
   free_pages_.emplace_back((char*)node);
-}
-
-void NodeAllocator::recoverOnRestart() {
-
 }
 
 int64_t NodeAllocator::relative(NVMNode* node) {

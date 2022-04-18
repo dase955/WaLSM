@@ -52,6 +52,7 @@ void FlushBuffer(InnerNode* leaf, int row) {
   auto finger_flush_start = node->meta.fingerprints_ + ROW_TO_SIZE(row);
   MEMCPY(data_flush_start, buffer, ROW_SIZE, PMEM_F_MEM_NODRAIN);
   MEMCPY(finger_flush_start, fingerprints, 16, PMEM_F_MEM_NODRAIN);
+
   MEMORY_BARRIER;
 
   // Write metadata
@@ -84,8 +85,8 @@ void FlushBufferAndRelease(InnerNode* leaf, int row) {
     hll[bucket] = std::max(hll[bucket], digit);
   }
 
-  auto data_flush_start = node->data + (row << 5);
-  auto finger_flush_start = node->meta.fingerprints_ + ROW_TO_SIZE(row);
+  uint64_t* data_flush_start = node->data + (row << 5);
+  uint8_t* finger_flush_start = node->meta.fingerprints_ + ROW_TO_SIZE(row);
   MEMCPY(data_flush_start, buffer, 256,
          PMEM_F_MEM_NODRAIN | PMEM_F_MEM_NONTEMPORAL);
   MEMCPY(finger_flush_start, fingerprints, 16,
@@ -151,7 +152,7 @@ void GlobalMemtable::InitFirstTwoLevel() {
 
     // Second level
     node->art = AllocateArtNode(kNode256);
-    auto art256_l2 = (ArtNode256 *)node->art;
+    auto art256_l2 = (ArtNode256*)node->art;
     art256_l2->header_.prefix_length_ = 2;
     art256_l2->header_.num_children_ = pre_allocate_children;
 
@@ -355,6 +356,8 @@ void GlobalMemtable::SqueezeNode(InnerNode* leaf) {
          SIZE_TO_BYTES(flush_size), PMEM_F_MEM_NODRAIN);
   MEMCPY(node->meta.fingerprints_,
          temp_fingerprints, flush_size, PMEM_F_MEM_NODRAIN);
+
+  MEMORY_BARRIER;
 
   uint64_t hdr = node->meta.header;
   SET_SIZE(hdr, flush_size);
@@ -575,14 +578,14 @@ void GlobalMemtable::SplitLeaf(InnerNode* leaf) {
 // This function is responsible for unlocking opt_lock_
 void GlobalMemtable::InsertIntoLeaf(
     InnerNode* leaf, KVStruct& kv_info, size_t level) {
-  int writePos = GET_NODE_BUFFER_SIZE(++leaf->status_) << 1;
-  assert(writePos <= 32);
+  int write_pos = GET_NODE_BUFFER_SIZE(++leaf->status_) << 1;
+  assert(write_pos <= 32);
 
-  leaf->buffer_[writePos - 2] = kv_info.hash_;
-  leaf->buffer_[writePos - 1] = kv_info.vptr_;
+  leaf->buffer_[write_pos - 2] = kv_info.hash_;
+  leaf->buffer_[write_pos - 1] = kv_info.vptr_;
   leaf->buffer_size_ += kv_info.kv_size_;
 
-  if (likely(writePos < 32)) {
+  if (likely(write_pos < 32)) {
     leaf->opt_lock_.WriteUnlock(true);
     leaf->heat_group_->UpdateHeat();
     return;
@@ -604,6 +607,7 @@ void GlobalMemtable::InsertIntoLeaf(
   assert(GET_NODE_BUFFER_SIZE(leaf->status_) == 0);
 
   int rows = GET_ROWS(leaf->nvm_node_->meta.header);
+  assert(rows < NVM_MAX_ROWS);
   if (likely(rows < NVM_MAX_ROWS - 1)) {
     // We can't release the lock directly,
     // because we will use data in buffer

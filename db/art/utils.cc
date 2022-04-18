@@ -76,9 +76,9 @@ InnerNode* AllocateLeafNode(uint8_t prefix_length,
   SET_GC_FLUSH_SIZE(status, 0);
   inode->status_ = status;
 
-  auto& mgr = GetNodeAllocator();
+  auto mgr = GetNodeAllocator();
 
-  auto nvm_node = mgr.AllocateNode();
+  auto nvm_node = mgr->AllocateNode();
   inode->nvm_node_ = nvm_node;
   inode->last_child_node_ = inode;
   inode->next_node_ = next_node;
@@ -91,7 +91,7 @@ InnerNode* AllocateLeafNode(uint8_t prefix_length,
 
   nvm_node->meta.header = hdr;
   nvm_node->meta.dram_pointer_ = inode;
-  nvm_node->meta.next1 = next_node ? mgr.relative(next_node->nvm_node_) : -1;
+  nvm_node->meta.next1 = next_node ? mgr->relative(next_node->nvm_node_) : -1;
 
   return inode;
 }
@@ -112,11 +112,11 @@ void InsertInnerNode(InnerNode* node, InnerNode* inserted) {
   if (GET_TAG(hdr, ALT_FIRST_TAG)) {
     inserted_nvm_node->meta.next1 = prev_nvm_node->meta.next1;
     prev_nvm_node->meta.next1 =
-        GetNodeAllocator().relative(inserted_nvm_node);
+        GetNodeAllocator()->relative(inserted_nvm_node);
   } else {
     inserted_nvm_node->meta.next1 = prev_nvm_node->meta.next2;
     prev_nvm_node->meta.next2 =
-        GetNodeAllocator().relative(inserted_nvm_node);
+        GetNodeAllocator()->relative(inserted_nvm_node);
   }
   PERSIST(inserted_nvm_node, CACHE_LINE_SIZE);
   PERSIST(prev_nvm_node, CACHE_LINE_SIZE);
@@ -136,12 +136,12 @@ void InsertSplitInnerNode(InnerNode* node, InnerNode* first_inserted,
   if (GET_TAG(old_hdr, ALT_FIRST_TAG)) {
     CLEAR_TAG(new_hdr, ALT_FIRST_TAG);
     prev_nvm_node->meta.next2 =
-        GetNodeAllocator().relative(inserted_first_nvm_node);
+        GetNodeAllocator()->relative(inserted_first_nvm_node);
     inserted_last_nvm_node->meta.next1 = prev_nvm_node->meta.next1;
   } else {
     SET_TAG(new_hdr, ALT_FIRST_TAG);
     prev_nvm_node->meta.next1 =
-        GetNodeAllocator().relative(inserted_first_nvm_node);
+        GetNodeAllocator()->relative(inserted_first_nvm_node);
     inserted_last_nvm_node->meta.next1 = prev_nvm_node->meta.next2;
   }
   PERSIST(inserted_last_nvm_node, CACHE_LINE_SIZE);
@@ -178,10 +178,10 @@ void InsertNewNVMNode(InnerNode* node, NVMNode* inserted) {
 
     if (GET_TAG(old_hdr, ALT_FIRST_TAG)) {
       inserted->meta.next1 = old_nvm_node->meta.next1;
-      old_nvm_node->meta.next1 = GetNodeAllocator().relative(inserted);
+      old_nvm_node->meta.next1 = GetNodeAllocator()->relative(inserted);
     } else {
       inserted->meta.next1 = old_nvm_node->meta.next2;
-      old_nvm_node->meta.next2 = GetNodeAllocator().relative(inserted);
+      old_nvm_node->meta.next2 = GetNodeAllocator()->relative(inserted);
     }
 
     inserted->meta.header = inserted_hdr;
@@ -209,22 +209,22 @@ void RemoveOldNVMNode(InnerNode* node) {
 
   auto backup_nvm_node = next_node->backup_nvm_node_;
   next_node->backup_nvm_node_ = nullptr;
-  GetNodeAllocator().DeallocateNode(backup_nvm_node);
+  GetNodeAllocator()->DeallocateNode(backup_nvm_node);
 }
 
 NVMNode* GetNextNode(NVMNode* node) {
   int64_t next_offset =
       GET_TAG(node->meta.header, ALT_FIRST_TAG)
           ? node->meta.next1 : node->meta.next2;
-  return GetNodeAllocator().absolute(next_offset);
+  return GetNodeAllocator()->absolute(next_offset);
 }
 
 NVMNode* GetNextNode(int64_t offset) {
-  NVMNode* node = GetNodeAllocator().absolute(offset);
+  NVMNode* node = GetNodeAllocator()->absolute(offset);
   int64_t next_offset =
       GET_TAG(node->meta.header, ALT_FIRST_TAG)
           ? node->meta.next1 : node->meta.next2;
-  return GetNodeAllocator().absolute(next_offset);
+  return GetNodeAllocator()->absolute(next_offset);
 }
 
 int64_t GetNextRelativeNode(NVMNode* node) {
@@ -233,7 +233,7 @@ int64_t GetNextRelativeNode(NVMNode* node) {
 }
 
 int64_t GetNextRelativeNode(int64_t offset) {
-  NVMNode* node = GetNodeAllocator().absolute(offset);
+  NVMNode* node = GetNodeAllocator()->absolute(offset);
   return GET_TAG(node->meta.header, ALT_FIRST_TAG)
              ? node->meta.next1 : node->meta.next2;
 }

@@ -78,8 +78,6 @@ class VLogManager {
   void TestGC();
 
  private:
-  void RecoverOnRestart();
-
   void BGWorkGarbageCollection();
 
   void ChangeStatus(char* segment, SegmentStatus status);
