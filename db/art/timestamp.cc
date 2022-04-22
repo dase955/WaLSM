@@ -51,11 +51,11 @@ Timestamps Timestamps::Copy() {
 
 void Timestamps::DecayHeat() {
   auto global_dec = GlobalDecay.load(std::memory_order_relaxed);
-  if (last_global_dec_ == global_dec) {
+  if (likely(last_global_dec_ >= global_dec)) {
     return;
   }
 
-  int delta = global_dec - last_global_dec_;
+  int32_t delta = global_dec - last_global_dec_;
   last_global_dec_ = global_dec;
 
 #ifdef USE_AVX512F
@@ -83,7 +83,7 @@ bool Timestamps::UpdateHeat() {
     return false;
   }
 
-  std::lock_guard<SpinMutex> lk(update_lock_);
+  std::lock_guard<SpinMutex> update_lk(update_lock_);
   if (unlikely(cur_ts <= last_ts_)) {
     return false;
   }
@@ -104,23 +104,45 @@ bool Timestamps::UpdateHeat() {
   return true;
 }
 
-bool Timestamps::GetCurrentHeatAndTs(
-    int32_t& begin_ts, int32_t& mid_ts, int32_t& end_ts, float& heat) {
-  std::lock_guard<SpinMutex> lk(update_lock_);
-  if (size_ == 0) {
-    return false;
-  }
+float Timestamps::GetTotalHeat() {
+  std::lock_guard<SpinMutex> update_lk(update_lock_);
   DecayHeat();
+  for (size_t i = 0; i < size_; ++i) {
+    accumulate_ += CalculateHeat(timestamps[i]);
+  }
+  size_ = last_insert_ = 0;
+  return accumulate_;
+}
 
-  int begin = last_insert_;
-  int mid = (begin + size_ / 2) % 8;
-  int end = (begin + size_ - 1) % 8;
+void Timestamps::EstimateBound(float& lower_bound, float& upper_bound) {
+  int len;
+  float heat;
+  int32_t begin_ts, mid_ts, end_ts;
 
-  begin_ts = timestamps[begin];
-  mid_ts = timestamps[mid];
-  end_ts = timestamps[end];
-  heat = accumulate_;
-  return true;
+  {
+    std::lock_guard<SpinMutex> update_lk(update_lock_);
+    DecayHeat();
+    heat = accumulate_;
+
+    if (size_ == 0) {
+      lower_bound = upper_bound = heat;
+      return;
+    }
+
+    int begin = last_insert_;
+    int mid = (begin + size_ / 2) % 8;
+    int end = (begin + size_ - 1) % 8;
+    len = (size_ + 1) / 2;
+    begin_ts = timestamps[last_insert_];
+    mid_ts = timestamps[(last_insert_ + size_ / 2) % 8];
+    end_ts = timestamps[(last_insert_ + size_ - 1) % 8];
+  }
+
+  float h1 = CalculateHeat(begin_ts);
+  float h2 = CalculateHeat(mid_ts);
+  float h3 = CalculateHeat(end_ts);
+  lower_bound = heat + (h1 + h2) * (float)len;
+  upper_bound = heat + (h2 + h3) * (float)len;
 }
 
 } // namespace ROCKSDB_NAMESPACE

@@ -34,8 +34,9 @@ struct Timestamps {
   // Return true if timestamp is updated.
   bool UpdateHeat();
 
-  bool GetCurrentHeatAndTs(
-      int32_t& begin_ts, int32_t& mid_ts, int32_t& end_ts, float& heat);
+  float GetTotalHeat();
+
+  void EstimateBound(float& lower_bound, float& upper_bound);
 };
 
 int32_t GetTimestamp();
