@@ -38,7 +38,7 @@ class VersionEdit;
 class TableBuilder;
 class WritableFileWriter;
 class InternalStats;
-class ArtCompactionJob;
+class SingleCompactionJob;
 
 // @param column_family_name Name of the column family that is also identified
 //    by column_family_id, or empty string if unknown. It must outlive the
@@ -93,7 +93,7 @@ extern Status BuildTable(
     const std::string& db_session_id = "");
 
 extern Status BuildTableFromArt(
-    ArtCompactionJob *job,
+    SingleCompactionJob* job,
     const std::string& dbname, Env* env, FileSystem* fs,
     const ImmutableCFOptions& options,
     const MutableCFOptions& mutable_cf_options, const FileOptions& file_options,

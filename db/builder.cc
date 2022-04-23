@@ -369,7 +369,7 @@ struct CompactionRec {
   }
 };
 
-void ReadAndBuild(ArtCompactionJob* job,
+void ReadAndBuild(SingleCompactionJob* job,
                   TableBuilder* builder,
                   FileMetaData* meta) {
   const size_t kReportFlushIOStatsEvery = 1048576;
@@ -393,6 +393,7 @@ void ReadAndBuild(ArtCompactionJob* job,
       std::string key, value;
       auto value_type = job->vlog_manager_->GetKeyValue(
           vptr, key, value, seq_num, record_index);
+      assert(key + key == value);
       kvs.emplace_back(key, value, seq_num, value_type);
 
       GetActualVptr(vptr);
@@ -421,7 +422,7 @@ void ReadAndBuild(ArtCompactionJob* job,
 }
 
 Status BuildTableFromArt(
-    ArtCompactionJob *job,
+    SingleCompactionJob *job,
     const std::string& dbname, Env* env, FileSystem* fs,
     const ImmutableCFOptions& ioptions,
     const MutableCFOptions& mutable_cf_options, const FileOptions& file_options,

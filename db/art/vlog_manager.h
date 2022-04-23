@@ -59,17 +59,19 @@ class VLogManager {
 
   void SetMemtable(GlobalMemtable* mem);
 
-  uint64_t AddRecord(const Slice& slice, uint32_t record_count = 1);
+  uint64_t AddRecord(const Slice& slice, uint32_t record_count);
 
   void GetKey(uint64_t vptr, std::string &key);
 
   void GetKey(uint64_t vptr, Slice &key);
 
-  ValueType GetKeyValue(uint64_t offset, std::string& key, std::string& value,
+  ValueType GetKeyValue(uint64_t offset,
+                        std::string& key, std::string& value,
                         SequenceNumber& seq_num, RecordIndex& index);
 
-  ValueType GetKeyValue(uint64_t offset, std::string& key,
-                        std::string& value, SequenceNumber& seq_num);
+  ValueType GetKeyValue(uint64_t offset,
+                        std::string& key, std::string& value,
+                        SequenceNumber& seq_num);
 
   ValueType GetKeyValue(uint64_t offset, std::string& key, std::string& value);
 
@@ -77,17 +79,16 @@ class VLogManager {
 
   void FreeQueue();
 
-  void TestGC();
-
  private:
   void BGWorkGarbageCollection();
 
-  void ChangeStatus(char* segment, SegmentStatus status);
+  char* GetSegmentFromFreeQueue();
+
+  void PushToUsedQueue(char* segment);
 
   void PopFreeSegment();
 
-  char* WriteToNewSegment(
-      char *segment, std::string& record, uint64_t& new_vptr);
+  void WriteToNewSegment(std::string& record, uint64_t& new_vptr);
 
   char* ChooseSegmentToGC();
 
@@ -99,35 +100,19 @@ class VLogManager {
 
   VLogSegmentHeader* header_;
 
-  uint64_t offset_;
-
   uint32_t segment_remain_;
-
-  uint16_t count_in_segment_;
 
   GlobalMemtable* mem_;
 
-  TQueueConcurrent<char*> free_pages_;
+  TQueueConcurrent<char*> free_segments_;
 
-  TQueueConcurrent<char*> used_pages_;
+  TQueueConcurrent<char*> used_segments_;
 
   // segment should push into a separate queue after gc,
   // because compaction thread may still need these segments.
   TQueueConcurrent<char*> gc_pages_;
 
-  uint64_t vlog_file_size_;
-
-  uint64_t vlog_segment_size_;
-
-  size_t vlog_segment_num_;
-
-  uint64_t vlog_header_size_;
-
-  uint64_t vlog_bitmap_size_;
-
-  size_t force_gc_ratio_;
-
-  const float compacted_ratio_threshold_ = 0.5;
+  char* segment_for_gc_;
 
   // Mutex and condvar for gc thread
   port::Mutex gc_mu_;
@@ -135,6 +120,15 @@ class VLogManager {
   bool thread_stop_;
   std::thread gc_thread_;
   bool gc_ = false;
+
+  // Parameters
+  const uint64_t vlog_file_size_;
+  const uint64_t vlog_segment_size_;
+  const size_t   vlog_segment_num_;
+  const uint64_t vlog_header_size_;
+  const uint64_t vlog_bitmap_size_;
+  const size_t   force_gc_ratio_;
+  const float    compacted_ratio_threshold_ = 0.5;
 };
 
 }  // namespace ROCKSDB_NAMESPACE

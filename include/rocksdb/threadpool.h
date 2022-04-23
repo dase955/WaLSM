@@ -49,6 +49,10 @@ class ThreadPool {
   virtual void SubmitJob(const std::function<void()>&) = 0;
   // This moves the function in for efficiency
   virtual void SubmitJob(std::function<void()>&&) = 0;
+
+  virtual void SetJobCount(int count) = 0;
+
+  virtual void Join() = 0;
 };
 
 // NewThreadPool() is a function that could be used to create a ThreadPool

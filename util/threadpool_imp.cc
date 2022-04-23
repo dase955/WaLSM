@@ -46,6 +46,14 @@ struct ThreadPoolImpl::Impl {
   Impl();
   ~Impl();
 
+  void SetJobCount(int count) {
+    semaphore_.SetCount(count);
+  }
+
+  void Join() {
+    semaphore_.Wait();
+  }
+
   void JoinThreads(bool wait_for_jobs_to_complete);
 
   void SetBackgroundThreadsInternal(int num, bool allow_reduce);
@@ -121,9 +129,10 @@ private:
   using BGQueue = std::deque<BGItem>;
   BGQueue       queue_;
 
-  std::mutex               mu_;
-  std::condition_variable  bgsignal_;
+  std::mutex                mu_;
+  std::condition_variable   bgsignal_;
   std::vector<port::Thread> bgthreads_;
+  Semaphore                 semaphore_;
 };
 
 inline ThreadPoolImpl::Impl::Impl()
@@ -262,6 +271,8 @@ void ThreadPoolImpl::Impl::BGThread(size_t thread_id) {
                              &priority_);
 
     func();
+
+    semaphore_.Finish();
   }
 }
 
@@ -463,9 +474,16 @@ void ThreadPoolImpl::SubmitJob(const std::function<void()>& job) {
   impl_->Submit(std::move(copy), std::function<void()>(), nullptr);
 }
 
-
 void ThreadPoolImpl::SubmitJob(std::function<void()>&& job) {
   impl_->Submit(std::move(job), std::function<void()>(), nullptr);
+}
+
+void ThreadPoolImpl::SetJobCount(int count) {
+  impl_->SetJobCount(count);
+}
+
+void ThreadPoolImpl::Join() {
+  impl_->Join();
 }
 
 void ThreadPoolImpl::Schedule(void(*function)(void* arg1), void* arg,

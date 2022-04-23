@@ -75,6 +75,8 @@ struct HeatGroup {
 
   void UpdateSize(int32_t size);
 
+  void ResetSize();
+
   void UpdateHeat();
 
   void MaybeScheduleHeatDecay(int32_t last_ts);

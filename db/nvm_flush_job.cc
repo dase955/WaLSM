@@ -49,15 +49,13 @@
 
 namespace ROCKSDB_NAMESPACE {
 
-NVMFlushJob::NVMFlushJob(ArtCompactionJob* job,
+NVMFlushJob::NVMFlushJob(SingleCompactionJob* job,
     const std::string& dbname, ColumnFamilyData* cfd,
     const ImmutableDBOptions& db_options,
     const MutableCFOptions& mutable_cf_options,
     const FileOptions& file_options, VersionSet* versions,
     InstrumentedMutex* db_mutex, std::atomic<bool>* shutting_down,
-    std::vector<SequenceNumber> existing_snapshots,
-    SequenceNumber earliest_write_conflict_snapshot,
-    SnapshotChecker* snapshot_checker, JobContext* job_context,
+    JobContext* job_context,
     LogBuffer* log_buffer, FSDirectory* db_directory,
     FSDirectory* output_file_directory, CompressionType output_compression,
     Statistics* stats, EventLogger* event_logger, bool measure_io_stats,
@@ -74,9 +72,6 @@ NVMFlushJob::NVMFlushJob(ArtCompactionJob* job,
       versions_(versions),
       db_mutex_(db_mutex),
       shutting_down_(shutting_down),
-      existing_snapshots_(std::move(existing_snapshots)),
-      earliest_write_conflict_snapshot_(earliest_write_conflict_snapshot),
-      snapshot_checker_(snapshot_checker),
       job_context_(job_context),
       log_buffer_(log_buffer),
       db_directory_(db_directory),
@@ -118,7 +113,7 @@ void NVMFlushJob::RecordFlushIOStats() {
   IOSTATS_RESET(bytes_written);
 }
 
-void NVMFlushJob::PickMemTable() {
+void NVMFlushJob::Preprocess() {
   edit_ = cfd_->mem()->GetEdits();
   edit_->SetPrevLogNumber(0);
   // SetLogNumber(log_num) indicates logs with number smaller than log_num
@@ -131,24 +126,8 @@ void NVMFlushJob::PickMemTable() {
 
   base_ = cfd_->current();
   base_->Ref();  // it is likely that we do not need this reference
-}
 
-Status NVMFlushJob::Run(LogsWithPrepTracker* prep_tracker,
-                        FileMetaData* file_meta) {
-  TEST_SYNC_POINT("FlushJob::Start");
-  AutoThreadOperationStageUpdater stage_run(
-      ThreadStatus::STAGE_FLUSH_RUN);
-
-  // I/O measurement variables
-  PerfLevel prev_perf_level = PerfLevel::kEnableTime;
-  uint64_t prev_write_nanos = 0;
-  uint64_t prev_fsync_nanos = 0;
-  uint64_t prev_range_sync_nanos = 0;
-  uint64_t prev_prepare_write_nanos = 0;
-  uint64_t prev_cpu_write_nanos = 0;
-  uint64_t prev_cpu_read_nanos = 0;
   if (measure_io_stats_) {
-    prev_perf_level = GetPerfLevel();
     SetPerfLevel(PerfLevel::kEnableTime);
     prev_write_nanos = IOSTATS(write_nanos);
     prev_fsync_nanos = IOSTATS(fsync_nanos);
@@ -158,161 +137,96 @@ Status NVMFlushJob::Run(LogsWithPrepTracker* prep_tracker,
     prev_cpu_read_nanos = IOSTATS(cpu_read_nanos);
   }
 
-  // This will release and re-acquire the mutex.
-  Status s = WriteLevel0Table();
-
-  if (write_manifest_) {
-    TEST_SYNC_POINT("NVMFlushJob::InstallResults");
-    // Replace immutable memtable with the generated Table
-    IOStatus tmp_io_s;
-    s = cfd_->imm()->TryInstallNVMFlushResults(
-        cfd_, mutable_cf_options_, cfd_->mem(), prep_tracker, versions_, db_mutex_,
-        meta_.fd.GetNumber(),
-        // &job_context_->memtables_to_free,
-        db_directory_, log_buffer_, &committed_flush_jobs_info_, &tmp_io_s);
-    if (!tmp_io_s.ok()) {
-      io_status_ = tmp_io_s;
-    }
+  start_micros = db_options_.env->NowMicros();
+  start_cpu_micros = db_options_.env->NowCPUNanos() / 1000;
+  write_hint = cfd_->CalculateSSTWriteHint(0);
+  if (log_buffer_) {
+    log_buffer_->FlushBufferToLog();
   }
-
-  if (s.ok() && file_meta != nullptr) {
-    *file_meta = meta_;
-  }
-  RecordFlushIOStats();
-
-  // When measure_io_stats_ is true, the default 512 bytes is not enough.
-  auto stream = event_logger_->LogToBuffer(log_buffer_, 1024);
-  stream << "job" << job_context_->job_id << "event"
-         << "flush_finished";
-  stream << "output_compression"
-         << CompressionTypeToString(output_compression_);
-  stream << "lsm_state";
-  stream.StartArray();
-  auto vstorage = cfd_->current()->storage_info();
-  for (int level = 0; level < vstorage->num_levels(); ++level) {
-    stream << vstorage->NumLevelFiles(level);
-  }
-  stream.EndArray();
-
-  if (measure_io_stats_) {
-    if (prev_perf_level != PerfLevel::kEnableTime) {
-      SetPerfLevel(prev_perf_level);
-    }
-    stream << "file_write_nanos" << (IOSTATS(write_nanos) - prev_write_nanos);
-    stream << "file_range_sync_nanos"
-           << (IOSTATS(range_sync_nanos) - prev_range_sync_nanos);
-    stream << "file_fsync_nanos" << (IOSTATS(fsync_nanos) - prev_fsync_nanos);
-    stream << "file_prepare_write_nanos"
-           << (IOSTATS(prepare_write_nanos) - prev_prepare_write_nanos);
-    stream << "file_cpu_write_nanos"
-           << (IOSTATS(cpu_write_nanos) - prev_cpu_write_nanos);
-    stream << "file_cpu_read_nanos"
-           << (IOSTATS(cpu_read_nanos) - prev_cpu_read_nanos);
-  }
-
-  return s;
 }
 
-void NVMFlushJob::Cancel() {
-  db_mutex_->AssertHeld();
-  assert(base_ != nullptr);
-  base_->Unref();
-}
-
-Status NVMFlushJob::WriteLevel0Table() {
-  AutoThreadOperationStageUpdater stage_updater(
-      ThreadStatus::STAGE_FLUSH_WRITE_L0);
-  db_mutex_->AssertHeld();
-  const uint64_t start_micros = db_options_.env->NowMicros();
-  const uint64_t start_cpu_micros = db_options_.env->NowCPUNanos() / 1000;
+void NVMFlushJob::Build() {
   Status s;
-
   {
-    auto write_hint = cfd_->CalculateSSTWriteHint(0);
-    db_mutex_->Unlock();
-    if (log_buffer_) {
-      log_buffer_->FlushBufferToLog();
-    }
-
-    /*event_logger_->Log() << "job" << job_context_->job_id << "event"
-                         << "flush_started"
-                         << "num_memtables" << 1 << "num_entries"
-                         << job_->total_num_entries_ << "num_deletes"
-                         << job_->total_num_deletes_ << "total_data_size"
-                         << job_->total_data_size_ << "memory_usage"
-                         << job_->total_memory_usage_ << "flush_reason"
-                         << "Art compaction";*/
-
-    {
-      ROCKS_LOG_INFO(db_options_.info_log,
-                     "[%s] [JOB %d] Level-0 flush table #%" PRIu64 ": started",
-                     cfd_->GetName().c_str(), job_context_->job_id,
-                     meta_.fd.GetNumber());
-
-      TEST_SYNC_POINT_CALLBACK("NVMFlushJob::WriteLevel0Table:output_compression",
-                               &output_compression_);
-      int64_t _current_time = 0;
-      auto status = db_options_.env->GetCurrentTime(&_current_time);
-      const uint64_t current_time = static_cast<uint64_t>(_current_time);
-
-      uint64_t oldest_key_time = job_->oldest_key_time_;
-
-      // It's not clear whether oldest_key_time is always available. In case
-      // it is not available, use current_time.
-      uint64_t oldest_ancester_time = std::min(current_time, oldest_key_time);
-
-      TEST_SYNC_POINT_CALLBACK(
-          "NVMFlushJob::WriteLevel0Table:oldest_ancester_time",
-          &oldest_ancester_time);
-      meta_.oldest_ancester_time = oldest_ancester_time;
-
-      meta_.file_creation_time = current_time;
-
-      uint64_t creation_time = meta_.oldest_ancester_time;
-
-      IOStatus io_s;
-      s = BuildTableFromArt(
-          job_, dbname_, db_options_.env, db_options_.fs.get(),
-          *cfd_->ioptions(), mutable_cf_options_, file_options_,
-          cfd_->table_cache(), &meta_,
-          cfd_->internal_comparator(),
-          cfd_->int_tbl_prop_collector_factories(), cfd_->GetID(),
-          cfd_->GetName(),
-          // existing_snapshots_,
-          // earliest_write_conflict_snapshot_, snapshot_checker_,
-          output_compression_,
-          mutable_cf_options_.sample_for_compression,
-          mutable_cf_options_.compression_opts,
-          mutable_cf_options_.paranoid_file_checks, cfd_->internal_stats(),
-          TableFileCreationReason::kFlush, &io_s, io_tracer_, event_logger_,
-          job_context_->job_id, Env::IO_HIGH, &table_properties_, 0 /* level */,
-          creation_time, oldest_key_time, write_hint, current_time, db_id_,
-          db_session_id_);
-      if (!io_s.ok()) {
-        io_status_ = io_s;
-      }
-      LogFlush(db_options_.info_log);
-    }
     ROCKS_LOG_INFO(db_options_.info_log,
-                   "[%s] [JOB %d] Level-0 flush table #%" PRIu64 ": %" PRIu64
-                   " bytes %s"
-                   "%s",
+                   "[%s] [JOB %d] Level-0 flush table #%" PRIu64 ": started",
                    cfd_->GetName().c_str(), job_context_->job_id,
-                   meta_.fd.GetNumber(), meta_.fd.GetFileSize(),
-                   s.ToString().c_str(),
-                   meta_.marked_for_compaction ? " (needs compaction)" : "");
+                   meta_.fd.GetNumber());
 
-    if (s.ok() && output_file_directory_ != nullptr && sync_output_directory_) {
-      s = output_file_directory_->Fsync(IOOptions(), nullptr);
+    TEST_SYNC_POINT_CALLBACK("NVMFlushJob::WriteLevel0Table:output_compression",
+                             &output_compression_);
+    int64_t _current_time = 0;
+    auto status = db_options_.env->GetCurrentTime(&_current_time);
+    const uint64_t current_time = static_cast<uint64_t>(_current_time);
+
+    uint64_t oldest_key_time = job_->oldest_key_time_;
+
+    // It's not clear whether oldest_key_time is always available. In case
+    // it is not available, use current_time.
+    uint64_t oldest_ancester_time = std::min(current_time, oldest_key_time);
+
+    TEST_SYNC_POINT_CALLBACK(
+        "NVMFlushJob::WriteLevel0Table:oldest_ancester_time",
+        &oldest_ancester_time);
+    meta_.oldest_ancester_time = oldest_ancester_time;
+
+    meta_.file_creation_time = current_time;
+
+    uint64_t creation_time = meta_.oldest_ancester_time;
+
+    IOStatus io_s;
+    s = BuildTableFromArt(
+        job_, dbname_, db_options_.env, db_options_.fs.get(),
+        *cfd_->ioptions(), mutable_cf_options_, file_options_,
+        cfd_->table_cache(), &meta_,
+        cfd_->internal_comparator(),
+        cfd_->int_tbl_prop_collector_factories(), cfd_->GetID(),
+        cfd_->GetName(),
+        // existing_snapshots_,
+        // earliest_write_conflict_snapshot_, snapshot_checker_,
+        output_compression_,
+        mutable_cf_options_.sample_for_compression,
+        mutable_cf_options_.compression_opts,
+        mutable_cf_options_.paranoid_file_checks, cfd_->internal_stats(),
+        TableFileCreationReason::kFlush, &io_s, io_tracer_, event_logger_,
+        job_context_->job_id, Env::IO_HIGH, &table_properties_, 0 /* level */,
+        creation_time, oldest_key_time, write_hint, current_time, db_id_,
+        db_session_id_);
+    assert(s.ok());
+    if (!io_s.ok()) {
+      io_status_ = io_s;
     }
-    db_mutex_->Lock();
+    LogFlush(db_options_.info_log);
   }
+  ROCKS_LOG_INFO(db_options_.info_log,
+                 "[%s] [JOB %d] Level-0 flush table #%" PRIu64 ": %" PRIu64
+                 " bytes %s"
+                 "%s",
+                 cfd_->GetName().c_str(), job_context_->job_id,
+                 meta_.fd.GetNumber(), meta_.fd.GetFileSize(),
+                 s.ToString().c_str(),
+                 meta_.marked_for_compaction ? " (needs compaction)" : "");
+
+  /*printf("[%s] [JOB %d] Level-0 flush table #%" PRIu64 ": %" PRIu64
+         " bytes %s"
+         "%s\n",
+         cfd_->GetName().c_str(), job_context_->job_id,
+         meta_.fd.GetNumber(), meta_.fd.GetFileSize(),
+         s.ToString().c_str(),
+         meta_.marked_for_compaction ? " (needs compaction)" : "");*/
+
+  if (s.ok() && output_file_directory_ != nullptr && sync_output_directory_) {
+    s = output_file_directory_->Fsync(IOOptions(), nullptr);
+  }
+}
+
+void NVMFlushJob::PostProcess() {
   base_->Unref();
 
   // Note that if file_size is zero, the file has been deleted and
   // should not be added to the manifest.
   const bool has_output = meta_.fd.GetFileSize() > 0;
-  if (s.ok() && has_output) {
+  if (has_output) {
     // if we have more than 1 background thread, then we cannot
     // insert files directly into higher levels because some other
     // threads could be concurrently producing compacted files for
@@ -343,7 +257,56 @@ Status NVMFlushJob::WriteLevel0Table() {
   cfd_->internal_stats()->AddCFStats(InternalStats::BYTES_FLUSHED,
                                      stats.bytes_written);
   RecordFlushIOStats();
-  return s;
+
+  Status s;
+  if (write_manifest_) {
+    TEST_SYNC_POINT("NVMFlushJob::InstallResults");
+    // Replace immutable memtable with the generated Table
+    IOStatus tmp_io_s;
+    s = cfd_->imm()->TryInstallNVMFlushResults(
+        cfd_, mutable_cf_options_, cfd_->mem(), logs_with_prep_tracker_, versions_, db_mutex_,
+        meta_.fd.GetNumber(),
+        // &job_context_->memtables_to_free,
+        db_directory_, log_buffer_, &committed_flush_jobs_info_, &tmp_io_s);
+    if (!tmp_io_s.ok()) {
+      io_status_ = tmp_io_s;
+    }
+  }
+
+  RecordFlushIOStats();
+
+  // When measure_io_stats_ is true, the default 512 bytes is not enough.
+  auto stream = event_logger_->LogToBuffer(log_buffer_, 1024);
+  stream << "job" << job_context_->job_id << "event"
+         << "flush_finished";
+  stream << "output_compression"
+         << CompressionTypeToString(output_compression_);
+  stream << "lsm_state";
+  stream.StartArray();
+  auto vstorage = cfd_->current()->storage_info();
+  for (int level = 0; level < vstorage->num_levels(); ++level) {
+    stream << vstorage->NumLevelFiles(level);
+  }
+  stream.EndArray();
+
+  if (measure_io_stats_) {
+    stream << "file_write_nanos" << (IOSTATS(write_nanos) - prev_write_nanos);
+    stream << "file_range_sync_nanos"
+           << (IOSTATS(range_sync_nanos) - prev_range_sync_nanos);
+    stream << "file_fsync_nanos" << (IOSTATS(fsync_nanos) - prev_fsync_nanos);
+    stream << "file_prepare_write_nanos"
+           << (IOSTATS(prepare_write_nanos) - prev_prepare_write_nanos);
+    stream << "file_cpu_write_nanos"
+           << (IOSTATS(cpu_write_nanos) - prev_cpu_write_nanos);
+    stream << "file_cpu_read_nanos"
+           << (IOSTATS(cpu_read_nanos) - prev_cpu_read_nanos);
+  }
+}
+
+void NVMFlushJob::Cancel() {
+  db_mutex_->AssertHeld();
+  assert(base_ != nullptr);
+  base_->Unref();
 }
 
 std::unique_ptr<FlushJobInfo> NVMFlushJob::GetFlushJobInfo() const {

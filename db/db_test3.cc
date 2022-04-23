@@ -90,7 +90,9 @@ void MyGenerateKeyFromInt(uint64_t v, Slice* key) {
   }
 }
 
-int count_per_thread = 16384 * 128;
+int count_per_thread = 16384 * 512;
+int sample_interval = 64;
+int sample_size = count_per_thread / sample_interval;
 
 void MultiThreadTest(DB *db, std::vector<std::string> *sampled_keys, int thread_id) {
   std::random_device rd;
@@ -101,8 +103,7 @@ void MultiThreadTest(DB *db, std::vector<std::string> *sampled_keys, int thread_
 
   std::string keyStr("0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz!@#$%^&*()-_=+[{]}|<,>.?/~`' ");
 
-  std::vector<std::string> sampledKeys;
-  sampled_keys->reserve(16384 * 4);
+  sampled_keys->reserve(sample_size);
 
   /*for (int i = 0; i < 20000; i++) {
     char* data = new char[16];
@@ -123,7 +124,7 @@ void MultiThreadTest(DB *db, std::vector<std::string> *sampled_keys, int thread_
     std::string value = key + key;
 
     ASSERT_OK(db->Put(WriteOptions(), key, value));
-    if (i % 32 == 0) {
+    if (i % sample_interval == 0) {
       sampled_keys->push_back(key);
     }
   }
@@ -134,9 +135,14 @@ TEST_F(DBTest3, MockEnvTest) {
   Options options;
   options.force_consistency_checks = false;
   options.create_if_missing = true;
-  options.vlog_file_size = 2ULL << 30;
+  options.vlog_file_size = 4ULL << 30;
   options.vlog_force_gc_ratio_ = 0.25;
   options.enable_pipelined_write = true;
+
+  options.group_min_size = 8 << 20;
+  options.group_split_threshold = 20 << 20;
+  options.compaction_threshold = 1024 << 20;
+
   options.env = env.get();
   DB* db;
 
@@ -157,6 +163,8 @@ TEST_F(DBTest3, MockEnvTest) {
   for (auto & thread : threads) {
     thread.join();
   }
+
+  //((DBImpl*)db)->TestCompaction();
 
   std::cout << "Start test get" << std::endl;
   for (auto &vec : sampled_keys) {

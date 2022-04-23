@@ -2494,7 +2494,14 @@ void DBImpl::BackgroundCallFlush(Env::Priority thread_pri) {
   }
 }
 
-void DBImpl::SyncCallFlush(ArtCompactionJob* job) {
+struct DBCompactionJob {
+  NVMFlushJob* nvm_flush_job;
+  IOStatus io_s;
+  Status s;
+  SuperVersionContext* superversion_context;
+};
+
+void DBImpl::SyncCallFlush(std::vector<SingleCompactionJob*>& jobs) {
   JobContext job_context(next_job_id_.fetch_add(1), true);
 
   TEST_SYNC_POINT("DBImpl::SyncCallFlush:start");
@@ -2503,90 +2510,62 @@ void DBImpl::SyncCallFlush(ArtCompactionJob* job) {
                        immutable_db_options_.info_log.get());
   {
     InstrumentedMutexLock l(&mutex_);
-    num_running_flushes_++;
 
     std::unique_ptr<std::list<uint64_t>::iterator>
         pending_outputs_inserted_elem(new std::list<uint64_t>::iterator(
             CaptureCurrentFileNumberInPendingOutputs()));
 
-    // FlushReason reason = FlushReason::kSizeExceedThreshold;
-
-    /*
-    Status s = BackgroundFlush(&made_progress, &job_context, &log_buffer,
-     &reason, thread_pri);
-    */
-
     std::vector<SuperVersionContext>& superversion_contexts =
         job_context.superversion_contexts;
+    superversion_contexts.clear();
+    superversion_contexts.reserve(jobs.size());
 
     // Only default column family is created and used.
     auto cfd_set = versions_->GetColumnFamilySet();
     assert(cfd_set->NumberOfColumnFamilies() == 1);
     ColumnFamilyData* default_cfd = *cfd_set->begin();
+    MutableCFOptions mutable_cf_options =
+        *default_cfd->GetLatestMutableCFOptions();
 
-    superversion_contexts.clear();
-    superversion_contexts.reserve(1);
-    superversion_contexts.emplace_back(SuperVersionContext(true));
+    std::vector<DBCompactionJob> db_jobs;
+    for (auto job : jobs) {
+      num_running_flushes_++;
+      auto nvm_flush_job = new NVMFlushJob(
+          job,
+          dbname_, default_cfd, immutable_db_options_, mutable_cf_options,
+          file_options_for_compaction_, versions_.get(),
+          &mutex_, &shutting_down_,
+          &job_context, &log_buffer, directories_.GetDbDir(),
+          GetDataDir(default_cfd, 0U),
+          GetCompressionFlush(*default_cfd->ioptions(), mutable_cf_options), stats_,
+          &event_logger_, mutable_cf_options.report_bg_io_stats,
+          true /* sync_output_directory */, true /* write_manifest */,
+          io_tracer_, db_id_, db_session_id_);
+      nvm_flush_job->logs_with_prep_tracker_ = &logs_with_prep_tracker_;
 
-    auto bg_job_limits = GetBGJobLimits();
-    ROCKS_LOG_BUFFER(
-        &log_buffer,
-        "Calling SyncCallFlush with column "
-        "family [%s], flush slots available %d, compaction slots available "
-        "%d, "
-        "flush slots scheduled %d, compaction slots scheduled %d",
-        default_cfd->GetName().c_str(), bg_job_limits.max_flushes,
-        bg_job_limits.max_compactions, bg_flush_scheduled_,
-        bg_compaction_scheduled_);
+      DBCompactionJob db_job;
+      superversion_contexts.emplace_back(SuperVersionContext(true));
+      db_job.superversion_context = &(superversion_contexts.back());
+      db_job.nvm_flush_job = nvm_flush_job;
+      db_job.nvm_flush_job->Preprocess();
+      db_jobs.push_back(db_job);
+    }
 
-    /*
-    Status s = FlushMemTablesToOutputFiles(
-        bg_flush_args, &made_progress,
-        &job_context, &log_buffer, Env::HIGH);
-    */
+    mutex_.Unlock();
+    SingleCompactionJob::thread_pool->SetJobCount(db_jobs.size());
+    for (auto& db_job : db_jobs) {
+      auto func = std::bind(&NVMFlushJob::Build,
+                            db_job.nvm_flush_job);
+      SingleCompactionJob::thread_pool->SubmitJob(func);
+    }
+    SingleCompactionJob::thread_pool->Join();
 
-    std::vector<SequenceNumber> snapshot_seqs;
-    SequenceNumber earliest_write_conflict_snapshot;
-    SnapshotChecker* snapshot_checker;
-    GetSnapshotContext(&job_context, &snapshot_seqs,
-                       &earliest_write_conflict_snapshot, &snapshot_checker);
+    for (auto& db_job : db_jobs) {
+      mutex_.Lock();
 
-    MutableCFOptions mutable_cf_options = *default_cfd->GetLatestMutableCFOptions();
-    SuperVersionContext* superversion_context = &(superversion_contexts.back());
-
-    /*Status s = FlushMemTableToOutputFile(
-        default_cfd, mutable_cf_options, &made_progress, &job_context,
-        superversion_context, snapshot_seqs, earliest_write_conflict_snapshot,
-        snapshot_checker, &log_buffer, Env::HIGH);*/
-
-    NVMFlushJob nvm_flush_job(job,
-        dbname_, default_cfd, immutable_db_options_, mutable_cf_options,
-        file_options_for_compaction_, versions_.get(),
-        &mutex_, &shutting_down_, snapshot_seqs, earliest_write_conflict_snapshot,
-        snapshot_checker, &job_context, &log_buffer, directories_.GetDbDir(),
-        GetDataDir(default_cfd, 0U),
-        GetCompressionFlush(*default_cfd->ioptions(), mutable_cf_options), stats_,
-        &event_logger_, mutable_cf_options.report_bg_io_stats,
-        true /* sync_output_directory */, true /* write_manifest */,
-        io_tracer_, db_id_, db_session_id_);
-    FileMetaData file_meta;
-
-    Status s;
-    IOStatus io_s = IOStatus::OK();
-
-    // Within flush_job.Run, rocksdb may call event listener to notify
-    // file creation and deletion.
-    //
-    // Note that flush_job.Run will unlock and lock the db_mutex,
-    // and EventListener callback will be called when the db_mutex
-    // is unlocked by the current thread.
-
-    nvm_flush_job.PickMemTable();
-    s = nvm_flush_job.Run(&logs_with_prep_tracker_, &file_meta);
-    io_s = nvm_flush_job.io_status();
-
-    if (s.ok()) {
-      InstallSuperVersionAndScheduleWork(default_cfd, superversion_context,
+      db_job.nvm_flush_job->PostProcess();
+      InstallSuperVersionAndScheduleWork(default_cfd,
+                                         db_job.superversion_context,
                                          mutable_cf_options);
 
       const std::string& column_family_name = default_cfd->GetName();
@@ -2597,26 +2576,28 @@ void DBImpl::SyncCallFlush(ArtCompactionJob* job) {
       ROCKS_LOG_BUFFER(&log_buffer, "[%s] Level summary: %s\n",
                        column_family_name.c_str(),
                        storage_info->LevelSummary(&tmp));
-    }
 
-    if (s.ok()) {
       auto sfm = static_cast<SstFileManagerImpl*>(
           immutable_db_options_.sst_file_manager.get());
       if (sfm) {
         // Notify sst_file_manager that a new file was added
         std::string file_path = MakeTableFileName(
-            default_cfd->ioptions()->cf_paths[0].path, file_meta.fd.GetNumber());
+            default_cfd->ioptions()->cf_paths[0].path,
+            db_job.nvm_flush_job->meta_.fd.GetNumber());
         sfm->OnAddFile(file_path);
       }
+
+      mutex_.Unlock();
     }
+
+    mutex_.Lock();
 
     TEST_SYNC_POINT("DBImpl::SyncCallFlush:FlushFinish:0");
     ReleaseFileNumberFromPendingOutputs(pending_outputs_inserted_elem);
 
     // If flush failed, we want to delete all temporary files that we might have
     // created. Thus, we force full scan in FindObsoleteFiles()
-    FindObsoleteFiles(&job_context, !s.ok() && !s.IsShutdownInProgress() &&
-                                        !s.IsColumnFamilyDropped());
+    FindObsoleteFiles(&job_context, false);
     // delete unnecessary files if any, this is done outside the mutex
     if (job_context.HaveSomethingToClean() ||
         job_context.HaveSomethingToDelete() || !log_buffer.IsEmpty()) {
@@ -2636,13 +2617,13 @@ void DBImpl::SyncCallFlush(ArtCompactionJob* job) {
     }
     TEST_SYNC_POINT("DBImpl::SyncCallFlush:ContextCleanedUp");
 
-    num_running_flushes_--;
+    for (auto& db_job : db_jobs) {
+      num_running_flushes_--;
+      delete db_job.nvm_flush_job;
+    }
+
     atomic_flush_install_cv_.SignalAll();
     bg_cv_.SignalAll();
-    // IMPORTANT: there should be no code after calling SignalAll. This call may
-    // signal the DB destructor that it's OK to proceed with destruction. In
-    // that case, all DB variables will be dealloacated and referencing them
-    // will cause trouble.
   }
 }
 

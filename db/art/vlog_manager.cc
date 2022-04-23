@@ -61,35 +61,43 @@ int SearchVptr(
 auto RecordPrefixSize = WriteBatchInternal::kRecordPrefixSize;
 
 void VLogManager::PopFreeSegment() {
-  cur_segment_ = free_pages_.pop_front();
-  ChangeStatus(cur_segment_, kSegmentWriting);
+  cur_segment_ = GetSegmentFromFreeQueue();
   header_ = (VLogSegmentHeader*)cur_segment_;
-  offset_ = header_->offset_;
-  count_in_segment_ = header_->total_count_;
-  segment_remain_ = vlog_segment_size_ - offset_;
-  assert(offset_ < vlog_segment_size_);
-  if (!gc_ && free_pages_.size() < force_gc_ratio_) {
+  segment_remain_ = vlog_segment_size_ - header_->offset_;
+  assert(header_->offset_ < vlog_segment_size_);
+  if (!gc_ && free_segments_.size() < force_gc_ratio_) {
     gc_cv_.Signal();
   }
 }
 
-void VLogManager::ChangeStatus(char* segment, SegmentStatus status) {
+char* VLogManager::GetSegmentFromFreeQueue() {
+  char* segment = free_segments_.pop_front();
+  auto header = (VLogSegmentHeader*)segment;
+  std::lock_guard<SpinMutex> lk(header->lock.mutex_);
+  header->status_ = kSegmentWriting;
+  return segment;
+}
+
+void VLogManager::PushToUsedQueue(char* segment) {
   auto header = (VLogSegmentHeader*)segment;
   std::lock_guard<SpinMutex> gc_lk(header->lock.mutex_);
-  header->status_ = status;
+  header->status_ = kSegmentWritten;
+  used_segments_.emplace_back(segment);
 }
 
 // Why size of vlog header equals vlog_segment_size_ / 128 ?
 // We assume that minimum length of single record is 16 byte,
 VLogManager::VLogManager(const DBOptions& options)
-    : vlog_file_size_(options.vlog_file_size),
+    : gc_mu_(),
+      gc_cv_(&gc_mu_),
+      thread_stop_(false),
+      vlog_file_size_(options.vlog_file_size),
       vlog_segment_size_(options.vlog_segment_size),
       vlog_segment_num_(vlog_file_size_ / vlog_segment_size_),
       vlog_header_size_(vlog_segment_size_ / 128),
       vlog_bitmap_size_(vlog_header_size_ - sizeof(VLogSegmentHeader)),
-      force_gc_ratio_((size_t)(options.vlog_force_gc_ratio_ * vlog_segment_num_)),
-      gc_mu_(), gc_cv_(&gc_mu_), thread_stop_(false) {
-
+      force_gc_ratio_((size_t)
+                          (options.vlog_force_gc_ratio_ * vlog_segment_num_)){
   pmemptr_ = GetMappedAddress("vlog");
   char* cur_ptr = pmemptr_;
   for (size_t i = 0; i < vlog_segment_num_; ++i) {
@@ -99,11 +107,13 @@ VLogManager::VLogManager(const DBOptions& options)
     header->total_count_ = header->compacted_count_ = 0;
     memset(header->bitmap_, -1, vlog_bitmap_size_);
     FLUSH(cur_ptr, vlog_header_size_);
-    free_pages_.emplace_back(cur_ptr);
+    free_segments_.emplace_back(cur_ptr);
     cur_ptr += vlog_segment_size_;
   }
 
   MEMORY_BARRIER;
+
+  segment_for_gc_ = GetSegmentFromFreeQueue();
 
   PopFreeSegment();
 
@@ -121,33 +131,30 @@ void VLogManager::SetMemtable(GlobalMemtable* mem) {
 }
 
 uint64_t VLogManager::AddRecord(const Slice& slice, uint32_t record_count) {
-  // std::lock_guard<std::mutex> log_lk(log_mutex_);
-  assert(offset_ < vlog_segment_size_);
+  assert(header_->offset_ < vlog_segment_size_);
 
   uint32_t left = slice.size();
   while (segment_remain_ < left) {
-    ChangeStatus(cur_segment_, kSegmentWritten);
-    used_pages_.emplace_back(cur_segment_);
+    PushToUsedQueue(cur_segment_);
     PopFreeSegment();
   }
 
-  uint64_t vptr = (cur_segment_ - pmemptr_) + offset_;
-  MEMCPY(cur_segment_ + offset_, slice.data(), left, PMEM_F_MEM_NONTEMPORAL);
+  auto offset = header_->offset_;
+  uint64_t vptr = (cur_segment_ - pmemptr_) + offset;
+  MEMCPY(cur_segment_ + offset, slice.data(), left, PMEM_F_MEM_NONTEMPORAL);
 
-  offset_ += left;
   segment_remain_ -= left;
-  count_in_segment_ += record_count;
-  assert(segment_remain_ < vlog_segment_size_);
-
-  header_->total_count_ = count_in_segment_;
-  header_->offset_ = offset_;
+  header_->total_count_ += record_count;
+  header_->offset_ += left;
   PERSIST(header_, 32);
+
+  assert(segment_remain_ < vlog_segment_size_);
 
   return vptr;
 }
 
 RecordIndex VLogManager::GetFirstIndex(size_t wal_size) const {
-  return segment_remain_ < wal_size ? 0 : count_in_segment_;
+  return segment_remain_ < wal_size ? 0 : header_->total_count_;
 }
 
 void VLogManager::GetKey(uint64_t vptr, std::string& key) {
@@ -162,22 +169,21 @@ void VLogManager::GetKey(uint64_t vptr, Slice& key) {
   GetLengthPrefixedSlice(&slice, &key);
 }
 
-ValueType VLogManager::GetKeyValue(
-    uint64_t vptr, std::string& key, std::string& value,
-    SequenceNumber& seq_num, RecordIndex& index) {
+ValueType VLogManager::GetKeyValue(uint64_t vptr,
+                                   std::string& key, std::string& value,
+                                   SequenceNumber& seq_num,
+                                   RecordIndex& index) {
   GetActualVptr(vptr);
   ValueType type = ((ValueType*)(pmemptr_ + vptr))[0];
   assert(type == kTypeValue || type == kTypeDeletion);
   seq_num = ((uint64_t*)(pmemptr_ + vptr + 1))[0];
   index = ((uint32_t*)(pmemptr_ + vptr + 9))[0];
   Slice slice(pmemptr_ + vptr + RecordPrefixSize, vlog_segment_size_);
+  GetLengthPrefixedSlice(&slice, key);
+
   switch (type) {
     case kTypeValue:
-      GetLengthPrefixedSlice(&slice, key);
       GetLengthPrefixedSlice(&slice, value);
-      break;
-    case kTypeDeletion:
-      GetLengthPrefixedSlice(&slice, key);
       break;
     default:
       break;
@@ -186,20 +192,19 @@ ValueType VLogManager::GetKeyValue(
   return type;
 }
 
-ValueType VLogManager::GetKeyValue(uint64_t vptr, std::string& key,
-                                   std::string& value, SequenceNumber& seq_num) {
+ValueType VLogManager::GetKeyValue(uint64_t vptr,
+                                   std::string& key, std::string& value,
+                                   SequenceNumber& seq_num) {
   GetActualVptr(vptr);
   ValueType type = ((ValueType *)(pmemptr_ + vptr))[0];
   assert(type == kTypeValue || type == kTypeDeletion);
   seq_num = ((uint64_t *)(pmemptr_ + vptr + 1))[0];
   Slice slice(pmemptr_ + vptr + RecordPrefixSize, vlog_segment_size_);
+  GetLengthPrefixedSlice(&slice, key);
+
   switch (type) {
     case kTypeValue:
-      GetLengthPrefixedSlice(&slice, key);
       GetLengthPrefixedSlice(&slice, value);
-      break;
-    case kTypeDeletion:
-      GetLengthPrefixedSlice(&slice, key);
       break;
     default:
       break;
@@ -208,8 +213,8 @@ ValueType VLogManager::GetKeyValue(uint64_t vptr, std::string& key,
   return type;
 }
 
-ValueType VLogManager::GetKeyValue(
-    uint64_t vptr, std::string& key, std::string& value) {
+ValueType VLogManager::GetKeyValue(uint64_t vptr,
+                                   std::string& key, std::string& value) {
   GetActualVptr(vptr);
 
   char* segment = pmemptr_ + vptr / vlog_segment_size_ * vlog_segment_size_;
@@ -218,15 +223,13 @@ ValueType VLogManager::GetKeyValue(
 
   ValueType type = ((ValueType *)(pmemptr_ + vptr))[0];
   assert(type == kTypeValue || type == kTypeDeletion);
-  RecordIndex index = ((uint32_t *)(pmemptr_ + vptr + 9))[0];
+  RecordIndex index = ((uint32_t*)(pmemptr_ + vptr + 9))[0];
   Slice slice(pmemptr_ + vptr + RecordPrefixSize, vlog_segment_size_);
+  GetLengthPrefixedSlice(&slice, key);
+
   switch (type) {
     case kTypeValue:
-      GetLengthPrefixedSlice(&slice, key);
       GetLengthPrefixedSlice(&slice, value);
-      break;
-    case kTypeDeletion:
-      GetLengthPrefixedSlice(&slice, key);
       break;
     default:
       break;
@@ -238,7 +241,8 @@ ValueType VLogManager::GetKeyValue(
 std::vector<GCData> VLogManager::ReadAndSortData(char* segment) {
   auto header = (VLogSegmentHeader*)segment;
   std::vector<GCData> gc_data;
-  Slice slice(segment + vlog_header_size_, vlog_segment_size_ - vlog_header_size_);
+  Slice slice(segment + vlog_header_size_,
+              vlog_segment_size_ - vlog_header_size_);
 
   uint16_t read = 0;
   uint32_t key_length, value_length, key_start;
@@ -296,15 +300,9 @@ void VLogManager::BGWorkGarbageCollection() {
       continue;
     }
 
-    /*int pid = (segment_gc - pmemptr_) / vlog_segment_size_;
-    printf("GC %d\n", pid);*/
-
     std::lock_guard<SpinMutex> gc_lock(header_gc->lock.mutex_);
 
     std::vector<GCData> gc_data = ReadAndSortData(segment_gc);
-
-    auto new_segment = free_pages_.pop_front();
-    ChangeStatus(new_segment, kSegmentWriting);
 
     size_t index = 0;
     size_t level;
@@ -330,8 +328,7 @@ void VLogManager::BGWorkGarbageCollection() {
         while (++index < data_count && gc_data[index].key_ == cur_data.key_) {
           cur_data = gc_data[index];
           if (inner_node->vptr_ == cur_data.vptr_) {
-            new_segment = WriteToNewSegment(
-                new_segment, cur_data.record_, new_vptr);
+            WriteToNewSegment(cur_data.record_, new_vptr);
             inner_node->vptr_ = new_vptr;
           }
         }
@@ -360,8 +357,7 @@ void VLogManager::BGWorkGarbageCollection() {
           auto found_index = SearchVptr(
               inner_node, hash, rows, cur_data.vptr_);
           if (found_index != -1) {
-            new_segment = WriteToNewSegment(
-                new_segment, cur_data.record_, new_vptr);
+            WriteToNewSegment(cur_data.record_, new_vptr);
             UpdateActualVptr(cur_data.vptr_, new_vptr);
 
             if (found_index >= 0) {
@@ -381,154 +377,63 @@ void VLogManager::BGWorkGarbageCollection() {
     // pmem_persist(header, VLogHeaderSize);
 
     gc_pages_.emplace_back((char*)header_gc);
-    free_pages_.emplace_front((char*)new_segment);
     header_gc->status_ = kSegmentGC;
     gc_ = false;
   }
 }
 
 char* VLogManager::ChooseSegmentToGC() {
-  auto num_used = free_pages_.size();
+  auto num_used = free_segments_.size();
   bool forceGC = num_used < force_gc_ratio_;
 
   char* segment = nullptr;
   for (size_t i = 0; i < num_used; ++i) {
-    segment = used_pages_.pop_front();
+    segment = used_segments_.pop_front();
     auto header = (VLogSegmentHeader*)segment;
     float compacted_ratio =
         (float)header->compacted_count_ / (float)header->total_count_;
     if (forceGC || compacted_ratio > compacted_ratio_threshold_) {
       break;
     }
-    used_pages_.emplace_back(segment);
+    used_segments_.emplace_back(segment);
     segment = nullptr;
   }
 
   return segment;
 }
 
-char* VLogManager::WriteToNewSegment(char* segment, std::string& record,
-                                     uint64_t& new_vptr) {
+void VLogManager::WriteToNewSegment(std::string& record, uint64_t& new_vptr) {
   uint32_t left = record.size();
-
-  auto header = (VLogSegmentHeader*)segment;
+  auto header = (VLogSegmentHeader*)segment_for_gc_;
   auto offset = header->offset_;
   auto count = header->total_count_;
   size_t remain = vlog_segment_size_ - offset;
-  while (remain < left) {
-    ChangeStatus(segment, kSegmentWritten);
-    used_pages_.emplace_back(segment);
-    segment = free_pages_.pop_front();
-    ChangeStatus(segment, kSegmentWriting);
-    header = (VLogSegmentHeader*)segment;
+  if (remain < left) {
+    PushToUsedQueue(segment_for_gc_);
+    segment_for_gc_ = GetSegmentFromFreeQueue();
+
+    header = (VLogSegmentHeader*)segment_for_gc_;
     offset = header->offset_;
     count = header->total_count_;
     remain = vlog_segment_size_ - offset;
   }
 
   assert(offset < vlog_segment_size_);
-  assert(record.size() >= 16);
   *(RecordIndex*)(record.data() + 9) = count;
-  MEMCPY(segment + offset, record.data(), left, PMEM_F_MEM_NONTEMPORAL);
+  MEMCPY(segment_for_gc_ + offset, record.data(), left, PMEM_F_MEM_NONTEMPORAL);
 
-  new_vptr = (segment - pmemptr_) + offset;
+  new_vptr = (segment_for_gc_ - pmemptr_) + offset;
   ++header->total_count_;
   header->offset_ += left;
   PERSIST(header, CACHE_LINE_SIZE);
-
-  return segment;
 }
 
 void VLogManager::FreeQueue() {
   size_t size = gc_pages_.size();
   while (size--) {
     auto segment = gc_pages_.pop_front();
-    free_pages_.emplace_back(segment);
+    free_segments_.emplace_back(segment);
   }
-}
-
-void VLogManager::TestGC() {
-  char* segment_gc = used_pages_.pop_front();
-  auto* header_gc = (VLogSegmentHeader*)segment_gc;
-
-  std::lock_guard<SpinMutex> gc_lock(header_gc->lock.mutex_);
-  std::vector<GCData> gc_data = ReadAndSortData(segment_gc);
-
-  auto new_segment = free_pages_.pop_front();
-  ChangeStatus(new_segment, kSegmentWriting);
-
-  size_t index = 1;
-  size_t level;
-  uint64_t new_vptr;
-  bool stored_in_nvm;
-
-  auto& cur_data = gc_data.front();
-  auto data_count = gc_data.size();
-
-  while (index < data_count) {
-    auto inner_node = mem_->FindInnerNodeByKey(cur_data.key_, level, stored_in_nvm);
-    if (unlikely(!inner_node)) {
-      continue;
-    }
-
-    if (!stored_in_nvm) {
-      while (index < data_count && gc_data[index].key_ == cur_data.key_) {
-        cur_data = gc_data[index++];
-      }
-
-      if (inner_node->vptr_ == cur_data.vptr_) {
-        new_segment = WriteToNewSegment(
-            new_segment, cur_data.record_, new_vptr);
-        inner_node->vptr_ = new_vptr;
-      }
-      cur_data = gc_data[index];
-      continue;
-    }
-
-    {
-      std::string cur_prefix = cur_data.key_.substr(0, level);
-
-      std::lock_guard<std::mutex> flush_lk(inner_node->flush_mutex_);
-      //std::lock_guard<std::mutex> gc_lk(inner_node->gc_mutex_);
-      if (unlikely(!IS_LEAF(inner_node->status_))) {
-        continue;
-      }
-      auto nvm_node = inner_node->nvm_node_;
-      int rows = GET_ROWS(nvm_node->meta.header);
-
-      do {
-        auto& key = cur_data.key_;
-        auto hash = (uint8_t)Hash(key.data(), key.size(), 397);
-        auto found_index = SearchVptr(
-            inner_node, hash, rows, cur_data.vptr_);
-        if (found_index != -1) {
-          new_segment = WriteToNewSegment(
-              new_segment, cur_data.record_, new_vptr);
-          UpdateActualVptr(cur_data.vptr_, new_vptr);
-
-          std::string old_key, old_value;
-          std::string new_key, new_value;
-          if (found_index >= 0) {
-            nvm_node->data[found_index * 2 + 1] = new_vptr;
-          } else {
-            GetKeyValue(inner_node->buffer_[(-found_index - 2) * 2 + 1], old_key, old_value);
-            GetKeyValue(new_vptr, new_key, new_value);
-            inner_node->buffer_[(-found_index - 2) * 2 + 1] = new_vptr;
-          }
-        }
-        cur_data = gc_data[index++];
-      } while (index < data_count &&
-               cur_data.key_.compare(0, level, cur_prefix) == 0);
-    }
-  }
-
-  header_gc->offset_ = vlog_segment_size_;
-  header_gc->total_count_ = header_gc->compacted_count_ = 0;
-  memset(header_gc->bitmap_, -1, vlog_bitmap_size_);
-  // pmem_persist(header, VLogHeaderSize);
-
-  free_pages_.emplace_back((char*)header_gc);
-  gc_ = false;
 }
 
 }  // namespace ROCKSDB_NAMESPACE

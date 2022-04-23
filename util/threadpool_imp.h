@@ -12,9 +12,40 @@
 #include "rocksdb/env.h"
 
 #include <memory>
+#include <mutex>
+#include <condition_variable>
 #include <functional>
 
 namespace ROCKSDB_NAMESPACE {
+
+class Semaphore {
+ public:
+  explicit Semaphore (int count_ = 0)
+      : count(count_) {}
+
+  inline void SetCount(int count_) {
+    count = count_;
+  }
+
+  inline void Finish() {
+    std::unique_lock<std::mutex> lock(mtx);
+    --count;
+    cv.notify_one();
+  }
+
+  inline void Wait()
+  {
+    std::unique_lock<std::mutex> lock(mtx);
+    while(count > 0){
+      cv.wait(lock);
+    }
+  }
+
+ private:
+  std::mutex mtx;
+  std::condition_variable cv;
+  int count;
+};
 
 class ThreadPoolImpl : public ThreadPool {
  public:
@@ -64,6 +95,10 @@ class ThreadPoolImpl : public ThreadPool {
   void SubmitJob(const std::function<void()>&) override;
   // This moves the function in for efficiency
   void SubmitJob(std::function<void()>&&) override;
+
+  void SetJobCount(int count) override;
+
+  void Join() override;
 
   // Schedule a job with an unschedule tag and unschedule function
   // Can be used to filter and unschedule jobs by a tag

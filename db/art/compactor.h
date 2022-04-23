@@ -8,34 +8,40 @@
 #include <atomic>
 #include <thread>
 #include <mutex>
+#include <deque>
 #include <condition_variable>
 #include <db/dbformat.h>
 #include <rocksdb/rocksdb_namespace.h>
+#include <rocksdb//threadpool.h>
 
 namespace ROCKSDB_NAMESPACE {
 
 struct HeatGroup;
 class HeatGroupManager;
 class VLogManager;
+class InnerNode;
 struct NVMNode;
 class DBImpl;
 
-struct ArtCompactionJob {
-  /*uint64_t total_num_entries_ = 0;
-  uint64_t total_num_deletes_ = 0;
-  uint64_t total_data_size_ = 0;
-  size_t total_memory_usage_ = 0;*/
-  uint64_t oldest_key_time_;
+struct SingleCompactionJob {
+  static ThreadPool* thread_pool;
 
+  HeatGroup* group_;
+  int64_t oldest_key_time_;
+  InnerNode* start_node_;
+  InnerNode* node_after_end_;
   VLogManager* vlog_manager_;
+  std::deque<InnerNode*> candidates_;
   std::vector<NVMNode*> nvm_nodes_;
   std::vector<RecordIndex>* compacted_indexes_;
 };
 
 class Compactor {
  public:
-  Compactor() : thread_stop_(false), chosen_group_(nullptr),
-                group_manager_(nullptr), vlog_manager_(nullptr) {};
+  Compactor() : thread_stop_(false), group_manager_(nullptr),
+                vlog_manager_(nullptr), chosen_group_(nullptr) {};
+
+  ~Compactor() noexcept;
 
   void SetGroupManager(HeatGroupManager* group_manager);
 
@@ -45,18 +51,20 @@ class Compactor {
 
   void StartCompactionThread();
 
+  void StopCompactionThread();
+
   void BGWorkDoCompaction();
 
-  void StopCompactionThread();
+  void TestCompaction();
 
   void Notify(HeatGroup* heat_group);
 
-  // return compacted size
-  void DoCompaction();
-
-  static size_t compaction_threshold_;
+  static int32_t compaction_threshold_;
 
  private:
+  void CompactionPreprocess(SingleCompactionJob* job);
+
+  void CompactionPostprocess(SingleCompactionJob* job);
 
   std::mutex mutex_;
 
@@ -66,15 +74,21 @@ class Compactor {
 
   bool thread_stop_;
 
-  HeatGroup* chosen_group_;
-
   HeatGroupManager* group_manager_;
 
   VLogManager* vlog_manager_;
 
   DBImpl* db_impl_;
+
+  int num_parallel_compaction_ = 4;
+
+  HeatGroup* chosen_group_;
+
+  std::vector<SingleCompactionJob*> chosen_jobs_;
+
+  std::vector<SingleCompactionJob*> compaction_jobs_;
 };
 
-void UpdateTotalSize(size_t update_size);
+void UpdateTotalSize(int32_t update_size);
 
 } // namespace ROCKSDB_NAMESPACE

@@ -59,16 +59,14 @@ class NVMFlushJob {
  public:
   // TODO(icanadi) make effort to reduce number of parameters here
   // IMPORTANT: mutable_cf_options needs to be alive while FlushJob is alive
-  NVMFlushJob(ArtCompactionJob* job,
+  NVMFlushJob(SingleCompactionJob* job,
            const std::string& dbname, ColumnFamilyData* cfd,
            const ImmutableDBOptions& db_options,
            const MutableCFOptions& mutable_cf_options,
            const FileOptions& file_options,
            VersionSet* versions, InstrumentedMutex* db_mutex,
            std::atomic<bool>* shutting_down,
-           std::vector<SequenceNumber> existing_snapshots,
-           SequenceNumber earliest_write_conflict_snapshot,
-           SnapshotChecker* snapshot_checker, JobContext* job_context,
+           JobContext* job_context,
            LogBuffer* log_buffer, FSDirectory* db_directory,
            FSDirectory* output_file_directory,
            CompressionType output_compression, Statistics* stats,
@@ -80,20 +78,23 @@ class NVMFlushJob {
 
   ~NVMFlushJob();
 
-  // Require db_mutex held.
-  // Once PickMemTable() is called, either Run() or Cancel() has to be called.
-  void PickMemTable();
-  Status Run(LogsWithPrepTracker* prep_tracker = nullptr,
-             FileMetaData* file_meta = nullptr);
   void Cancel();
+
+  void Preprocess();
+
+  void PostProcess();
+
+  void Build();
 
   // Return the IO status
   IOStatus io_status() const { return io_status_; }
 
+  LogsWithPrepTracker* logs_with_prep_tracker_;
+  FileMetaData meta_;
+
  private:
   void ReportStartedFlush();
   void RecordFlushIOStats();
-  Status WriteLevel0Table();
   std::unique_ptr<FlushJobInfo> GetFlushJobInfo() const;
 
   const std::string& dbname_;
@@ -111,9 +112,6 @@ class NVMFlushJob {
   VersionSet* versions_;
   InstrumentedMutex* db_mutex_;
   std::atomic<bool>* shutting_down_;
-  std::vector<SequenceNumber> existing_snapshots_;
-  SequenceNumber earliest_write_conflict_snapshot_;
-  SnapshotChecker* snapshot_checker_;
   JobContext* job_context_;
   LogBuffer* log_buffer_;
   FSDirectory* db_directory_;
@@ -146,13 +144,23 @@ class NVMFlushJob {
   std::list<std::unique_ptr<FlushJobInfo>> committed_flush_jobs_info_;
 
   // Variables below are set by PickMemTable():
-  FileMetaData meta_;
   VersionEdit* edit_;
   Version* base_;
   IOStatus io_status_;
-  ArtCompactionJob* job_;
+  SingleCompactionJob* job_;
+  uint64_t prev_write_nanos = 0;
+  uint64_t prev_fsync_nanos = 0;
+  uint64_t prev_range_sync_nanos = 0;
+  uint64_t prev_prepare_write_nanos = 0;
+  uint64_t prev_cpu_write_nanos = 0;
+  uint64_t prev_cpu_read_nanos = 0;
+  uint64_t start_micros;
+  uint64_t start_cpu_micros;
+  Env::WriteLifeTimeHint write_hint;
 
   const std::shared_ptr<IOTracer> io_tracer_;
+
+
 };
 
 }  // namespace ROCKSDB_NAMESPACE

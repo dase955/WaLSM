@@ -5020,12 +5020,10 @@ Status DBImpl::GetCreationTimeOfOldestFile(uint64_t* creation_time) {
 }
 
 void DBImpl::TestCompaction() {
-  group_manager_->TestChooseCompaction();
-  compactor_.DoCompaction();
+  compactor_.TestCompaction();
 }
 
 void DBImpl::TestGC() {
-  vlog_manager_->TestGC();
 }
 
 #endif  // ROCKSDB_LITE

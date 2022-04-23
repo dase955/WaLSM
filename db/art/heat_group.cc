@@ -93,6 +93,12 @@ void HeatGroup::UpdateSize(int32_t size) {
   }
 }
 
+void HeatGroup::ResetSize() {
+  auto cur_size = group_size_.load(std::memory_order_relaxed);
+  group_size_.fetch_add(-cur_size, std::memory_order_relaxed);
+  UpdateTotalSize(-cur_size);
+}
+
 void HeatGroup::UpdateHeat() {
   if (ts.UpdateHeat()) {
     MaybeScheduleHeatDecay(ts.last_ts_);
@@ -390,11 +396,13 @@ void HeatGroupManager::ForceGroupLevelDown() {
 }
 
 void HeatGroupManager::TestChooseCompaction() {
-  for (int layer = BASE_LAYER; layer < MAX_LAYERS; ++layer) {
+  for (int layer = 0; layer < MAX_LAYERS; ++layer) {
     auto group = group_queue_.heads[layer]->next;
     while (group != group_queue_.tails[layer]) {
       auto size = group->group_size_.load();
       if (size > (1 >> 20)) {
+        RemoveFromQueue(group);
+        InsertIntoLayer(group, TEMP_LAYER);
         compactor_->Notify(group);
         return;
       }
