@@ -499,6 +499,8 @@ struct DBOptions {
   // Default: empty
   std::vector<DbPath> db_paths;
 
+  std::vector<Slice> partition_keys;
+
   // This specifies the info LOG dir.
   // If it is empty, the log files will be in the same dir as data.
   // If it is non empty, the log files will be in the specified dir,

@@ -415,6 +415,8 @@ Status FlushJob::WriteLevel0Table() {
           db_session_id_);
       if (!io_s.ok()) {
         io_status_ = io_s;
+      } else {
+        ROCKS_LOG_ERROR(db_options_.info_log, "Flush failed.");
       }
       LogFlush(db_options_.info_log);
     }

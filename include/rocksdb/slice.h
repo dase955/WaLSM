@@ -116,6 +116,14 @@ class Slice {
   //   >  0 iff "*this" >  "b"
   int compare(const Slice& b) const;
 
+  bool operator<(const Slice& b) const {
+    return compare(b) < 0;
+  }
+
+  bool operator>(const Slice& b) const {
+    return compare(b) > 0;
+  }
+
   // Return true iff "x" is a prefix of "*this"
   bool starts_with(const Slice& x) const {
     return ((size_ >= x.size_) && (memcmp(data_, x.data_, x.size_) == 0));

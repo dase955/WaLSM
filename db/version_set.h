@@ -28,6 +28,7 @@
 #include <string>
 #include <utility>
 #include <vector>
+#include <iostream>
 
 #include "db/blob/blob_file_meta.h"
 #include "db/column_family.h"
@@ -112,7 +113,8 @@ class VersionStorageInfo {
                      const Comparator* user_comparator, int num_levels,
                      CompactionStyle compaction_style,
                      VersionStorageInfo* src_vstorage,
-                     bool _force_consistency_checks);
+                     bool _force_consistency_checks,
+                     const std::vector<Slice>& partition_keys);
   // No copying allowed
   VersionStorageInfo(const VersionStorageInfo&) = delete;
   void operator=(const VersionStorageInfo&) = delete;
@@ -216,14 +218,24 @@ class VersionStorageInfo {
     return 0.0;
   }
 
-  int PartitionSize() const { return (int) partitions_.size(); }
+  double GetL0CompactionScore() const { return l0_compaction_score; }
 
+  void SetL0CompactionScore(double val) { l0_compaction_score = val; }
+
+  int PartitionSize() const { return static_cast<int>(partitions_keys_set_.size()); }
+
+  bool BelongToSamePartition(const std::string& prev_key, const Slice& current_key) const {
+    auto it_prev = partitions_keys_set_.upper_bound(Slice(prev_key));
+    auto it_current = partitions_keys_set_.upper_bound(current_key);
+    return it_prev == it_current;
+  }
+
+  // don't search level 0 file here!
   std::vector<FileMetaData*>* GetHitFiles(Slice& smallest_user_key) {
-    FilePartition fp;
-    fp.smallest_ = smallest_user_key;
-    auto hit_partition = partitions_.lower_bound(&fp);
-    if (hit_partition != partitions_.end()) {
-      return (*hit_partition)->files_;
+    auto key = partitions_keys_set_.lower_bound(smallest_user_key);
+    FilePartition* hit_partition = partitions_map_[key->ToString()];
+    if (hit_partition != nullptr) {
+      return hit_partition->files_;
     }
     return nullptr;
   }
@@ -323,7 +335,7 @@ class VersionStorageInfo {
 
     FilePartition() {}
 
-    FilePartition(int level, Slice& smallest)
+    FilePartition(int level, Slice smallest)
         : level_(level),
           compaction_score_(level),
           compaction_level_(level),
@@ -348,49 +360,60 @@ class VersionStorageInfo {
     int GetLevel() const { return level_; }
 
     void AddFile(int level, FileMetaData* f) {
-      auto& level_files = files_[level];
+      if (f->largest.user_key().compare(largest_) > 0) {
+        largest_ = Slice(f->largest.user_key());
+      }
+      auto& level_files = this->files_[level];
       level_files.push_back(f);
-      data_size_ += f->fd.table_reader->ApproximateSize(largest_, smallest_,
-                                                        kUncategorized);
+      if (f->smallest.user_key().compare(smallest_) >= 0 &&
+          f->largest.user_key().compare(largest_) <= 0) {
+        data_size_ += f->fd.file_size;
+      } else if (f->fd.table_reader != nullptr) {
+        data_size_ += f->fd.table_reader->ApproximateSize(largest_, smallest_,
+                                                          kUncategorized);
+      }
+      std::cout << "partition " << smallest_.ToString()
+                << "size " << data_size_ << std::endl
+              << " this file size " << f->fd.file_size << std::endl;
     }
 
-    FilePartition* Split() {
-      // TODO: improve split
-      // not sure if we should lock partition when split
-      Slice middleKey;
-      bool flag = false;
-      for (int i = level_-1; i >= 0; i--) {
-        for (FileMetaData* f : files_[i]) {
-          middleKey = f->fd.table_reader->
-                      ApproximateMiddleKey(smallest_, largest_);
-          if (middleKey.compare("") != 0) {
-            flag = true;
-            break;
-          }
-        }
-        if (flag) {
-          break;
-        }
-      }
-
-      // split failed
-      if (!flag || middleKey.compare("") == 0) {
-        return nullptr;
-      }
-      auto* fp = new FilePartition(level_, middleKey, largest_);
-      // add files
-      for (int i = 0; i < level_; i++) {
-        for (FileMetaData* f : files_[i]) {
-          if (f->largest.user_key().compare(middleKey) >= 0 &&
-              largest_.compare(f->smallest.user_key()) >= 0) {
-            fp->AddFile(i, f);
-          }
-        }
-      }
-      return fp;
-    }
-
-    bool Oversize(uint64_t threshold) const { return data_size_ > threshold; }
+//    FilePartition* Split() {
+//      // TODO: improve split
+//      // not sure if we should lock partition when split
+//      Slice middleKey;
+//      bool flag = false;
+//      for (int i = level_-2; i >= 0; i--) {
+//        for (FileMetaData* f : files_[i]) {
+//          middleKey = f->fd.table_reader->
+//                      ApproximateMiddleKey(smallest_, largest_);
+//          if (middleKey.compare("") != 0) {
+//            flag = true;
+//            break;
+//          }
+//        }
+//        if (flag) {
+//          break;
+//        }
+//      }
+//
+//      // split failed
+//      if (!flag || middleKey.compare("") == 0) {
+//        return nullptr;
+//      }
+//      auto* fp = new FilePartition(level_, middleKey, largest_);
+//      // add files
+//      for (int i = 0; i < level_; i++) {
+//        for (FileMetaData* f : files_[i]) {
+//          if (f->largest.user_key().compare(middleKey) >= 0 &&
+//              largest_.compare(f->smallest.user_key()) >= 0) {
+//            fp->AddFile(i, f);
+//          }
+//        }
+//      }
+//      return fp;
+//    }
+//
+//    bool Oversize(uint64_t threshold) const { return data_size_ > threshold; }
 
   };
 
@@ -606,12 +629,8 @@ class VersionStorageInfo {
 
   // List of file partitions
   // and custom comparatives
-  struct partitions_compare {
-    bool operator()(FilePartition *lhs, FilePartition *rhs) const {
-      return lhs->smallest_.compare(rhs->smallest_);
-    }
-  };
-  std::set<FilePartition*, partitions_compare> partitions_;
+  std::set<Slice> partitions_keys_set_;
+  std::map<std::string, FilePartition*> partitions_map_;
 
  private:
   const InternalKeyComparator* internal_comparator_;
@@ -619,6 +638,9 @@ class VersionStorageInfo {
   int num_levels_;            // Number of levels
   int num_non_empty_levels_;  // Number of levels. Any level larger than it
                               // is guaranteed to be empty.
+
+  double l0_compaction_score;
+
   // Per-level max bytes
   std::vector<uint64_t> level_max_bytes_;
 

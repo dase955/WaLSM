@@ -507,6 +507,7 @@ ImmutableDBOptions::ImmutableDBOptions(const DBOptions& options)
       statistics(options.statistics),
       use_fsync(options.use_fsync),
       db_paths(options.db_paths),
+      partition_keys(options.partition_keys),
       db_log_dir(options.db_log_dir),
       wal_dir(options.wal_dir),
       max_log_file_size(options.max_log_file_size),

@@ -936,10 +936,7 @@ void CompactionJob::ProcessKeyValueCompaction(SubcompactionState* sub_compact) {
   }
   const auto& c_iter_stats = c_iter->iter_stats();
 
-  std::unique_ptr<SstPartitioner> partitioner =
-      sub_compact->compaction->output_level() == 0
-          ? nullptr
-          : sub_compact->compaction->CreateSstPartitioner();
+  // key for spliting parition files
   std::string last_key_for_partitioner;
 
   while (status.ok() && !cfd->IsDropped() && c_iter->Valid()) {
@@ -1000,26 +997,21 @@ void CompactionJob::ProcessKeyValueCompaction(SubcompactionState* sub_compact) {
         "CompactionJob::Run():PausingManualCompaction:2",
         reinterpret_cast<void*>(
             const_cast<std::atomic<int>*>(manual_compaction_paused_)));
-    if (partitioner.get()) {
-      last_key_for_partitioner.assign(c_iter->user_key().data_,
+
+    // force update last partitioner key here
+    last_key_for_partitioner.assign(c_iter->user_key().data_,
                                       c_iter->user_key().size_);
-    }
     c_iter->Next();
     if (c_iter->status().IsManualCompactionPaused()) {
       break;
     }
     if (!output_file_ended && c_iter->Valid()) {
-      if (((partitioner.get() &&
-            partitioner->ShouldPartition(PartitionerRequest(
-                last_key_for_partitioner, c_iter->user_key(),
-                sub_compact->current_output_file_size)) == kRequired) ||
-           (sub_compact->compaction->output_level() != 0 &&
-            sub_compact->ShouldStopBefore(
-                c_iter->key(), sub_compact->current_output_file_size))) &&
-          sub_compact->builder != nullptr) {
-        // (2) this key belongs to the next file. For historical reasons, the
-        // iterator status after advancing will be given to
-        // FinishCompactionOutputFile().
+      VersionStorageInfo* vstorage =
+          cfd->current()->storage_info();
+      if (sub_compact->compaction->output_level() != 0 &&
+          !last_key_for_partitioner.empty() &&
+          !vstorage->BelongToSamePartition(last_key_for_partitioner,
+                                          c_iter->user_key())) {
         output_file_ended = true;
       }
     }

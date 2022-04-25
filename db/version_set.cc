@@ -755,8 +755,8 @@ class FilePickerMultiGet {
 }  // anonymous namespace
 
 VersionStorageInfo::~VersionStorageInfo() {
-  for (FilePartition* fp : partitions_) {
-    delete fp;
+  for (auto& kv : partitions_map_) {
+    delete kv.second;
   }
   delete[] files_;
 }
@@ -1709,12 +1709,13 @@ VersionStorageInfo::VersionStorageInfo(
     const InternalKeyComparator* internal_comparator,
     const Comparator* user_comparator, int levels,
     CompactionStyle compaction_style, VersionStorageInfo* ref_vstorage,
-    bool _force_consistency_checks)
+    bool _force_consistency_checks, const std::vector<Slice>& partition_keys)
     : internal_comparator_(internal_comparator),
       user_comparator_(user_comparator),
       // cfd is nullptr if Version is dummy
       num_levels_(levels),
       num_non_empty_levels_(0),
+      l0_compaction_score(0.0),
       file_indexer_(user_comparator),
       compaction_style_(compaction_style),
       files_(new std::vector<FileMetaData*>[num_levels_]),
@@ -1748,8 +1749,10 @@ VersionStorageInfo::VersionStorageInfo(
     oldest_snapshot_seqnum_ = ref_vstorage->oldest_snapshot_seqnum_;
   }
   // initialize partition
-  Slice empty("");
-  partitions_.insert(new FilePartition(levels, empty, empty));
+  for (const Slice& s : partition_keys) {
+    partitions_keys_set_.insert(s);
+    partitions_map_[s.ToString()] = new FilePartition(levels, s);
+  }
 }
 
 Version::Version(ColumnFamilyData* column_family_data, VersionSet* vset,
@@ -1774,7 +1777,8 @@ Version::Version(ColumnFamilyData* column_family_data, VersionSet* vset,
           (cfd_ == nullptr || cfd_->current() == nullptr)
               ? nullptr
               : cfd_->current()->storage_info(),
-          cfd_ == nullptr ? false : cfd_->ioptions()->force_consistency_checks),
+          cfd_ == nullptr ? false : cfd_->ioptions()->force_consistency_checks,
+          cfd_ == nullptr ? std::vector<Slice>(1, "") : cfd_->ioptions()->partition_keys),
       vset_(vset),
       next_(this),
       prev_(this),
@@ -2423,120 +2427,57 @@ void VersionStorageInfo::EstimateCompactionBytesNeeded(
   }
 }
 
-namespace {
-uint32_t GetExpiredTtlFilesCount(const ImmutableCFOptions& ioptions,
-                                 const MutableCFOptions& mutable_cf_options,
-                                 const std::vector<FileMetaData*>& files) {
-  uint32_t ttl_expired_files_count = 0;
-
-  int64_t _current_time;
-  auto status = ioptions.env->GetCurrentTime(&_current_time);
-  if (status.ok()) {
-    const uint64_t current_time = static_cast<uint64_t>(_current_time);
-    for (FileMetaData* f : files) {
-      if (!f->being_compacted) {
-        uint64_t oldest_ancester_time = f->TryGetOldestAncesterTime();
-        if (oldest_ancester_time != 0 &&
-            oldest_ancester_time < (current_time - mutable_cf_options.ttl)) {
-          ttl_expired_files_count++;
-        }
-      }
-    }
-  }
-  return ttl_expired_files_count;
-}
-}  // anonymous namespace
+//namespace {
+//uint32_t GetExpiredTtlFilesCount(const ImmutableCFOptions& ioptions,
+//                                 const MutableCFOptions& mutable_cf_options,
+//                                 const std::vector<FileMetaData*>& files) {
+//  uint32_t ttl_expired_files_count = 0;
+//
+//  int64_t _current_time;
+//  auto status = ioptions.env->GetCurrentTime(&_current_time);
+//  if (status.ok()) {
+//    const uint64_t current_time = static_cast<uint64_t>(_current_time);
+//    for (FileMetaData* f : files) {
+//      if (!f->being_compacted) {
+//        uint64_t oldest_ancester_time = f->TryGetOldestAncesterTime();
+//        if (oldest_ancester_time != 0 &&
+//            oldest_ancester_time < (current_time - mutable_cf_options.ttl)) {
+//          ttl_expired_files_count++;
+//        }
+//      }
+//    }
+//  }
+//  return ttl_expired_files_count;
+//}
+//}  // anonymous namespace
 
 void VersionStorageInfo::ComputeCompactionScore(
     const ImmutableCFOptions& immutable_cf_options,
     const MutableCFOptions& mutable_cf_options) {
-  for (auto& p : partitions_) {
-    for (int level = 0; level <= MaxInputLevel(); level++) {
-      double score;
-      if (level == 0) {
-        // We treat level-0 specially by bounding the number of files
-        // instead of number of bytes for two reasons:
-        //
-        // (1) With larger write-buffer sizes, it is nice not to do too
-        // many level-0 compactions.
-        //
-        // (2) The files in level-0 are merged on every read and
-        // therefore we wish to avoid too many files when the individual
-        // file size is small (perhaps because of a small write-buffer
-        // setting, or very high compression ratios, or lots of
-        // overwrites/deletions).
-        int num_sorted_runs = 0;
-        uint64_t total_size = 0;
-        for (auto* f : p->files_[level]) {
-          if (!f->being_compacted) {
-            total_size += f->compensated_file_size;
-            num_sorted_runs++;
-          }
-        }
-        if (compaction_style_ == kCompactionStyleUniversal) {
-          // For universal compaction, we use level0 score to indicate
-          // compaction score for the whole DB. Adding other levels as if
-          // they are L0 files.
-          for (int i = 1; i < num_levels(); i++) {
-            // Its possible that a subset of the files in a level may be in a
-            // compaction, due to delete triggered compaction or trivial move.
-            // In that case, the below check may not catch a level being
-            // compacted as it only checks the first file. The worst that can
-            // happen is a scheduled compaction thread will find nothing to do.
-            if (!files_[i].empty() && !files_[i][0]->being_compacted) {
-              num_sorted_runs++;
-            }
-          }
-        }
 
-        if (compaction_style_ == kCompactionStyleFIFO) {
-          score =
-              static_cast<double>(total_size) /
-              mutable_cf_options.compaction_options_fifo.max_table_files_size;
-          if (mutable_cf_options.compaction_options_fifo.allow_compaction) {
-            score = std::max(
-                static_cast<double>(num_sorted_runs) /
-                    mutable_cf_options.level0_file_num_compaction_trigger,
-                score);
-          }
-          if (mutable_cf_options.ttl > 0) {
-            score = std::max(
-                static_cast<double>(GetExpiredTtlFilesCount(
-                    immutable_cf_options, mutable_cf_options, files_[level])),
-                score);
-          }
+  // compute level 0 files first!
+  int num_sorted_runs = 0;
+  for (auto* f : files_[0]) {
+    if (!f->being_compacted) {
+      num_sorted_runs++;
+    }
+  }
+  l0_compaction_score = static_cast<double>(num_sorted_runs) /
+                        mutable_cf_options.level0_file_num_compaction_trigger;
 
-        } else {
-          score = static_cast<double>(num_sorted_runs) /
-                  mutable_cf_options.level0_file_num_compaction_trigger;
-          if (compaction_style_ == kCompactionStyleLevel && num_levels() > 1) {
-            // Level-based involves L0->L0 compactions that can lead to oversized L0 files. Take into account size as well to avoid later giant compactions to the base level.
-            uint64_t l0_target_size =
-                mutable_cf_options.max_bytes_for_level_base;
-            if (immutable_cf_options.level_compaction_dynamic_level_bytes &&
-                level_multiplier_ != 0.0) {
-              // Prevent L0 to Lbase fanout from growing larger than
-              // `level_multiplier_`. This prevents us from getting stuck picking L0 forever even when it is hurting write-amp. That could happen in dynamic level compaction's write-burst mode where the base level's target size can grow to be enormous.
-              l0_target_size =
-                  std::max(l0_target_size,
-                           static_cast<uint64_t>(level_max_bytes_[base_level_] /
-                                                 level_multiplier_));
-            }
-            score = std::max(score,
-                             static_cast<double>(total_size) / l0_target_size);
-          }
+  for (auto& kv : partitions_map_) {
+    FilePartition* p = kv.second;
+    for (int level = 1; level <= MaxInputLevel(); level++) {
+      double score = 0.0;
+      // Compute the ratio of current size to size limit.
+      uint64_t level_bytes_no_compacting = 0;
+      for (auto f : files_[level]) {
+        if (!f->being_compacted) {
+          level_bytes_no_compacting += f->compensated_file_size;
         }
-      } else {
-        // Compute the ratio of current size to size limit.
-        uint64_t level_bytes_no_compacting = 0;
-        for (auto f : files_[level]) {
-          if (!f->being_compacted) {
-            level_bytes_no_compacting += f->compensated_file_size;
-          }
-        }
-        score = static_cast<double>(level_bytes_no_compacting) /
-                MaxBytesForLevel(level);
       }
+      score = static_cast<double>(level_bytes_no_compacting) /
+              MaxBytesForLevel(level);
       p->compaction_level_[level] = level;
       p->compaction_score_[level] = score;
     }
@@ -2544,7 +2485,8 @@ void VersionStorageInfo::ComputeCompactionScore(
 
   // sort all the levels based on their score. Higher scores get listed
   // first. Use bubble sort because the number of entries are small.
-  for (auto& p : partitions_) {
+  for (auto& kv : partitions_map_) {
+    auto* p = kv.second;
     auto& compaction_score_ = p->compaction_score_;
     auto& compaction_level_ = p->compaction_level_;
     for (int i = 0; i < num_levels() - 2; i++) {
@@ -2695,47 +2637,29 @@ bool CompareCompensatedSizeDescending(const Fsize& first, const Fsize& second) {
 } // anonymous namespace
 
 void VersionStorageInfo::AddFile(int level, FileMetaData* f) {
+  std::cout << "add file level " << level << " number " << f->fd.GetNumber() << std::endl;
   auto& level_files = files_[level];
   level_files.push_back(f);
 
   f->refs++;
+
+  if (level > 0) {
+    // Add non level-0 files to file partitions
+    auto it = partitions_keys_set_.upper_bound(f->smallest.user_key());
+    assert(it != partitions_keys_set_.begin());
+    it--;
+
+    auto hit_partition = partitions_map_.find(it->ToString());
+    assert(hit_partition != partitions_map_.end());
+    hit_partition->second->AddFile(level, f);
+    // remove split here
+  }
 
   const uint64_t file_number = f->fd.GetNumber();
 
   assert(file_locations_.find(file_number) == file_locations_.end());
   file_locations_.emplace(file_number,
                           FileLocation(level, level_files.size() - 1));
-
-  // add file to partitions
-  FilePartition fp;
-  fp.smallest_ = f->smallest.user_key();
-  auto it_low = partitions_.upper_bound(&fp);
-  if (it_low != partitions_.begin()) {
-    it_low--;
-  }
-  fp.smallest_ = f->largest.user_key();
-  auto it_largest = partitions_.upper_bound(&fp);
-
-  std::vector<FilePartition*> partitions_to_add;
-  for (auto start = it_low; start != it_largest; start++) {
-    (*start)->AddFile(level, f);
-    // TODO: make threshold a option
-    if ((*start)->Oversize(128 * 1024 * 1024)) {
-      FilePartition* new_fp = (*start)->Split();
-      partitions_to_add.push_back(new_fp);
-    }
-  }
-
-  if (!partitions_to_add.empty()) {
-    for (auto* new_fp : partitions_to_add) {
-      partitions_.insert(new_fp);
-    }
-  }
-
-  // update last partition's largest key
-  if ((*partitions_.rbegin())->largest_.compare(f->largest.user_key()) < 0) {
-    (*partitions_.rbegin())->largest_ = f->largest.user_key();
-  }
 }
 
 void VersionStorageInfo::AddBlobFile(

@@ -840,6 +840,7 @@ class VersionBuilder::Rep {
       return s;
     }
 
+    // TODO: fix version migration for partitions
     for (int level = 0; level < num_levels_; level++) {
       const auto& cmp = (level == 0) ? level_zero_cmp_ : level_nonzero_cmp_;
       // Merge the set of added files with the set of pre-existing files.

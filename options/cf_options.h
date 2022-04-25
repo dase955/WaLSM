@@ -72,6 +72,8 @@ struct ImmutableCFOptions {
 
   std::vector<DbPath> db_paths;
 
+  std::vector<Slice> partition_keys;
+
   MemTableRepFactory* memtable_factory;
 
   TableFactory* table_factory;
