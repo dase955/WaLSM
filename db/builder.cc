@@ -381,10 +381,10 @@ void ReadAndBuild(SingleCompactionJob* job,
 
   for (auto nvm_node : job->nvm_nodes_) {
     auto data = nvm_node->data;
-    size_t size = GET_SIZE(nvm_node->meta.header);
+    int size = GET_SIZE(nvm_node->meta.header);
 
     kvs.clear();
-    for (size_t i = 0; i < size; ++i) {
+    for (int i = -16; i < size; ++i) {
       auto vptr = data[i * 2 + 1];
       if (!vptr) {
         continue;
@@ -393,7 +393,7 @@ void ReadAndBuild(SingleCompactionJob* job,
       std::string key, value;
       auto value_type = job->vlog_manager_->GetKeyValue(
           vptr, key, value, seq_num, record_index);
-      assert(key + key == value);
+      //assert(key + key == value);
       kvs.emplace_back(key, value, seq_num, value_type);
 
       GetActualVptr(vptr);

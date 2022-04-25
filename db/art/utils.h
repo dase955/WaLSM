@@ -145,12 +145,16 @@ InnerNode* AllocateLeafNode(uint8_t prefix_length,
 void InsertSplitInnerNode(InnerNode* node, InnerNode* first_inserted,
                           InnerNode* last_inserted, size_t prefix_length);
 
+// Remove nvm node from linked list and set to nullptr
+void RemoveNVMNode(InnerNode* node);
+
 // inserted must be initialized
 void InsertInnerNode(InnerNode* node, InnerNode* inserted);
 
 // These two functions are used in compaction.
 void InsertNewNVMNode(InnerNode* node, NVMNode* inserted);
 
+// Different from RemoveNVMNode, this function is used to remove backup node
 void RemoveOldNVMNode(InnerNode* node);
 
 NVMNode* GetNextNode(NVMNode* node);

@@ -13,13 +13,14 @@
 #include <db/dbformat.h>
 #include <rocksdb/rocksdb_namespace.h>
 #include <rocksdb//threadpool.h>
+#include <util/autovector.h>
 
 namespace ROCKSDB_NAMESPACE {
 
 struct HeatGroup;
 class HeatGroupManager;
 class VLogManager;
-class InnerNode;
+struct InnerNode;
 struct NVMNode;
 class DBImpl;
 
@@ -33,7 +34,7 @@ struct SingleCompactionJob {
   VLogManager* vlog_manager_;
   std::deque<InnerNode*> candidates_;
   std::vector<NVMNode*> nvm_nodes_;
-  std::vector<RecordIndex>* compacted_indexes_;
+  autovector<RecordIndex>* compacted_indexes_;
 };
 
 class Compactor {
@@ -59,7 +60,7 @@ class Compactor {
 
   void Notify(HeatGroup* heat_group);
 
-  static int32_t compaction_threshold_;
+  static int64_t compaction_threshold_;
 
  private:
   void CompactionPreprocess(SingleCompactionJob* job);

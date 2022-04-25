@@ -19,7 +19,7 @@
 
 namespace ROCKSDB_NAMESPACE {
 
-std::atomic<int32_t> MemTotalSize;
+std::atomic<int64_t> MemTotalSize{0};
 
 ThreadPool* SingleCompactionJob::thread_pool = NewThreadPool(4);
 
@@ -29,7 +29,7 @@ void UpdateTotalSize(int32_t update_size) {
 
 ////////////////////////////////////////////////////////////
 
-int32_t Compactor::compaction_threshold_;
+int64_t Compactor::compaction_threshold_;
 
 Compactor::~Compactor() noexcept {
   for (auto job : compaction_jobs_) {
@@ -47,7 +47,7 @@ void Compactor::SetVLogManager(VLogManager* vlog_manager) {
   for (int i = 0; i < num_parallel_compaction_; ++i) {
     auto job = new SingleCompactionJob;
     job->compacted_indexes_ =
-        new std::vector<RecordIndex>[vlog_manager_->vlog_segment_num_];
+        new autovector<RecordIndex>[vlog_manager_->vlog_segment_num_];
     compaction_jobs_.push_back(job);
   }
 }
@@ -89,12 +89,24 @@ void Compactor::CompactionPreprocess(SingleCompactionJob* job) {
 
   // Get candidate nodes
   while (cur_node != node_after_end) {
+    auto& opt_lock = cur_node->opt_lock_;
+    opt_lock.UpgradeToWriteLock();
+
     std::lock_guard<std::mutex> flush_lk(cur_node->flush_mutex_);
-    if (unlikely(!IS_LEAF(cur_node->status_) ||
-                 cur_node->heat_group_ != chosen_group)) {
+    if (!(IS_LEAF(cur_node->status_) &&
+          cur_node->heat_group_ == chosen_group)) {
       cur_node = cur_node->next_node_;
+      opt_lock.WriteUnlock();
       continue;
     }
+
+    // Also flush data in buffer
+    MEMCPY(cur_node->nvm_node_->compaction_buffer, cur_node->buffer_,
+           SIZE_TO_BYTES(GET_NODE_BUFFER_SIZE(cur_node->status_)),
+           PMEM_F_MEM_NODRAIN);
+    SET_NODE_BUFFER_SIZE(cur_node->status_, 0);
+    cur_node->estimated_size_ = 0;
+    opt_lock.WriteUnlock();
 
     auto new_nvm_node = GetNodeAllocator()->AllocateNode();
     InsertNewNVMNode(cur_node, new_nvm_node);
@@ -104,7 +116,6 @@ void Compactor::CompactionPreprocess(SingleCompactionJob* job) {
     job->oldest_key_time_ =
         std::min(job->oldest_key_time_, cur_node->oldest_key_time_);
     cur_node->oldest_key_time_ = LONG_LONG_MAX;
-    cur_node->estimated_size_ = 0;
     memset(cur_node->hll_, 0, 64);
 
     cur_node = cur_node->next_node_;
@@ -119,7 +130,7 @@ void Compactor::CompactionPostprocess(SingleCompactionJob* job) {
 
   auto vlog_segment_num = vlog_manager_->vlog_segment_num_;
   auto vlog_segment_size = vlog_manager_->vlog_segment_size_;
-  auto vlog_bitmap_size = vlog_manager_->vlog_bitmap_size_;
+  [[maybe_unused]] auto vlog_bitmap_size = vlog_manager_->vlog_bitmap_size_;
 
   auto candidate = candidates.front();
   candidates.pop_front();
@@ -175,7 +186,7 @@ void Compactor::BGWorkDoCompaction() {
 
     vlog_manager_->FreeQueue();
 
-    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
 
     auto mem_total_size = MemTotalSize.load(std::memory_order_relaxed);
     if (mem_total_size < compaction_threshold_) {
@@ -229,11 +240,12 @@ void Compactor::BGWorkDoCompaction() {
     MEMORY_BARRIER;
 
 #ifndef NDEBUG
+    float estimate = vlog_manager_->Estimate();
     printf("%d Compaction done, number of free pages: "
-        "%zu, free vlog pages: %zu\n",
+        "%zu, free vlog pages: %zu, free ratio:%f\n",
         (int)chosen_jobs_.size(),
         GetNodeAllocator()->GetNumFreePages(),
-        vlog_manager_->free_segments_.size());
+        vlog_manager_->free_segments_.size(), estimate);
 #endif
 
     chosen_jobs_.clear();

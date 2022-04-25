@@ -18,7 +18,7 @@ struct NVMNodeMeta {
 
 struct NVMNode {
   NVMNodeMeta meta;
-  uint64_t compactionData[32] = {0};
+  uint64_t compaction_buffer[32] = {0};
   uint64_t data[448] = {0};
 };
 

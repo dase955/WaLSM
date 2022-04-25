@@ -46,7 +46,8 @@ int EstimateDistinctCount(const uint8_t hll[64]) {
 
   float estimated = alpha / sum;
   if (estimated < 160.f && empty_buckets > 0) {
-    estimated = 64.f * (float)std::log(64.0 / empty_buckets);
+    estimated = std::min(64.f * (float)std::log(64.0 / empty_buckets),
+                         estimated);
   }
   return (int)estimated;
 }
@@ -83,6 +84,31 @@ InnerNode* AllocateLeafNode(uint8_t prefix_length,
   nvm_node->meta.next1 = next_node ? mgr->relative(next_node->nvm_node_) : -1;
 
   return inode;
+}
+
+void RemoveNVMNode(InnerNode* node) {
+  InnerNode* parent = node->parent_node_;
+  parent->opt_lock_.UpgradeToWriteLock();
+
+  // TODO: find prev node from art of parent
+  InnerNode* prev_node = nullptr;
+  prev_node->link_lock_.lock();
+
+  // Remove NVMNode from linked list,
+  // but preserve InnerNode
+  NVMNode* prev_nvm_node = prev_node->nvm_node_;
+  NVMNode* next_nvm_node = node->next_node_->nvm_node_;
+  int64_t next_relative = GetNodeAllocator()->relative(next_nvm_node);
+
+  if (GET_TAG(prev_nvm_node->meta.header, ALT_FIRST_TAG)) {
+    prev_nvm_node->meta.next1 = next_relative;
+  } else {
+    prev_nvm_node->meta.next2 = next_relative;
+  }
+  PERSIST(prev_nvm_node, 8);
+
+  node->nvm_node_ = nullptr;
+  parent->opt_lock_.WriteUnlock();
 }
 
 void InsertInnerNode(InnerNode* node, InnerNode* inserted) {

@@ -1091,8 +1091,8 @@ WriteBatch* DBImpl::MergeBatch(const WriteThread::WriteGroup& write_group,
 // When two_write_queues_ is disabled, this function is called from the only
 // write thread. Otherwise this must be called holding log_write_mutex_.
 IOStatus DBImpl::WriteToWAL(const WriteBatch& merged_batch,
-                            log::Writer* log_writer, uint64_t* log_used,
-                            uint64_t* log_size) {
+                            [[maybe_unused]] log::Writer* log_writer,
+                            uint64_t* log_used, uint64_t* log_size) {
   assert(log_size != nullptr);
   Slice log_entry = WriteBatchInternal::Contents(&merged_batch);
   *log_size = log_entry.size();

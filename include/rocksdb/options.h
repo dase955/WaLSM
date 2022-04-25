@@ -1193,8 +1193,8 @@ struct DBOptions {
 
   // Trigger garbage collection when
   // ratio of free segments less than threshold.
-  // default: 0.5
-  float vlog_force_gc_ratio_ = 0.5f;
+  // default: 0.25
+  float vlog_force_gc_ratio_ = 0.25f;
 
   // Why choose 1.021897 ?
   // Because 1.021897 ^ 32 = 2.

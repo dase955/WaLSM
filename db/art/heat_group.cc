@@ -67,11 +67,12 @@ bool HeatGroup::InsertNewNode(
 void HeatGroup::UpdateSize(int32_t size) {
   // This is just a rough estimation, so we don't acquire lock.
 
-  auto cur_status = status_.load(std::memory_order_relaxed);
+  GroupStatus cur_status;
   auto cur_size = group_size_.fetch_add(size, std::memory_order_relaxed);
   UpdateTotalSize(size);
 
-  if (cur_status != kGroupNone) {
+  if (cur_size < group_min_size_ ||
+      (cur_status = status_.load(std::memory_order_relaxed)) != kGroupNone) {
     return;
   }
 
@@ -320,8 +321,9 @@ void HeatGroupManager::SplitGroup(HeatGroup* group) {
   // which doesn't store any data. So we can switch between
   // nvm node and its backup node
   InnerNode* dummy_right_start = AllocateLeafNode(0, 0, nullptr);
-  InsertInnerNode(left_end, dummy_right_start);
   SET_GROUP_START(dummy_right_start->status_);
+  SET_NON_LEAF(dummy_right_start->status_);
+  InsertInnerNode(left_end, dummy_right_start);
 
   right_group->ts = cur_ts;
   auto right_start = dummy_right_start;

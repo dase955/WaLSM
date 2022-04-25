@@ -7951,3 +7951,58 @@ void Java_org_rocksdb_FlushOptions_disposeInternal(
   assert(flush_opt != nullptr);
   delete flush_opt;
 }
+
+/*
+ * Class:     org_rocksdb_DBOptions
+ * Method:    setVLogFileSize
+ * Signature: (JI)V
+ */
+void Java_org_rocksdb_DBOptions_setVLogFileSize(
+    JNIEnv*, jclass, jlong jhandle, jlong jvlog_file_size) {
+  auto* opt = reinterpret_cast<ROCKSDB_NAMESPACE::DBOptions*>(jhandle);
+  opt->vlog_file_size = static_cast<int64_t>(jvlog_file_size);
+}
+
+/*
+ * Class:     org_rocksdb_DBOptions
+ * Method:    setVLogForceGCThreshold
+ * Signature: (JI)V
+ */
+void Java_org_rocksdb_DBOptions_setVLogForceGCThreshold(
+    JNIEnv*, jclass, jlong jhandle, jfloat force_gc_threshold) {
+  auto* opt = reinterpret_cast<ROCKSDB_NAMESPACE::DBOptions*>(jhandle);
+  opt->vlog_force_gc_ratio_ = static_cast<float>(force_gc_threshold);
+}
+
+/*
+ * Class:     org_rocksdb_DBOptions
+ * Method:    setGroupMinSize
+ * Signature: (JZ)V
+ */
+JNIEXPORT void JNICALL Java_org_rocksdb_DBOptions_setGroupMinSize
+    (JNIEnv *, jclass, jlong jhandle, jint jgroup_min_size) {
+  auto* opt = reinterpret_cast<ROCKSDB_NAMESPACE::DBOptions*>(jhandle);
+  opt->group_min_size = static_cast<int>(jgroup_min_size);
+}
+
+/*
+ * Class:     org_rocksdb_DBOptions
+ * Method:    setGroupSplitThreshold
+ * Signature: (JZ)V
+ */
+JNIEXPORT void JNICALL Java_org_rocksdb_DBOptions_setGroupSplitThreshold
+    (JNIEnv *, jclass, jlong jhandle, jint jgroup_split_threshold) {
+  auto* opt = reinterpret_cast<ROCKSDB_NAMESPACE::DBOptions*>(jhandle);
+  opt->group_split_threshold = static_cast<int>(jgroup_split_threshold);
+}
+
+/*
+ * Class:     org_rocksdb_DBOptions
+ * Method:    setCompactionThreshold
+ * Signature: (JZ)V
+ */
+JNIEXPORT void JNICALL Java_org_rocksdb_DBOptions_setCompactionThreshold
+    (JNIEnv *, jclass, jlong jhandle, jint jcompaction_threshold) {
+  auto* opt = reinterpret_cast<ROCKSDB_NAMESPACE::DBOptions*>(jhandle);
+  opt->compaction_threshold = static_cast<int32_t>(jcompaction_threshold);
+}

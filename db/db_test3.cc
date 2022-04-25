@@ -90,9 +90,20 @@ void MyGenerateKeyFromInt(uint64_t v, Slice* key) {
   }
 }
 
-int count_per_thread = 16384 * 512;
-int sample_interval = 64;
+int count_per_thread = 16384 * 128;
+int sample_interval = 32;
 int sample_size = count_per_thread / sample_interval;
+
+std::string repeat(std::string& str) {
+  int repeat_times = 1024UL / str.length();
+  size_t len = str.length() * repeat_times;
+  std::string ret;
+  ret.reserve(len);
+  while (repeat_times--) {
+    ret += str;
+  }
+  return ret;
+}
 
 void MultiThreadTest(DB *db, std::vector<std::string> *sampled_keys, int thread_id) {
   std::random_device rd;
@@ -105,23 +116,10 @@ void MultiThreadTest(DB *db, std::vector<std::string> *sampled_keys, int thread_
 
   sampled_keys->reserve(sample_size);
 
-  /*for (int i = 0; i < 20000; i++) {
-    char* data = new char[16];
-    Slice key(data, 16);
-    MyGenerateKeyFromInt(i, &key);
-
-    std::shuffle(keyStr.begin(), keyStr.end(), generator);
-    std::string value = keyStr.substr(0, keyDis(gen));
-
-    WriteBatch batch(0, 0);
-    batch.Put(key, value);
-    ASSERT_OK(db->Write(WriteOptions(), &batch));
-  }*/
-
   for (int i = 0; i < count_per_thread; ++i) {
     std::shuffle(keyStr.begin(), keyStr.end(), generator);
     std::string key = keyStr.substr(0, keyDis(gen));    // assumes 32 < number of characters in str
-    std::string value = key + key;
+    std::string value = repeat(key);
 
     ASSERT_OK(db->Put(WriteOptions(), key, value));
     if (i % sample_interval == 0) {
@@ -135,9 +133,10 @@ TEST_F(DBTest3, MockEnvTest) {
   Options options;
   options.force_consistency_checks = false;
   options.create_if_missing = true;
-  options.vlog_file_size = 4ULL << 30;
-  options.vlog_force_gc_ratio_ = 0.25;
   options.enable_pipelined_write = true;
+
+  options.vlog_file_size = 4ULL << 30;
+  options.vlog_force_gc_ratio_ = 0.5;
 
   options.group_min_size = 8 << 20;
   options.group_split_threshold = 20 << 20;
@@ -149,8 +148,6 @@ TEST_F(DBTest3, MockEnvTest) {
   ASSERT_OK(DB::Open(options, "/dir/db", &db));
 
   int thread_num = 16;
-
-  std::cout << "Total count: " << count_per_thread * thread_num << std::endl;
 
   std::thread threads[thread_num];
   std::vector<std::string> sampled_keys[thread_num];
@@ -164,26 +161,18 @@ TEST_F(DBTest3, MockEnvTest) {
     thread.join();
   }
 
-  //((DBImpl*)db)->TestCompaction();
-
   std::cout << "Start test get" << std::endl;
   for (auto &vec : sampled_keys) {
     for (auto &key : vec) {
       std::string res;
-      std::string expected = key + key;
+      std::string expected = repeat(key);
       auto status = db->Get(ReadOptions(), key, &res);
-      //std::cout << key << ": " << res << std::endl;
       ASSERT_TRUE(!status.ok() || res == expected );
       if (!status.ok()) {
         std::cout << key << " Error!" << std::endl;
       }
     }
   }
-
-  db->Delete(WriteOptions(), sampled_keys[0][0]);
-  std::string res;
-  auto status = db->Get(ReadOptions(), sampled_keys[0][0], &res);
-  assert(status.IsNotFound() && res.empty());
 
   std::cout << "Test get done" << std::endl;
 

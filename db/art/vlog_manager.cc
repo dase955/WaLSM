@@ -131,7 +131,7 @@ void VLogManager::SetMemtable(GlobalMemtable* mem) {
 }
 
 uint64_t VLogManager::AddRecord(const Slice& slice, uint32_t record_count) {
-  assert(header_->offset_ < vlog_segment_size_);
+  assert(header_->offset_ <= vlog_segment_size_);
 
   uint32_t left = slice.size();
   while (segment_remain_ < left) {
@@ -169,6 +169,14 @@ void VLogManager::GetKey(uint64_t vptr, Slice& key) {
   GetLengthPrefixedSlice(&slice, &key);
 }
 
+void VLogManager::GetKeyIndex(uint64_t vptr, std::string &key,
+                              RecordIndex& index) {
+  GetActualVptr(vptr);
+  index = ((uint32_t*)(pmemptr_ + vptr + 9))[0];
+  Slice slice(pmemptr_ + vptr + RecordPrefixSize, vlog_segment_size_);
+  GetLengthPrefixedSlice(&slice, key);
+}
+
 ValueType VLogManager::GetKeyValue(uint64_t vptr,
                                    std::string& key, std::string& value,
                                    SequenceNumber& seq_num,
@@ -193,37 +201,16 @@ ValueType VLogManager::GetKeyValue(uint64_t vptr,
 }
 
 ValueType VLogManager::GetKeyValue(uint64_t vptr,
-                                   std::string& key, std::string& value,
-                                   SequenceNumber& seq_num) {
-  GetActualVptr(vptr);
-  ValueType type = ((ValueType *)(pmemptr_ + vptr))[0];
-  assert(type == kTypeValue || type == kTypeDeletion);
-  seq_num = ((uint64_t *)(pmemptr_ + vptr + 1))[0];
-  Slice slice(pmemptr_ + vptr + RecordPrefixSize, vlog_segment_size_);
-  GetLengthPrefixedSlice(&slice, key);
-
-  switch (type) {
-    case kTypeValue:
-      GetLengthPrefixedSlice(&slice, value);
-      break;
-    default:
-      break;
-  }
-
-  return type;
-}
-
-ValueType VLogManager::GetKeyValue(uint64_t vptr,
                                    std::string& key, std::string& value) {
   GetActualVptr(vptr);
 
-  char* segment = pmemptr_ + vptr / vlog_segment_size_ * vlog_segment_size_;
-  auto header = (VLogSegmentHeader*)segment;
-  assert(header->status_ != kSegmentGC);
+  [[maybe_unused]] char* segment =
+      pmemptr_ + vptr / vlog_segment_size_ * vlog_segment_size_;
+  assert(((VLogSegmentHeader*)segment)->status_ != kSegmentGC);
+
 
   ValueType type = ((ValueType *)(pmemptr_ + vptr))[0];
   assert(type == kTypeValue || type == kTypeDeletion);
-  RecordIndex index = ((uint32_t*)(pmemptr_ + vptr + 9))[0];
   Slice slice(pmemptr_ + vptr + RecordPrefixSize, vlog_segment_size_);
   GetLengthPrefixedSlice(&slice, key);
 
@@ -238,53 +225,63 @@ ValueType VLogManager::GetKeyValue(uint64_t vptr,
   return type;
 }
 
-std::vector<GCData> VLogManager::ReadAndSortData(char* segment) {
-  auto header = (VLogSegmentHeader*)segment;
-  std::vector<GCData> gc_data;
-  Slice slice(segment + vlog_header_size_,
-              vlog_segment_size_ - vlog_header_size_);
+void VLogManager::ReadAndSortData(std::vector<char*>& segments) {
+  int estimate = 0;
+  for (auto segment : segments) {
+    auto header = (VLogSegmentHeader*)segment;
+    estimate += (header->total_count_ - header->compacted_count_);
+  }
 
-  uint16_t read = 0;
-  uint32_t key_length, value_length, key_start;
+  gc_data.clear();
+  gc_data.reserve(estimate);
 
-  KVStruct dummy_info{0, 0};
+  for (auto segment : segments) {
+    auto header = (VLogSegmentHeader*)segment;
+    Slice slice(segment + vlog_header_size_,
+                vlog_segment_size_ - vlog_header_size_);
 
-  auto total_count = header->total_count_;
-  auto bitmap = header->bitmap_;
-  while (read < total_count) {
-    auto record_start = slice.data();
-    ValueType type = *((ValueType*)record_start);
-    slice.remove_prefix(RecordPrefixSize);
+    uint16_t read = 0;
+    uint32_t key_length, value_length, key_start;
 
-    GetVarint32(&slice, &key_length);
-    key_start = slice.data() - record_start;
-    slice.remove_prefix(key_length);
-    if (type == kTypeValue) {
-      GetVarint32(&slice, &value_length);
-      slice.remove_prefix(value_length);
+    KVStruct dummy_info{0, 0};
+
+    auto total_count = header->total_count_;
+    auto bitmap = header->bitmap_;
+    while (read < total_count) {
+      auto record_start = slice.data();
+      ValueType type = *((ValueType*)record_start);
+      slice.remove_prefix(RecordPrefixSize);
+
+      GetVarint32(&slice, &key_length);
+      key_start = slice.data() - record_start;
+      slice.remove_prefix(key_length);
+      if (type == kTypeValue) {
+        GetVarint32(&slice, &value_length);
+        slice.remove_prefix(value_length);
+      }
+
+      // Not fully tested.
+      //if (true) {
+      if (bitmap[read / 8] & (1 << (read % 8))) {
+        std::string record(record_start, slice.data() - record_start);
+        dummy_info.vptr_ = record_start - pmemptr_;
+        dummy_info.kv_size_ = record.size();
+        gc_data.emplace_back(
+            key_start, key_length, dummy_info.vptr_, record);
+      }
+      ++read;
     }
-
-    // Not fully tested.
-    //if (true) {
-    if (bitmap[read / 8] & (1 << (read % 8))) {
-      std::string record(record_start, slice.data() - record_start);
-      dummy_info.vptr_ = record_start - pmemptr_;
-      dummy_info.kv_size_ = record.size() - RecordPrefixSize;
-      gc_data.emplace_back(
-          key_start, key_length, dummy_info.vptr_, record);
-    }
-    ++read;
   }
 
   std::sort(gc_data.begin(), gc_data.end(),
             [](GCData& l, GCData& r) {
               return l.key_ < r.key_;
             });
-
-  return gc_data;
 }
 
 void VLogManager::BGWorkGarbageCollection() {
+  std::vector<char*> segments;
+
   while (!thread_stop_) {
     gc_cv_.Wait();
     gc_ = true;
@@ -292,17 +289,26 @@ void VLogManager::BGWorkGarbageCollection() {
       break;
     }
 
-    char* segment_gc = ChooseSegmentToGC();
-    auto* header_gc = (VLogSegmentHeader*)segment_gc;
+    segments.clear();
+    for (int i = 0; i < 4; ++i) {
+      char* segment_gc = ChooseSegmentToGC();
+      if (!segment_gc) {
+        continue;
+      }
+      segments.push_back(segment_gc);
+    }
 
-    // If no segment is chosen, wait for next iteration.
-    if (!segment_gc) {
+    if (segments.empty()) {
       continue;
     }
 
-    std::lock_guard<SpinMutex> gc_lock(header_gc->lock.mutex_);
+    for (auto segment : segments) {
+      auto* header_gc = (VLogSegmentHeader*)segment;
+      std::lock_guard<SpinMutex> gc_lock(header_gc->lock.mutex_);
+      header_gc->status_ = kSegmentGC;
+    }
 
-    std::vector<GCData> gc_data = ReadAndSortData(segment_gc);
+    ReadAndSortData(segments);
 
     size_t index = 0;
     size_t level;
@@ -317,11 +323,10 @@ void VLogManager::BGWorkGarbageCollection() {
           cur_data.key_, level, stored_in_nvm);
 
       // Right now we don't reclaim free nodes.
-      /*if (unlikely(!inner_node)) {
+      if (unlikely(!inner_node)) {
         ++index;
         continue;
-      }*/
-      assert(inner_node);
+      }
 
       if (!stored_in_nvm) {
         inner_node->opt_lock_.UpgradeToWriteLock();
@@ -371,32 +376,38 @@ void VLogManager::BGWorkGarbageCollection() {
       }
     }
 
-    header_gc->offset_ = vlog_header_size_;
-    header_gc->total_count_ = header_gc->compacted_count_ = 0;
-    memset(header_gc->bitmap_, -1, vlog_bitmap_size_);
-    // pmem_persist(header, VLogHeaderSize);
+    for (auto segment : segments) {
+      auto* header_gc = (VLogSegmentHeader*)segment;
+      header_gc->offset_ = vlog_header_size_;
+      header_gc->total_count_ = header_gc->compacted_count_ = 0;
+      memset(header_gc->bitmap_, -1, vlog_bitmap_size_);
+      // pmem_persist(header, VLogHeaderSize);
 
-    gc_pages_.emplace_back((char*)header_gc);
-    header_gc->status_ = kSegmentGC;
+      gc_pages_.emplace_back((char*)header_gc);
+    }
+
     gc_ = false;
   }
 }
 
 char* VLogManager::ChooseSegmentToGC() {
-  auto num_used = free_segments_.size();
-  bool forceGC = num_used < force_gc_ratio_;
-
   char* segment = nullptr;
+
+  auto num_used = used_segments_.size();
   for (size_t i = 0; i < num_used; ++i) {
     segment = used_segments_.pop_front();
     auto header = (VLogSegmentHeader*)segment;
     float compacted_ratio =
         (float)header->compacted_count_ / (float)header->total_count_;
-    if (forceGC || compacted_ratio > compacted_ratio_threshold_) {
+    if (compacted_ratio > compacted_ratio_threshold_) {
       break;
     }
     used_segments_.emplace_back(segment);
     segment = nullptr;
+  }
+
+  if (!segment) {
+    segment = used_segments_.pop_front();
   }
 
   return segment;
@@ -432,8 +443,62 @@ void VLogManager::FreeQueue() {
   size_t size = gc_pages_.size();
   while (size--) {
     auto segment = gc_pages_.pop_front();
+    auto header = (VLogSegmentHeader*)segment;
+    std::lock_guard<SpinMutex> lk(header->lock.mutex_);
+    header->status_ = kSegmentFree;
     free_segments_.emplace_back(segment);
   }
+}
+
+void VLogManager::UpdateBitmap(
+    std::unordered_map<uint64_t, std::vector<RecordIndex>>& all_indexes) {
+  for (auto& pair : all_indexes) {
+    auto segment_id = pair.first;
+    auto& indexes = pair.second;
+    assert(segment_id < vlog_segment_num_);
+
+    auto header = (VLogSegmentHeader*)(
+        pmemptr_ + vlog_segment_size_ * segment_id);
+
+    if (!header->lock.mutex_.try_lock()) {
+      continue;
+    }
+
+    if (header->status_ != kSegmentWritten) {
+      header->lock.mutex_.unlock();
+      continue;
+    }
+
+    auto bitmap = header->bitmap_;
+    for (auto& index : indexes) {
+      assert(index / 8 < vlog_bitmap_size_);
+      bitmap[index / 8] &= ~(1 << (index % 8));
+    }
+    header->compacted_count_ += indexes.size();
+    PERSIST(header, vlog_header_size_);
+
+    header->lock.mutex_.unlock();
+  }
+
+  MEMORY_BARRIER;
+}
+
+void VLogManager::UpdateBitmap(uint64_t vptr) {
+
+}
+
+float VLogManager::Estimate() {
+  int total = 0;
+  int compacted = 0;
+  for (size_t i = 0; i < vlog_segment_num_; ++i) {
+    auto header = (VLogSegmentHeader*)(pmemptr_ + vlog_segment_size_ * i);
+    if (header->status_ != kSegmentWritten) {
+      continue;
+    }
+    total += header->total_count_;
+    compacted += header->compacted_count_;
+  }
+  return (float)compacted / (float)total;
 }
 
 }  // namespace ROCKSDB_NAMESPACE

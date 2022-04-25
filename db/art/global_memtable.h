@@ -44,16 +44,16 @@ struct InnerNode {
   NVMNode*   backup_nvm_node_;
 
   // Used for inserting new node
-  SpinMutex  link_lock_;
   InnerNode* last_child_node_;
+  InnerNode* parent_node_;
 
   InnerNode* next_node_;
   uint64_t   vptr_;
 
   std::mutex flush_mutex_;      // Used for flush and split operation
+  SpinMutex  link_lock_;
   OptLock    opt_lock_;
   int32_t    estimated_size_;   // Estimated kv size in this node
-  int32_t    buffer_size_;      // Total size in buffer
   uint32_t   status_;           // node status, see macros.h
   int64_t    oldest_key_time_;  // Just for compatibility
 
@@ -94,10 +94,10 @@ class GlobalMemtable {
   void SplitLeaf(InnerNode* leaf, size_t level,
                  InnerNode** node_need_split);
 
-  void ReadFromNVM(NVMNode* nvm_node, size_t level,
+  int32_t ReadFromNVM(NVMNode* nvm_node, size_t level,
                    uint64_t& leaf_vptr, autovector<KVStruct>* data);
 
-  void ReadFromVLog(NVMNode* nvm_node, size_t level,
+  int32_t ReadFromVLog(NVMNode* nvm_node, size_t level,
                     uint64_t& leaf_vptr, autovector<KVStruct>* data);
 
   InnerNode* root_;

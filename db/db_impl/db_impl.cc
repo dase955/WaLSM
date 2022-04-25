@@ -1705,7 +1705,7 @@ Status DBImpl::GetImpl(const ReadOptions& read_options, const Slice& key,
   LookupKey lkey(key, snapshot, read_options.timestamp);
   PERF_TIMER_STOP(get_snapshot_time);
 
-  bool skip_memtable = (read_options.read_tier == kPersistedTier &&
+  [[maybe_unused]] bool skip_memtable = (read_options.read_tier == kPersistedTier &&
                         has_unpersisted_data_.load(std::memory_order_relaxed));
   bool done = false;
   std::string* timestamp = ts_sz > 0 ? get_impl_options.timestamp : nullptr;

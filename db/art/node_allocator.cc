@@ -41,7 +41,9 @@ NodeAllocator::NodeAllocator(const DBOptions& options)
 
 NVMNode* NodeAllocator::AllocateNode() {
   char* ptr = free_pages_.pop_front();
-  return new (ptr) NVMNode();
+  memset(ptr, 0, 512);
+  auto nvm_node = (NVMNode*)ptr;
+  return nvm_node;
 }
 
 void NodeAllocator::DeallocateNode(NVMNode* node) {

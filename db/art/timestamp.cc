@@ -129,9 +129,6 @@ void Timestamps::EstimateBound(float& lower_bound, float& upper_bound) {
       return;
     }
 
-    int begin = last_insert_;
-    int mid = (begin + size_ / 2) % 8;
-    int end = (begin + size_ - 1) % 8;
     len = (size_ + 1) / 2;
     begin_ts = timestamps[last_insert_];
     mid_ts = timestamps[(last_insert_ + size_ / 2) % 8];

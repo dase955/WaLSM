@@ -59,25 +59,30 @@ class VLogManager {
 
   void SetMemtable(GlobalMemtable* mem);
 
+  RecordIndex GetFirstIndex(size_t wal_size) const;
+
   uint64_t AddRecord(const Slice& slice, uint32_t record_count);
 
   void GetKey(uint64_t vptr, std::string &key);
 
   void GetKey(uint64_t vptr, Slice &key);
 
+  void GetKeyIndex(uint64_t vptr, std::string &key, RecordIndex& index);
+
+  ValueType GetKeyValue(uint64_t offset, std::string& key, std::string& value);
+
   ValueType GetKeyValue(uint64_t offset,
                         std::string& key, std::string& value,
                         SequenceNumber& seq_num, RecordIndex& index);
 
-  ValueType GetKeyValue(uint64_t offset,
-                        std::string& key, std::string& value,
-                        SequenceNumber& seq_num);
-
-  ValueType GetKeyValue(uint64_t offset, std::string& key, std::string& value);
-
-  RecordIndex GetFirstIndex(size_t wal_size) const;
-
   void FreeQueue();
+
+  void UpdateBitmap(
+      std::unordered_map<uint64_t, std::vector<RecordIndex>>& all_indexes);
+
+  void UpdateBitmap(uint64_t vptr);
+
+  float Estimate();
 
  private:
   void BGWorkGarbageCollection();
@@ -92,7 +97,7 @@ class VLogManager {
 
   char* ChooseSegmentToGC();
 
-  std::vector<GCData> ReadAndSortData(char* segment);
+  void ReadAndSortData(std::vector<char*>& segments);
 
   char* pmemptr_;
 
@@ -111,6 +116,8 @@ class VLogManager {
   // segment should push into a separate queue after gc,
   // because compaction thread may still need these segments.
   TQueueConcurrent<char*> gc_pages_;
+
+  std::vector<GCData> gc_data;
 
   char* segment_for_gc_;
 
