@@ -70,6 +70,8 @@ int main() {
 
   std::cout << " db initialized " << std::endl;
 
+  db->Put(WriteOptions(), "key1", "value1");
+
   // Put key-value
 //  s = db->Put(WriteOptions(), "key1", "value");
 //  assert(s.ok());
@@ -77,13 +79,13 @@ int main() {
   // get value
   s = db->Get(ReadOptions(), "key1", &value);
 
-  for (int i = 0; i < 10000000; i++) {
+  for (int i = 0; i < 100000; i++) {
     db->Put(WriteOptions(), randomString(64), randomString(128));
   }
 
   s = db->Get(ReadOptions(), "key1", &value);
   assert(s.ok());
-  assert(value == "value");
+  assert(value == "value1");
 
   std::cout << " insert finished." << std::endl;
 
@@ -96,7 +98,7 @@ int main() {
   {
     WriteBatch batch;
     batch.Delete("key1");
-    batch.Put("key2", value);
+    batch.Put("key2", "value");
     s = db->Write(WriteOptions(), &batch);
   }
 
