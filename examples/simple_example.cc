@@ -6,6 +6,10 @@
 #include <cstdio>
 #include <string>
 #include <random>
+#include <vector>
+#include <set>
+#include <algorithm>
+#include <iostream>
 
 #include "rocksdb/db.h"
 #include "rocksdb/slice.h"
@@ -24,7 +28,8 @@ std::string randomString(int len) {
 
   for (int i = 0; i < len; i++) {
     tmp = random() % 36;
-    tmp += (tmp < 10) ? '0' : 'a';
+    tmp += (tmp < 10) ? '0' : ('a'-10);
+    buf += tmp;
   }
 
   return buf;
@@ -39,28 +44,53 @@ int main() {
   options.use_direct_io_for_flush_and_compaction = true;
   // create the DB if it's not already present
   options.create_if_missing = true;
-  options.target_file_size_base = 4 * 1048576;
+//  options.target_file_size_base = 4 * 1048576;
   options.write_buffer_size = 4 * 1048576;
+  options.level0_file_num_compaction_trigger = 4;
+  options.use_direct_io_for_flush_and_compaction = true;
+  options.use_direct_reads = true;
+
+
+  std::vector<Slice> partition_keys(10, "");
+  std::vector<std::string> values(10);
+  for (int i = 1; i <= 9; i++) {
+    values[i] = randomString(64);
+    partition_keys[i] = Slice(values[i]);
+  }
+  std::sort(partition_keys.begin(), partition_keys.end());
+
+  for (auto& s : partition_keys) {
+    std::cout << "partition " << s.ToString(false) << std::endl;
+  }
+
+  options.partition_keys = partition_keys;
   // open DB
   Status s = DB::Open(options, kDBPath, &db);
   assert(s.ok());
 
+  std::cout << " db initialized " << std::endl;
+
   // Put key-value
-  s = db->Put(WriteOptions(), "key1", "value");
-  assert(s.ok());
+//  s = db->Put(WriteOptions(), "key1", "value");
+//  assert(s.ok());
   std::string value;
   // get value
   s = db->Get(ReadOptions(), "key1", &value);
-  assert(s.ok());
-  assert(value == "value");
 
-  for (int i = 0; i < 1000000000; i++) {
+  for (int i = 0; i < 10000000; i++) {
     db->Put(WriteOptions(), randomString(64), randomString(128));
   }
 
   s = db->Get(ReadOptions(), "key1", &value);
   assert(s.ok());
   assert(value == "value");
+
+  std::cout << " insert finished." << std::endl;
+
+  for (int i = 0; i < 10000; i++) {
+    // test random get
+    db->Get(ReadOptions(), randomString(64), &value);
+  }
 
   // atomically apply a set of updates
   {
