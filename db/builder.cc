@@ -353,19 +353,23 @@ Status BuildTable(
 }
 
 struct CompactionRec {
-  std::string key;
-  std::string value;
+  std::string* key;
+  std::string* value;
   uint64_t    seq_num_;
   ValueType   type;
 
   CompactionRec() = default;
 
-  CompactionRec(std::string& key_, std::string& value_,
+  CompactionRec(std::string* key_, std::string* value_,
                 uint64_t seq_num, ValueType type_)
       : key(key_), value(value_), seq_num_(seq_num), type(type_){};
 
   friend bool operator<(const CompactionRec& l, const CompactionRec& r) {
-    return l.key < r.key;
+    return *l.key < *r.key;
+  }
+
+  friend bool operator==(const CompactionRec& l, const CompactionRec& r) {
+    return *l.key == *r.key;
   }
 };
 
@@ -374,43 +378,39 @@ void ReadAndBuild(SingleCompactionJob* job,
                   FileMetaData* meta) {
   const size_t kReportFlushIOStatsEvery = 1048576;
 
-  SequenceNumber seq_num = 0;
   RecordIndex record_index = 0;
-  std::string dummy_string;
-  std::vector<CompactionRec> kvs;
+  std::vector<std::string> keys(240);
+  std::vector<std::string> values(240);
+  std::vector<CompactionRec> kvs(240);
 
   for (auto nvm_node : job->nvm_nodes_) {
+    int count = 0;
     auto data = nvm_node->data;
     int size = GET_SIZE(nvm_node->meta.header);
 
-    kvs.clear();
     for (int i = -16; i < size; ++i) {
       auto vptr = data[i * 2 + 1];
       if (!vptr) {
         continue;
       }
 
-      std::string key, value;
-      auto value_type = job->vlog_manager_->GetKeyValue(
-          vptr, key, value, seq_num, record_index);
-      //assert(key + key == value);
-      kvs.emplace_back(key, value, seq_num, value_type);
+      auto& kv = kvs[count];
+      kv.type = job->vlog_manager_->GetKeyValue(
+          vptr, keys[count], values[count], kv.seq_num_, record_index);
+      kv.key = &keys[count];
+      kv.value = &values[count++];
 
       GetActualVptr(vptr);
       job->compacted_indexes_[vptr >> 20].push_back(record_index);
     }
 
-    std::stable_sort(kvs.begin(), kvs.end());
-
-    std::string& last_key = dummy_string;
-    for (auto& kv : kvs) {
-      if (kv.key != last_key) {
-        last_key = kv.key;
-        InternalKey ikey(kv.key, kv.seq_num_, kv.type);
-        builder->Add(ikey.Encode(), kv.value);
-        meta->UpdateBoundaries(
-            ikey.Encode(), kv.value, kv.seq_num_, kv.type);
-      }
+    std::stable_sort(kvs.begin(), kvs.begin() + count);
+    auto end = std::unique(kvs.begin(), kvs.begin() + count);
+    for (auto it = kvs.begin(); it != end; ++it) {
+      InternalKey ikey(*it->key, it->seq_num_, it->type);
+      builder->Add(ikey.Encode(), *it->value);
+      meta->UpdateBoundaries(
+          ikey.Encode(), *it->value, it->seq_num_, it->type);
     }
 
     // TODO(noetzli): Update stats after flush, too.

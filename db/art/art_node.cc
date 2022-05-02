@@ -386,7 +386,14 @@ InnerNode* InsertToArtNode48(ArtNode* art, InnerNode* leaf, unsigned char c) {
   }
   node48->children_[pos] = leaf;
   node48->keys_[c] = pos + 1;
-  return pos > 0 ? node48->children_[node48->keys_[c] - 2] : nullptr;
+
+  for (int i = static_cast<int>(c) - 1; i >= 0; --i) {
+    if (node48->keys_[i]) {
+      return node48->children_[node48->keys_[i] - 1];
+    }
+  }
+
+  return nullptr;
 }
 
 InnerNode* InsertToArtNode256(ArtNode* art, InnerNode* leaf, unsigned char c) {

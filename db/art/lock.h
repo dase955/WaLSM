@@ -11,30 +11,45 @@
 
 namespace ROCKSDB_NAMESPACE {
 
+// TODO: use first bit to indicate whether we can read from node
+// eg. when node is being split, we can still read data from node
+// even if OptLock is locked. When node is being compacted, we cannot
+// read data from node because data may have been corrupted.
 struct OptLock {
   std::atomic<uint32_t> type_version_lock_{0b100};
 
-  uint32_t ReadLockOrRestart(bool &need_restart);
+  static bool IsLocked(uint32_t version) {
+    return ((version & 0b10) == 0b10);
+  }
 
-  void WriteLockOrRestart(bool &need_restart);
+  static bool IsObsolete(uint32_t version) {
+    return (version & 1) == 1;
+  }
 
-  void UpgradeToWriteLockOrRestart(uint32_t &version, bool &need_restart);
+  void SetObsolete() {
+    type_version_lock_ &= 1;
+  }
 
-  void UpgradeToWriteLock();
+  void RemoveObsolete() {
+    type_version_lock_ &= -2;
+  }
+
+  void UpgradeToWriteLockOrRestart(uint32_t& version, bool& need_restart);
+
+  void WriteLock();
 
   void WriteUnlock(bool reverse = false);
 
-  void CheckOrRestart(uint32_t start_read, bool &need_restart) const;
-
-  void ReadUnlockOrRestart(uint32_t start_read, bool &need_restart) const;
-
-  void WriteUnlockObsolete();
-
   uint32_t AwaitNodeUnlocked();
 
-  static bool IsLocked(uint32_t version);
+  void CheckOrRestart(uint32_t start_read, bool& need_restart) const;
 
-  static bool IsObsolete(uint32_t version);
+  // Function for read
+  uint32_t AwaitNodeReadable();
+
+  uint32_t GetCurrentVersion() {
+    return type_version_lock_.load(std::memory_order_relaxed);
+  }
 };
 
 }  // namespace ROCKSDB_NAMESPACE

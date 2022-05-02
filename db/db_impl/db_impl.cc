@@ -511,6 +511,8 @@ Status DBImpl::CloseHelper() {
   // Guarantee that there is no background error recovery in progress before
   // continuing with the shutdown
   mutex_.Lock();
+  compactor_.StopCompactionThread();
+
   shutdown_initiated_ = true;
   error_handler_.CancelErrorRecovery();
   while (error_handler_.IsRecoveryInProgress()) {
@@ -675,7 +677,6 @@ Status DBImpl::CloseHelper() {
 Status DBImpl::CloseImpl() { return CloseHelper(); }
 
 DBImpl::~DBImpl() {
-  compactor_.StopCompactionThread();
   if (!closed_) {
     closed_ = true;
     CloseHelper().PermitUncheckedError();

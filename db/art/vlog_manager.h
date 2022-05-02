@@ -57,6 +57,8 @@ class VLogManager {
 
   ~VLogManager();
 
+  void Recovery();
+
   void SetMemtable(GlobalMemtable* mem);
 
   RecordIndex GetFirstIndex(size_t wal_size) const;

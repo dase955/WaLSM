@@ -1179,8 +1179,8 @@ struct DBOptions {
   int group_split_threshold = 12 << 20;
 
   // A threshold for the size of a group that can chosen to do compaction.
-  // Default: 4M
-  int group_min_size = 4 << 20;
+  // Default: 8M
+  int group_min_size = 8 << 20;
 
   // Size of vlog file.
   // Default: 4G

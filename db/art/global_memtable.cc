@@ -15,11 +15,12 @@
 #include "vlog_manager.h"
 #include "heat_group.h"
 #include "heat_group_manager.h"
+#include "node_allocator.h"
 #include "compactor.h"
 
 namespace ROCKSDB_NAMESPACE {
 
-#define SQUEEZE_THRESHOLD 112
+#define SQUEEZE_THRESHOLD 104
 
 InnerNode::InnerNode()
     : heat_group_(nullptr), art(nullptr),
@@ -63,6 +64,8 @@ void FlushBuffer(InnerNode* leaf, int row) {
   SET_ROWS(hdr, row + 1);
   node->meta.header = hdr;
   PERSIST(node, 8);
+
+  SET_NODE_BUFFER_SIZE(leaf->status_, 0);
 }
 
 #ifdef ROCKSDB_SUPPORT_THREAD_LOCAL
@@ -79,14 +82,10 @@ void FlushBufferAndRelease(InnerNode* leaf, int row) {
   uint64_t buffer_copy[32];
 #endif
 
-  memcpy(buffer_copy, leaf->buffer_, ROW_SIZE);
-
-  leaf->opt_lock_.WriteUnlock(true);
-
   int h, bucket;
   uint8_t digit;
   for (size_t i = 0; i < 16; ++i) {
-    auto hash = buffer_copy[i << 1];
+    auto hash = leaf->buffer_[i << 1];
     fingerprints_copy[i] = static_cast<uint8_t>(hash);
     bucket = (int)(hash & 63);
     h = (int)(hash >> 6);
@@ -96,7 +95,7 @@ void FlushBufferAndRelease(InnerNode* leaf, int row) {
 
   uint64_t* data_flush_start = node->data + (row << 5);
   uint8_t* finger_flush_start = node->meta.fingerprints_ + ROW_TO_SIZE(row);
-  MEMCPY(data_flush_start, buffer_copy, 256,
+  MEMCPY(data_flush_start, leaf->buffer_, 256,
          PMEM_F_MEM_NODRAIN | PMEM_F_MEM_NONTEMPORAL);
   MEMCPY(finger_flush_start, fingerprints_copy, 16,
          PMEM_F_MEM_NODRAIN | PMEM_F_MEM_NONTEMPORAL);
@@ -110,6 +109,9 @@ void FlushBufferAndRelease(InnerNode* leaf, int row) {
   SET_ROWS(hdr, row + 1);
   node->meta.header = hdr;
   PERSIST(node, 8);
+
+  SET_NODE_BUFFER_SIZE(leaf->status_, 0);
+  leaf->opt_lock_.WriteUnlock(false);
 }
 
 //////////////////////////////////////////////////////////
@@ -126,6 +128,7 @@ GlobalMemtable::GlobalMemtable(
 void GlobalMemtable::InitFirstLevel() {
   root_ = new InnerNode();
   tail_ = new InnerNode();
+  head_ = AllocateLeafNode(0, 0, nullptr);
   SET_NON_LEAF(root_->status_);
   SET_ART_FULL(root_->status_);
 
@@ -198,7 +201,8 @@ void GlobalMemtable::InitFirstLevel() {
 
   MEMORY_BARRIER;
 
-  head_ = next_inner_node;
+  head_->nvm_node_->meta.next1 =
+      GetNodeAllocator()->relative(next_inner_node->nvm_node_);
 }
 
 void GlobalMemtable::Put(Slice& slice, uint64_t base_vptr, size_t count) {
@@ -252,10 +256,9 @@ void GlobalMemtable::Put(Slice& key, KVStruct& kv_info) {
 
     // level > maxDepth means key need to be stored in vptr_
     if (level == max_level) {
-      current->opt_lock_.UpgradeToWriteLock();
-      vlog_manager_->UpdateBitmap(current->vptr_);
+      current->opt_lock_.WriteLock();
       current->vptr_ = kv_info.vptr_;
-      current->opt_lock_.WriteUnlock(true);
+      current->opt_lock_.WriteUnlock(false);
       return;
     }
 
@@ -273,6 +276,9 @@ void GlobalMemtable::Put(Slice& key, KVStruct& kv_info) {
 
       Rehash(key.data(), key.size(), kv_info.hash_, level + 1);
       InnerNode* leaf = AllocateLeafNode(level + 1, key[level], nullptr);
+
+      leaf->opt_lock_.WriteLock();
+
       ++leaf->status_;
       leaf->buffer_[0] = kv_info.hash_;
       leaf->buffer_[1] = kv_info.vptr_;
@@ -285,8 +291,10 @@ void GlobalMemtable::Put(Slice& key, KVStruct& kv_info) {
       InsertToArtNode(current, leaf, key[level], true);
       leaf->estimated_size_ += kv_info.kv_size_;
       leaf->heat_group_->UpdateSize(kv_info.kv_size_);
-      current->opt_lock_.WriteUnlock();
+      current->opt_lock_.WriteUnlock(false);
       leaf->heat_group_->UpdateHeat();
+
+      leaf->opt_lock_.WriteUnlock(true);
       return;
     }
 
@@ -360,7 +368,7 @@ void GlobalMemtable::SqueezeNode(InnerNode* leaf) {
     cur_size += kv_info.kv_size_;
   }
 
-  assert(fpos <= NVM_MAX_SIZE);
+  assert(fpos <= NVM_MAX_SIZE - 16);
   assert(count <= (NVM_MAX_SIZE * 2));
 
   leaf->estimated_size_ = cur_size;
@@ -389,7 +397,6 @@ void GlobalMemtable::SqueezeNode(InnerNode* leaf) {
 int32_t GlobalMemtable::ReadFromVLog(NVMNode* nvm_node, size_t level,
                                   uint64_t& leaf_vptr,
                                   autovector<KVStruct>* split_buckets) {
-  leaf_vptr = 0;
   int32_t delta = 0;
   int32_t final_size = 0;
 
@@ -420,7 +427,6 @@ int32_t GlobalMemtable::ReadFromVLog(NVMNode* nvm_node, size_t level,
 int32_t GlobalMemtable::ReadFromNVM(NVMNode* nvm_node, size_t level,
                                  uint64_t& leaf_vptr,
                                  autovector<KVStruct>* split_buckets) {
-  leaf_vptr = 0;
   int32_t delta = 0;
   int32_t final_size = 0;
 
@@ -462,7 +468,7 @@ void GlobalMemtable::SplitLeaf(InnerNode* leaf, size_t level,
 
   int64_t oldest_key_time = leaf->oldest_key_time_;
 
-  // 0 and 255 are always created
+  // leaf 0 is always created
   int32_t split_num = 1;
   for (size_t i = 1; i <= LAST_CHAR; ++i) {
     if (!split_buckets[i].empty()) {
@@ -593,10 +599,6 @@ void GlobalMemtable::InsertIntoLeaf(InnerNode* leaf, KVStruct& kv_info,
 
     env_->GetCurrentTime(&leaf->oldest_key_time_);
 
-    // Now we need to flush data into nvm
-    SET_NODE_BUFFER_SIZE(leaf->status_, 0);
-    assert(GET_NODE_BUFFER_SIZE(leaf->status_) == 0);
-
     int rows = GET_ROWS(leaf->nvm_node_->meta.header);
     assert(rows < NVM_MAX_ROWS);
 
@@ -621,11 +623,11 @@ void GlobalMemtable::InsertIntoLeaf(InnerNode* leaf, KVStruct& kv_info,
         SplitLeaf(leaf, level, &next_to_split);
 
         if (next_to_split) {
-          next_to_split->opt_lock_.UpgradeToWriteLock();
+          next_to_split->opt_lock_.WriteLock();
           next_to_split->flush_mutex_.lock();
         }
 
-        leaf->opt_lock_.WriteUnlock(false);
+        leaf->opt_lock_.WriteUnlock(true);
       }
     }
   }
@@ -635,10 +637,10 @@ void GlobalMemtable::InsertIntoLeaf(InnerNode* leaf, KVStruct& kv_info,
     SplitLeaf(current, ++level, &next_to_split);
 
     if (next_to_split) {
-      next_to_split->opt_lock_.UpgradeToWriteLock();
+      next_to_split->opt_lock_.WriteLock();
       next_to_split->flush_mutex_.lock();
     }
-    current->opt_lock_.WriteUnlock();
+    current->opt_lock_.WriteUnlock(true);
     current->flush_mutex_.unlock();
   }
 }

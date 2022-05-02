@@ -8,7 +8,7 @@
 #include <cstring>
 #include <cmath>
 
-
+#include "art_node.h"
 #include "macros.h"
 #include "nvm_node.h"
 #include "node_allocator.h"
@@ -86,29 +86,44 @@ InnerNode* AllocateLeafNode(uint8_t prefix_length,
   return inode;
 }
 
-void RemoveNVMNode(InnerNode* node) {
-  InnerNode* parent = node->parent_node_;
-  parent->opt_lock_.UpgradeToWriteLock();
+ArtNode* RemoveChildrenNVMNode(InnerNode* parent) {
+  // assert parent lock is held, so last child node is unchanged
+  InnerNode* last_child_node = parent->last_child_node_;
+  std::lock_guard<SpinMutex> link_lk(last_child_node->link_lock_);
 
-  // TODO: find prev node from art of parent
-  InnerNode* prev_node = nullptr;
-  prev_node->link_lock_.lock();
+  InnerNode* next_inner_node = last_child_node->next_node_;
+  [[maybe_unused]] InnerNode* first_remove_node = parent->next_node_;
+  parent->next_node_ = next_inner_node;
 
-  // Remove NVMNode from linked list,
-  // but preserve InnerNode
-  NVMNode* prev_nvm_node = prev_node->nvm_node_;
-  NVMNode* next_nvm_node = node->next_node_->nvm_node_;
+  NVMNode* cur_nvm_node = parent->nvm_node_;
+  NVMNode* next_nvm_node = next_inner_node->nvm_node_;
   int64_t next_relative = GetNodeAllocator()->relative(next_nvm_node);
 
-  if (GET_TAG(prev_nvm_node->meta.header, ALT_FIRST_TAG)) {
-    prev_nvm_node->meta.next1 = next_relative;
+  auto old_hdr = cur_nvm_node->meta.header;
+  auto new_hdr = old_hdr;
+  if (GET_TAG(old_hdr, ALT_FIRST_TAG)) {
+    CLEAR_TAG(new_hdr, ALT_FIRST_TAG);
+    cur_nvm_node->meta.next2 = next_relative;
   } else {
-    prev_nvm_node->meta.next2 = next_relative;
+    SET_TAG(new_hdr, ALT_FIRST_TAG);
+    cur_nvm_node->meta.next1 = next_relative;
   }
-  PERSIST(prev_nvm_node, 8);
+  SET_ROWS(new_hdr, 0);
+  SET_SIZE(new_hdr, 0);
+  cur_nvm_node->meta.header = new_hdr;
+  PERSIST(cur_nvm_node, 8);
 
-  node->nvm_node_ = nullptr;
-  parent->opt_lock_.WriteUnlock();
+  auto art = parent->art;
+  delete art->backup_;
+  parent->art = nullptr;
+  auto status = parent->status_;
+  SET_LEAF(status);
+  SET_NON_GROUP_START(status);
+  SET_ART_NON_FULL(status);
+  SET_NODE_BUFFER_SIZE(status, 0);
+  SET_GC_FLUSH_SIZE(status, 0);
+  parent->status_ = status;
+  return art;
 }
 
 void InsertInnerNode(InnerNode* node, InnerNode* inserted) {
@@ -227,11 +242,57 @@ void RemoveOldNVMNode(InnerNode* node) {
   GetNodeAllocator()->DeallocateNode(backup_nvm_node);
 }
 
+void RemoveCompactedNodes(std::vector<InnerNode*>& inner_nodes) {
+  // remove parent's children from linked list
+  // and store art, these art nodes will be free in next time
+  std::vector<ArtNode*> removed_art;
+
+  for (auto inner_node : inner_nodes) {
+    inner_node->opt_lock_.WriteLock();
+  }
+
+  for (int iter = 0; iter < 2; ++iter) {
+    std::unordered_map<InnerNode*, int> parents_and_counts;
+    std::vector<InnerNode*> next_inner_nodes;
+    for (auto inner_node : inner_nodes) {
+      ++parents_and_counts[inner_node->parent_node_];
+    }
+
+    bool next_iteration = true;
+    for (auto& pair : parents_and_counts) {
+      auto parent = pair.first;
+      // lock parent
+      parent->opt_lock_.WriteLock();
+      if (parent->art->num_children_ == pair.second) {
+        parent->opt_lock_.WriteUnlock(true);
+        next_iteration = false;
+        continue;
+      }
+      next_inner_nodes.push_back(parent);
+      removed_art.push_back(RemoveChildrenNVMNode(parent));
+    }
+
+    for (auto inner_node : inner_nodes) {
+      inner_node->opt_lock_.WriteUnlock(false);
+    }
+
+    inner_nodes = next_inner_nodes;
+    if (!next_iteration) {
+      break;
+    }
+  }
+
+  for (auto inner_node : inner_nodes) {
+    inner_node->opt_lock_.WriteUnlock(false);
+  }
+}
+
 NVMNode* GetNextNode(NVMNode* node) {
   int64_t next_offset =
       GET_TAG(node->meta.header, ALT_FIRST_TAG)
           ? node->meta.next1 : node->meta.next2;
-  return GetNodeAllocator()->absolute(next_offset);
+  return next_offset == -1 ? nullptr :
+                           GetNodeAllocator()->absolute(next_offset);
 }
 
 NVMNode* GetNextNode(int64_t offset) {
@@ -239,7 +300,8 @@ NVMNode* GetNextNode(int64_t offset) {
   int64_t next_offset =
       GET_TAG(node->meta.header, ALT_FIRST_TAG)
           ? node->meta.next1 : node->meta.next2;
-  return GetNodeAllocator()->absolute(next_offset);
+  return next_offset == -1 ? nullptr :
+                           GetNodeAllocator()->absolute(next_offset);
 }
 
 int64_t GetNextRelativeNode(NVMNode* node) {

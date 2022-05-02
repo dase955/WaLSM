@@ -5,6 +5,7 @@
 #include "nvm_manager.h"
 
 #include <sys/mman.h>
+#include <sys/stat.h>
 #include <unistd.h>
 #include <fcntl.h>
 
@@ -18,17 +19,24 @@ std::unordered_map<std::string, char*> memories;
 
 namespace ROCKSDB_NAMESPACE {
 
-void InitializeMemory(std::unordered_map<std::string, int64_t>& memory_usages) {
+bool InitializeMemory(std::unordered_map<std::string, int64_t>& memory_usages) {
   TotalSize = 0;
   for (auto& memory_usage : memory_usages) {
     TotalSize += memory_usage.second;
   }
 
 #ifdef USE_PMEM
-  int fd = open(MEMORY_PATH, O_CREAT|O_RDWR, 0666);
-  assert(-1 != fd);
+  int fd;
 
-  posix_fallocate(fd, 0, TotalSize);
+  struct stat buffer;
+  bool file_exist = stat(MEMORY_PATH, &buffer) == 0;
+  if (!file_exist) {
+    fd = open(MEMORY_PATH, O_CREAT|O_RDWR, 0666);
+    assert(-1 != fd);
+    posix_fallocate(fd, 0, TotalSize);
+  } else {
+    fd = open(MEMORY_PATH, O_CREAT, 0666);
+  }
 
   int is_pmem;
   size_t mapped_len;
@@ -38,10 +46,19 @@ void InitializeMemory(std::unordered_map<std::string, int64_t>& memory_usages) {
 
   close(fd);
 #else
-  int fd = open(MEMORY_PATH, O_RDWR|O_CREAT, 00777);
-  assert(-1 != fd);
-  lseek(fd, TotalSize - 1, SEEK_SET);
-  write(fd, "", 1);
+  int fd;
+
+  struct stat buffer;
+  bool file_exist = stat(MEMORY_PATH, &buffer) == 0;
+  if (!file_exist) {
+    fd = open(MEMORY_PATH, O_RDWR|O_CREAT, 00777);
+    assert(-1 != fd);
+    lseek(fd, TotalSize - 1, SEEK_SET);
+    write(fd, "", 1);
+  } else {
+    fd = open(MEMORY_PATH, O_RDWR, 00777);
+  }
+
   base_memptr = (char*)mmap(
       nullptr, TotalSize, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
   close(fd);
@@ -52,6 +69,8 @@ void InitializeMemory(std::unordered_map<std::string, int64_t>& memory_usages) {
     memories.emplace(memory_usage.first, base_memptr + offset);
     offset += memory_usage.second;
   }
+
+  return file_exist;
 }
 
 char* GetMappedAddress(const std::string& name) {

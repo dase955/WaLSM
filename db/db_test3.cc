@@ -77,21 +77,8 @@ class DBTest3 : public DBTestBase {
   DBTest3() : DBTestBase("/db_test3", /*env_do_fsync=*/false) {}
 };
 
-void MyGenerateKeyFromInt(uint64_t v, Slice* key) {
-  char* start = const_cast<char*>(key->data());
-  char* pos = start;
-  int bytes_to_fill = std::min(16 - static_cast<int>(pos - start), 8);
-  for (int i = 0; i < bytes_to_fill; ++i) {
-    pos[i] = (v >> ((bytes_to_fill - i - 1) << 3)) & 0xFF;
-  }
-  pos += bytes_to_fill;
-  if (16 > pos - start) {
-    memset(pos, '0', 16 - (pos - start));
-  }
-}
-
-int count_per_thread = 16384 * 128;
-int sample_interval = 32;
+int count_per_thread = 16384 * 32;
+int sample_interval = 12;
 int sample_size = count_per_thread / sample_interval;
 
 std::string repeat(std::string& str) {
@@ -103,6 +90,31 @@ std::string repeat(std::string& str) {
     ret += str;
   }
   return ret;
+}
+
+static int64_t FNV_OFFSET_BASIS_64 = 0xCBF29CE484222325LL;
+static int64_t FNV_PRIME_64 = 1099511628211L;
+
+unsigned long fnvhash64(int64_t val) {
+  //from http://en.wikipedia.org/wiki/Fowler_Noll_Vo_hash
+  int64_t hashval = FNV_OFFSET_BASIS_64;
+
+  for (int i = 0; i < 8; i++) {
+    int64_t octet = val & 0x00ff;
+    val = val >> 8;
+
+    hashval = hashval ^ octet;
+    hashval = hashval * FNV_PRIME_64;
+    //hashval = hashval ^ octet;
+  }
+  return hashval > 0 ? hashval : -hashval;
+}
+
+std::atomic<int64_t> counter{0};
+std::string next_key() {
+  auto keynum = fnvhash64(counter++);
+  std::string key = std::to_string(keynum);
+  return "user" + key;
 }
 
 void MultiThreadTest(DB *db, std::vector<std::string> *sampled_keys, int thread_id) {
@@ -117,8 +129,8 @@ void MultiThreadTest(DB *db, std::vector<std::string> *sampled_keys, int thread_
   sampled_keys->reserve(sample_size);
 
   for (int i = 0; i < count_per_thread; ++i) {
-    std::shuffle(keyStr.begin(), keyStr.end(), generator);
-    std::string key = keyStr.substr(0, keyDis(gen));    // assumes 32 < number of characters in str
+    //std::shuffle(keyStr.begin(), keyStr.end(), generator);
+    std::string key = next_key();    // assumes 32 < number of characters in str
     std::string value = repeat(key);
 
     ASSERT_OK(db->Put(WriteOptions(), key, value));
@@ -146,6 +158,7 @@ TEST_F(DBTest3, MockEnvTest) {
   DB* db;
 
   ASSERT_OK(DB::Open(options, "/dir/db", &db));
+
 
   int thread_num = 16;
 

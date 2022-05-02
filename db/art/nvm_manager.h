@@ -9,7 +9,7 @@
 
 namespace ROCKSDB_NAMESPACE {
 
-void InitializeMemory(std::unordered_map<std::string, int64_t>& memory_usages);
+bool InitializeMemory(std::unordered_map<std::string, int64_t>& memory_usages);
 
 char* GetMappedAddress(const std::string& name);
 

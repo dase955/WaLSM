@@ -18,6 +18,8 @@ class NodeAllocator {
  public:
   NodeAllocator(const DBOptions& options);
 
+  void Recovery();
+
   size_t GetNumFreePages() {
     return free_pages_.size();
   }
