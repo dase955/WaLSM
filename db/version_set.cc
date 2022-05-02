@@ -1812,8 +1812,11 @@ void Version::Get(const ReadOptions& read_options, const LookupKey& k,
       vset_->block_cache_tracer_->is_tracing_enabled()) {
     tracing_get_id = vset_->block_cache_tracer_->NextGetId();
   }
+  // determine hit partition
+  auto* hit_partition = storage_info_.GetHitPartition(user_key);
   GetContext get_context(
-      user_comparator(), merge_operator_, info_log_, db_statistics_,
+      user_comparator(), merge_operator_, info_log_,
+      db_statistics_, hit_partition->partition_statistics_,
       status->ok() ? GetContext::kNotFound : GetContext::kMerge, user_key,
       do_merge ? value : nullptr, do_merge ? timestamp : nullptr, value_found,
       merge_context, do_merge, max_covering_tombstone_seq, this->env_, seq,
@@ -1825,9 +1828,13 @@ void Version::Get(const ReadOptions& read_options, const LookupKey& k,
     pinned_iters_mgr.StartPinning();
   }
 
-  // determine hit partition
+  std::vector<FileMetaData*> hit_files[storage_info_.num_levels_];
+  hit_files[0] = storage_info_.files_[0];
+  for (int i = 1; i < storage_info_.num_levels_; i++) {
+    hit_files[i] = hit_partition->files_[i];
+  }
   FilePicker fp(
-      storage_info_.GetHitFiles(user_key), user_key, ikey, &storage_info_.level_files_brief_,
+      hit_files, user_key, ikey, &storage_info_.level_files_brief_,
       storage_info_.num_non_empty_levels_, &storage_info_.file_indexer_,
       user_comparator(), internal_comparator());
   FdWithKeyRange* f = fp.GetNextFile();
@@ -1954,7 +1961,7 @@ void Version::MultiGet(const ReadOptions& read_options, MultiGetRange* range,
   for (auto iter = range->begin(); iter != range->end(); ++iter) {
     assert(iter->s->ok() || iter->s->IsMergeInProgress());
     get_ctx.emplace_back(
-        user_comparator(), merge_operator_, info_log_, db_statistics_,
+        user_comparator(), merge_operator_, info_log_, db_statistics_, nullptr,
         iter->s->ok() ? GetContext::kNotFound : GetContext::kMerge, iter->ukey,
         iter->value, iter->timestamp, nullptr, &(iter->merge_context), true,
         &iter->max_covering_tombstone_seq, this->env_, nullptr,
@@ -4633,7 +4640,7 @@ Status VersionSet::Recover(
 
   // there were some column families in the MANIFEST that weren't specified
   // in the argument. This is OK in read_only mode
-  if (read_only == false && !column_families_not_found.empty()) {
+  if (!read_only && !column_families_not_found.empty()) {
     std::string list_of_not_found;
     for (const auto& cf : column_families_not_found) {
       list_of_not_found += ", " + cf.second;

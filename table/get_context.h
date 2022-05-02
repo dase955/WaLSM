@@ -96,7 +96,9 @@ class GetContext {
   // returned. Id do_merge=false then all the merge operands are stored in
   // merge_context and they are never merged. The value pointer is untouched.
   GetContext(const Comparator* ucmp, const MergeOperator* merge_operator,
-             Logger* logger, Statistics* statistics, GetState init_state,
+             Logger* logger, Statistics* statistics,
+             Statistics* partition_statistics,
+             GetState init_state,
              const Slice& user_key, PinnableSlice* value,
              bool* value_found, MergeContext* merge_context, bool do_merge,
              SequenceNumber* max_covering_tombstone_seq, Env* env,
@@ -105,7 +107,9 @@ class GetContext {
              ReadCallback* callback = nullptr, bool* is_blob_index = nullptr,
              uint64_t tracing_get_id = 0);
   GetContext(const Comparator* ucmp, const MergeOperator* merge_operator,
-             Logger* logger, Statistics* statistics, GetState init_state,
+             Logger* logger, Statistics* statistics,
+             Statistics* partition_statistics,
+             GetState init_state,
              const Slice& user_key, PinnableSlice* value,
              std::string* timestamp, bool* value_found,
              MergeContext* merge_context, bool do_merge,
@@ -161,6 +165,10 @@ class GetContext {
     return true;
   }
 
+  Statistics* GetPartitionStatistics() {
+    return partition_statistics_;
+  }
+
   void ReportCounters();
 
   bool has_callback() const { return callback_ != nullptr; }
@@ -175,6 +183,7 @@ class GetContext {
   // the merge operations encountered;
   Logger* logger_;
   Statistics* statistics_;
+  Statistics* partition_statistics_;
 
   GetState state_;
   Slice user_key_;

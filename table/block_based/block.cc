@@ -685,7 +685,8 @@ void BlockIter<TValue>::FindKeyAfterBinarySeek(const Slice& target,
 template <class TValue>
 template <typename DecodeKeyFunc>
 bool BlockIter<TValue>::BinarySeek(const Slice& target, uint32_t* index,
-                                   bool* skip_linear_scan) {
+                                   bool* skip_linear_scan,
+                                   Statistics* partition_statistics) {
   if (restarts_ == 0) {
     // SST files dedicated to range tombstones are written with index blocks
     // that have no keys while also having `num_restarts_ == 1`. This would
@@ -704,7 +705,9 @@ bool BlockIter<TValue>::BinarySeek(const Slice& target, uint32_t* index,
   // - Any restart keys after index `right` are strictly greater than the target
   //   key.
   int64_t left = -1, right = num_restarts_ - 1;
+  uint64_t read_penalty = 0;
   while (left != right) {
+    read_penalty++;
     // The `mid` is computed by rounding up so it lands in (`left`, `right`].
     int64_t mid = left + (right - left + 1) / 2;
     uint32_t region_offset = GetRestartPoint(static_cast<uint32_t>(mid));
@@ -739,6 +742,12 @@ bool BlockIter<TValue>::BinarySeek(const Slice& target, uint32_t* index,
     *index = 0;
   } else {
     *index = static_cast<uint32_t>(left);
+    // hit!
+    read_penalty--;
+  }
+
+  if (partition_statistics != nullptr && read_penalty > 0) {
+    RecordTick(partition_statistics, BIS_READ, read_penalty);
   }
   return true;
 }
@@ -1005,9 +1014,11 @@ DataBlockIter* Block::NewDataIterator(const Comparator* raw_ucmp,
 
 IndexBlockIter* Block::NewIndexIterator(
     const Comparator* raw_ucmp, SequenceNumber global_seqno,
-    IndexBlockIter* iter, Statistics* /*stats*/, bool total_order_seek,
+    IndexBlockIter* iter, Statistics* /*stats*/,
+    bool total_order_seek,
     bool have_first_key, bool key_includes_seq, bool value_is_full,
-    bool block_contents_pinned, BlockPrefixIndex* prefix_index) {
+    bool block_contents_pinned, BlockPrefixIndex* prefix_index,
+    Statistics* partition_statistics) {
   IndexBlockIter* ret_iter;
   if (iter != nullptr) {
     ret_iter = iter;
@@ -1026,6 +1037,7 @@ IndexBlockIter* Block::NewIndexIterator(
     BlockPrefixIndex* prefix_index_ptr =
         total_order_seek ? nullptr : prefix_index;
     ret_iter->Initialize(raw_ucmp, data_, restart_offset_, num_restarts_,
+                         partition_statistics,
                          global_seqno, prefix_index_ptr, have_first_key,
                          key_includes_seq, value_is_full,
                          block_contents_pinned);

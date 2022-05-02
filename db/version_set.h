@@ -230,16 +230,6 @@ class VersionStorageInfo {
     return it_prev == it_current;
   }
 
-  // don't search level 0 file here!
-  std::vector<FileMetaData*>* GetHitFiles(Slice& smallest_user_key) {
-    auto key = partitions_keys_set_.lower_bound(smallest_user_key);
-    FilePartition* hit_partition = partitions_map_[key->ToString()];
-    if (hit_partition != nullptr) {
-      return hit_partition->files_;
-    }
-    return nullptr;
-  }
-
   void GetOverlappingInputs(
       int level, const InternalKey* begin,  // nullptr means before all keys
       const InternalKey* end,               // nullptr means after all keys
@@ -333,7 +323,7 @@ class VersionStorageInfo {
     // approximate partition size
     uint64_t data_size_;
 
-    FilePartition() {}
+    Statistics* partition_statistics_;
 
     FilePartition(int level, Slice smallest)
         : level_(level),
@@ -342,18 +332,11 @@ class VersionStorageInfo {
           smallest_(smallest),
           largest_(""),
           files_(new std::vector<FileMetaData*>[level]),
-          data_size_(0) { };
-
-    FilePartition(int level, Slice& smallest, Slice& largest)
-        : level_(level),
-          compaction_score_(level),
-          compaction_level_(level),
-          smallest_(smallest),
-          largest_(largest),
-          files_(new std::vector<FileMetaData*>[level]),
-          data_size_(0) { };
+          data_size_(0),
+          partition_statistics_(new StatisticsImpl(nullptr)) { };
 
     ~FilePartition() {
+      delete partition_statistics_;
       delete[] files_;
     }
 
@@ -377,45 +360,59 @@ class VersionStorageInfo {
               << " this file size " << f->fd.file_size << std::endl;
     }
 
-//    FilePartition* Split() {
-//      // TODO: improve split
-//      // not sure if we should lock partition when split
-//      Slice middleKey;
-//      bool flag = false;
-//      for (int i = level_-2; i >= 0; i--) {
-//        for (FileMetaData* f : files_[i]) {
-//          middleKey = f->fd.table_reader->
-//                      ApproximateMiddleKey(smallest_, largest_);
-//          if (middleKey.compare("") != 0) {
-//            flag = true;
-//            break;
-//          }
-//        }
-//        if (flag) {
-//          break;
-//        }
-//      }
-//
-//      // split failed
-//      if (!flag || middleKey.compare("") == 0) {
-//        return nullptr;
-//      }
-//      auto* fp = new FilePartition(level_, middleKey, largest_);
-//      // add files
-//      for (int i = 0; i < level_; i++) {
-//        for (FileMetaData* f : files_[i]) {
-//          if (f->largest.user_key().compare(middleKey) >= 0 &&
-//              largest_.compare(f->smallest.user_key()) >= 0) {
-//            fp->AddFile(i, f);
-//          }
-//        }
-//      }
-//      return fp;
-//    }
-//
-//    bool Oversize(uint64_t threshold) const { return data_size_ > threshold; }
+    FilePartition* Split() {
+      // TODO: improve split
+      // not sure if we should lock partition when split
+      Slice middleKey;
+      bool flag = false;
+      for (int i = level_-1; i >= 0; i--) {
+        for (FileMetaData* f : files_[i]) {
+          if (f->fd.table_reader != nullptr) {
+            middleKey =
+                f->fd.table_reader->ApproximateMiddleKey(smallest_, largest_);
+            if (middleKey.compare("") != 0) {
+              flag = true;
+              break;
+            }
+          }
+        }
+        if (flag) {
+          break;
+        }
+      }
+
+      if (!flag) {
+        return nullptr;
+      }
+
+      // split failed
+      if (!flag || middleKey.compare("") == 0) {
+        return nullptr;
+      }
+      auto* fp = new FilePartition(level_, middleKey);
+      // add files
+      for (int i = 1; i < level_; i++) {
+        for (FileMetaData* f : files_[i]) {
+          if (f->largest.user_key().compare(middleKey) >= 0 &&
+              largest_.compare(f->smallest.user_key()) >= 0) {
+            fp->AddFile(i, f);
+          }
+        }
+      }
+      return fp;
+    }
+
+    bool Oversize(uint64_t threshold) const { return data_size_ > threshold; }
 
   };
+
+  FilePartition* GetHitPartition(Slice& smallest_user_key) {
+    auto key = partitions_keys_set_.upper_bound(smallest_user_key);
+    key--;
+    std::string str_key = key->ToString();
+    FilePartition* hit_partition = partitions_map_[str_key];
+    return hit_partition;
+  }
 
   class FileLocation {
    public:

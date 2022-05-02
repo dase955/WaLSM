@@ -473,6 +473,9 @@ enum Histograms : uint32_t {
   NUM_SST_READ_PER_LEVEL,
 
   HISTOGRAM_ENUM_MAX,
+
+  // for binary search read penalty
+  BIS_READ,
 };
 
 extern const std::vector<std::pair<Histograms, std::string>> HistogramsNameMap;

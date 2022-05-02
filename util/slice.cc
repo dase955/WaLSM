@@ -156,6 +156,9 @@ Slice::Slice(const SliceParts& parts, std::string* buf) {
 // Return a string that contains the copy of the referenced data.
 std::string Slice::ToString(bool hex) const {
   std::string result;  // RVO/NRVO/move
+  if (size_ == 0) {
+    return "";
+  }
   if (hex) {
     result.reserve(2 * size_);
     for (size_t i = 0; i < size_; ++i) {
