@@ -3665,6 +3665,8 @@ VersionSet::~VersionSet() {
   }
   obsolete_files_.clear();
   io_status_.PermitUncheckedError();
+
+  // delete file partitions
 }
 
 void VersionSet::Reset() {

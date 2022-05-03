@@ -335,8 +335,17 @@ class VersionStorageInfo {
           data_size_(0),
           partition_statistics_(new StatisticsImpl(nullptr)) { };
 
+    FilePartition(const FilePartition* another)
+        : level_(another->level_),
+          compaction_score_(another->level_),
+          compaction_level_(another->level_),
+          smallest_(another->smallest_),
+          largest_(another->largest_),
+          files_(new std::vector<FileMetaData*>[another->level_]),
+          data_size_(another->data_size_),
+          partition_statistics_(another->partition_statistics_) { };
+
     ~FilePartition() {
-      delete partition_statistics_;
       delete[] files_;
     }
 
@@ -412,6 +421,37 @@ class VersionStorageInfo {
     std::string str_key = key->ToString();
     FilePartition* hit_partition = partitions_map_[str_key];
     return hit_partition;
+  }
+
+  void TrySplit(uint64_t threshold) {
+    std::vector<FilePartition*> toAdd;
+    for (auto& kv : partitions_map_) {
+      if (kv.second->Oversize(threshold)) {
+        FilePartition* next = kv.second->Split();
+        if (next != nullptr) {
+          std::cout << "Add new partition: " << next->smallest_.ToString()
+                                                << std::endl;
+          toAdd.push_back(next);
+        }
+      }
+    }
+
+    for (FilePartition* fp : toAdd) {
+      partitions_map_[fp->smallest_.ToString()] = fp;
+    }
+  }
+
+  void CopyPartitionInfos(VersionStorageInfo* old_v) {
+    partitions_keys_set_.clear();
+    partitions_map_.clear();
+
+    for (const Slice& s : old_v->partitions_keys_set_) {
+      partitions_keys_set_.insert(s);
+    }
+
+    for (const auto& kv : old_v->partitions_map_) {
+      partitions_map_[kv.first] = new FilePartition(kv.second);
+    }
   }
 
   class FileLocation {
