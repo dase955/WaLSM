@@ -158,7 +158,7 @@ class BlockBasedTable : public TableReader {
   uint64_t ApproximateSize(const Slice& start, const Slice& end,
                            TableReaderCaller caller) override;
 
-  Slice ApproximateMiddleKey(const Slice& start, const Slice& end) override;
+  std::string ApproximateMiddleKey(const Slice& start, const Slice& end) override;
 
   bool TEST_BlockInCache(const BlockHandle& handle) const;
 

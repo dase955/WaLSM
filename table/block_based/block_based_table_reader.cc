@@ -3169,12 +3169,12 @@ uint64_t BlockBasedTable::ApproximateSize(const Slice& start, const Slice& end,
                                static_cast<double>(rep_->file_size));
 }
 
-Slice BlockBasedTable::ApproximateMiddleKey(const Slice& start,
+std::string BlockBasedTable::ApproximateMiddleKey(const Slice& start,
                                             const Slice& end) {
   uint64_t data_size = GetApproximateDataSize();
   if (UNLIKELY(data_size == 0)) {
     // bad start and end entry
-    return Slice("");
+    return "";
   }
 
   BlockCacheLookupContext context(kUncategorized);
@@ -3196,15 +3196,29 @@ Slice BlockBasedTable::ApproximateMiddleKey(const Slice& start,
   uint64_t start_offset = ApproximateDataOffsetOf(*index_iter, data_size);
 
   // guess middle_offset = (end_offset + start_offset) / 2
-  uint64_t middle_offset = (end_offset + start_offset) >> 1;
+  uint64_t middle_offset = (end_offset + start_offset) / 2;
 
-  // TODO: improve offset search, maybe we should change IndexValue api.
   while (index_iter->Valid()
          && index_iter->value().handle.offset() < middle_offset) {
     index_iter->Next();
   }
+  Slice prefix = index_iter->user_key();
 
-  return index_iter->user_key();
+  DataBlockIter biter;
+  NewDataBlockIterator<DataBlockIter>(
+      ro, index_iter->value().handle, &biter, BlockType::kData, nullptr,
+      &context,
+      /*s=*/Status(), /*prefetch_buffer*/ nullptr);
+  biter.SeekToFirst();
+  while (biter.Valid() && !biter.user_key().starts_with(prefix)) {
+    biter.Next();
+  }
+
+//  if (!biter.Valid()) {
+//    return "";
+//  }
+
+  return biter.user_key().ToString();
 }
 
 bool BlockBasedTable::TEST_FilterBlockInCache() const {

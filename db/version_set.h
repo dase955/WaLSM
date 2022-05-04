@@ -352,7 +352,7 @@ class VersionStorageInfo {
     int GetLevel() const { return level_; }
 
     void AddFile(int level, FileMetaData* f) {
-      if (f->largest.user_key().compare(largest_) > 0) {
+      if (largest_.empty() || f->largest.user_key().compare(largest_) > 0) {
         largest_ = Slice(f->largest.user_key());
       }
       auto& level_files = this->files_[level];
@@ -372,39 +372,37 @@ class VersionStorageInfo {
     FilePartition* Split() {
       // TODO: improve split
       // not sure if we should lock partition when split
-      Slice middleKey;
-      bool flag = false;
+      std::string middleKey;
       for (int i = level_-1; i >= 0; i--) {
         for (FileMetaData* f : files_[i]) {
           if (f->fd.table_reader != nullptr) {
             middleKey =
                 f->fd.table_reader->ApproximateMiddleKey(smallest_, largest_);
-            if (middleKey.compare("") != 0) {
-              flag = true;
+            if (!middleKey.empty()) {
               break;
             }
           }
         }
-        if (flag) {
+        if (!middleKey.empty()) {
           break;
         }
       }
 
-      if (!flag) {
+      if (middleKey.empty()) {
         return nullptr;
       }
 
-      // split failed
-      if (!flag || middleKey.compare("") == 0) {
-        return nullptr;
-      }
-      auto* fp = new FilePartition(level_, middleKey);
+      std::string* newMidKey = new std::string(middleKey);
+      auto* fp = new FilePartition(level_, Slice(newMidKey->data(),
+                                                 newMidKey->size()));
+      fp->largest_ = Slice("");
       // add files
       for (int i = 1; i < level_; i++) {
         for (FileMetaData* f : files_[i]) {
           if (f->largest.user_key().compare(middleKey) >= 0 &&
               largest_.compare(f->smallest.user_key()) >= 0) {
             fp->AddFile(i, f);
+            fp->largest_ = std::max(fp->largest_, f->largest.user_key());
           }
         }
       }
@@ -437,6 +435,8 @@ class VersionStorageInfo {
     }
 
     for (FilePartition* fp : toAdd) {
+      std::string* key = new std::string(fp->smallest_.ToString());
+      partitions_keys_set_.insert(Slice(key->data(), key->size()));
       partitions_map_[fp->smallest_.ToString()] = fp;
     }
   }
