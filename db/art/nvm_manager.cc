@@ -36,6 +36,7 @@ bool InitializeMemory(std::unordered_map<std::string, int64_t>& memory_usages) {
     posix_fallocate(fd, 0, TotalSize);
   } else {
     fd = open(MEMORY_PATH, O_CREAT, 0666);
+    assert(-1 != fd);
   }
 
   int is_pmem;

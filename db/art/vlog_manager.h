@@ -53,11 +53,13 @@ class VLogManager {
   friend class Compactor;
 
  public:
-  explicit VLogManager(const DBOptions& options);
+  explicit VLogManager(const DBOptions& options, bool recovery = false);
 
   ~VLogManager();
 
-  void Recovery();
+  void Initialize();
+
+  void Recover();
 
   void SetMemtable(GlobalMemtable* mem);
 

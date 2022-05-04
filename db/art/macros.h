@@ -80,8 +80,11 @@ namespace ROCKSDB_NAMESPACE {
 #define GET_TAG(hdr, tag)       ((hdr) & (tag))
 #define SET_TAG(hdr, tag)       (hdr) |= (tag)
 
+// Alt bit maybe redundant
 #define ALT_FIRST_TAG           0x8000000000000000
+#define GROUP_START_TAG         0x4000000000000000
 #define VALID_TAG               0x2000000000000000
+#define DUMMY_TAG               0x1000000000000000
 
 /*
  * Macros for HeatGroup, Compaction and TimeStamps

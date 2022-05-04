@@ -18,50 +18,53 @@ namespace ROCKSDB_NAMESPACE {
 
 NodeAllocator* Allocator;
 
-void InitializeNodeAllocator(const DBOptions& options) {
-  Allocator = new NodeAllocator(options);
+void InitializeNodeAllocator(const DBOptions& options, bool recovery) {
+  Allocator = new NodeAllocator(options, recovery);
 }
 
 NodeAllocator* GetNodeAllocator() {
   return Allocator;
 }
 
-void NodeAllocator::Recovery() {
-  int total_num_page = num_free_.load();
-  int* is_non_free = new int[total_num_page];
-  memset(is_non_free, 0, sizeof(int) * total_num_page);
-  NVMNode* cur_node = (NVMNode*)pmemptr_;
-  is_non_free[0] = 1;
-  while (true) {
-    NVMNode* next = GetNextNode(cur_node);
-    if (!next) {
-      continue;
-    }
-    int pid = (((char*)next) - pmemptr_) / PAGE_SIZE;
-    is_non_free[pid] = 1;
-  }
-
-  char* cur_ptr = pmemptr_;
-  for (int i = 0; i < num_free_; ++i) {
-    if (is_non_free[i]) {
-      continue;
-    }
-    free_pages_.emplace_back(cur_ptr);
-    cur_ptr += PAGE_SIZE;
-  }
+NVMNode* NodeAllocator::GetHead() {
+  return (NVMNode*)pmemptr_;
 }
 
-NodeAllocator::NodeAllocator(const DBOptions& options)
+NodeAllocator::NodeAllocator(const DBOptions& options, bool recovery)
     : total_size_(options.node_memory_size),
       num_free_(total_size_ / (int64_t)PAGE_SIZE){
 
   pmemptr_ = GetMappedAddress("nodememory");
 
+  int total_num_page = num_free_.load();
+  int* non_free_pages = new int[total_num_page];
+  memset(non_free_pages, 0, sizeof(int) * total_num_page);
+
+  if (recovery) {
+    auto cur_node = (NVMNode*)pmemptr_;
+    non_free_pages[0] = 1;
+    while (true) {
+      int64_t next_offset =
+          GET_TAG(cur_node->meta.header, ALT_FIRST_TAG)
+              ? cur_node->meta.next1 : cur_node->meta.next2;
+      cur_node = absolute(next_offset);
+      if (!cur_node) {
+        break;
+      }
+
+      non_free_pages[next_offset / PAGE_SIZE] = 1;
+    }
+  }
+
   char* cur_ptr = pmemptr_;
   for (int i = 0; i < num_free_; ++i) {
-    free_pages_.emplace_back(cur_ptr);
+    if (!non_free_pages[i]) {
+      free_pages_.emplace_back(cur_ptr);
+    }
     cur_ptr += PAGE_SIZE;
   }
+
+  delete[] non_free_pages;
 }
 
 NVMNode* NodeAllocator::AllocateNode() {

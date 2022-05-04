@@ -16,9 +16,9 @@ struct NVMNode;
 
 class NodeAllocator {
  public:
-  NodeAllocator(const DBOptions& options);
+  NodeAllocator(const DBOptions& options, bool recovery);
 
-  void Recovery();
+  NVMNode* GetHead();
 
   size_t GetNumFreePages() {
     return free_pages_.size();
@@ -42,7 +42,7 @@ class NodeAllocator {
   TQueueConcurrent<char*> free_pages_;
 };
 
-void InitializeNodeAllocator(const DBOptions& options);
+void InitializeNodeAllocator(const DBOptions& options, bool recovery = false);
 
 NodeAllocator* GetNodeAllocator();
 

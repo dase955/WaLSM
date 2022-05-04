@@ -117,22 +117,104 @@ void FlushBufferAndRelease(InnerNode* leaf, int row) {
 //////////////////////////////////////////////////////////
 
 GlobalMemtable::GlobalMemtable(
-    VLogManager* vlog_manager, HeatGroupManager* group_manager, Env* env)
-    : root_(nullptr), head_(nullptr), tail_(nullptr),
-      vlog_manager_(vlog_manager), group_manager_(group_manager),
-      env_(env) {
+    VLogManager* vlog_manager, HeatGroupManager* group_manager, Env* env,
+    bool recovery)
+    : root_(nullptr), vlog_manager_(vlog_manager),
+      group_manager_(group_manager), env_(env) {
   vlog_manager->SetMemtable(this);
-  InitFirstLevel();
+  recovery ? Recovery() : InitFirstLevel();
+}
+
+GlobalMemtable::~GlobalMemtable() {
+  DeleteInnerNode(root_);
+}
+
+InnerNode* GlobalMemtable::RecoverNonLeaf(InnerNode* parent, int level,
+                                          HeatGroup*& group) {
+  NVMNode* cur = parent->nvm_node_;
+  parent->vptr_ = cur->meta.node_info;
+  parent->heat_group_ = group;
+  SET_NON_LEAF(parent->status_);
+
+  std::vector<InnerNode*> children;
+  std::vector<unsigned char> prefixes;
+  InnerNode* last_inner_node = parent;
+
+  while (true) {
+    cur = GetNextNode(cur);
+
+    int cur_level = GET_LEVEL(cur->meta.header);
+    if (cur_level > level) {
+      SET_NON_LEAF(last_inner_node->status_);
+      last_inner_node = RecoverNonLeaf(last_inner_node, cur_level, group);
+      cur = GetNextNode(last_inner_node->nvm_node_);
+    }
+
+    auto inner_node = RecoverInnerNode(cur);
+    inner_node->heat_group_ = group;
+    inner_node->parent_node_ = parent;
+    last_inner_node->next_node_ = inner_node;
+    group->last_node_ = last_inner_node;
+    group->group_size_.fetch_add(inner_node->estimated_size_);
+    UpdateTotalSize(inner_node->estimated_size_);
+
+    // Group Head
+    if (GET_TAG(cur->meta.header, GROUP_START_TAG)) {
+      group_manager_->InsertIntoLayer(group, BASE_LAYER);
+      group = new HeatGroup();
+      group->first_node_ = inner_node;
+      inner_node->parent_node_ = nullptr;
+      inner_node->heat_group_ = group;
+      SET_GROUP_START(inner_node->status_);
+      SET_NON_LEAF(inner_node->status_);
+      last_inner_node = inner_node;
+      continue;
+    }
+
+    if (GET_TAG(cur->meta.header, DUMMY_TAG)) {
+      parent->art = AllocateArtAfterSplit(children, prefixes);
+      parent->last_child_node_ = inner_node;
+      return inner_node;
+    }
+
+    auto prefix = GET_LAST_PREFIX(cur->meta.header);
+    children.push_back(inner_node);
+    prefixes.push_back(prefix);
+    last_inner_node = inner_node;
+  }
+
+  return nullptr;
+}
+
+void GlobalMemtable::Recovery() {
+  root_ = RecoverInnerNode(GetNodeAllocator()->GetHead());
+  SET_ART_FULL(root_->status_);
+
+  HeatGroup* group = new HeatGroup;
+  group->first_node_ = root_;
+
+  auto tail = RecoverNonLeaf(root_, 1, group);
+
+#ifndef NDEBUG
+  auto cur = root_;
+  while (cur->next_node_) {
+    cur = cur->next_node_;
+  }
+  assert(cur == tail);
+  assert((char*)(tail->nvm_node_) - (char*)(root_->nvm_node_) == PAGE_SIZE);
+#endif
 }
 
 void GlobalMemtable::InitFirstLevel() {
-  root_ = new InnerNode();
-  tail_ = new InnerNode();
-  head_ = AllocateLeafNode(0, 0, nullptr);
+  root_ = AllocateLeafNode(0, 0, nullptr);
+  auto tail = AllocateLeafNode(0, 0, nullptr);
+  SET_TAG(tail->nvm_node_->meta.header, DUMMY_TAG);
+  FLUSH(tail->nvm_node_, CACHE_LINE_SIZE);
   SET_NON_LEAF(root_->status_);
   SET_ART_FULL(root_->status_);
 
   // First level
+  root_->last_child_node_ = tail;
   root_->art = AllocateArtNode(kNode256);
   auto art256 = (ArtNode256*)root_->art;
   art256->header_.num_children_ = 256;
@@ -151,7 +233,7 @@ void GlobalMemtable::InitFirstLevel() {
 
   auto pre_allocate_children = used_ascii.size();*/
 
-  InnerNode* next_inner_node = tail_;
+  InnerNode* next_inner_node = tail;
   /* for (int first_char = LAST_CHAR; first_char >= 0; --first_char) {
     auto inner_node = AllocateLeafNode(
         1, static_cast<unsigned char>(first_char), next_inner_node);
@@ -187,9 +269,11 @@ void GlobalMemtable::InitFirstLevel() {
 
     auto group_start_node = AllocateLeafNode(
         0, 0, next_inner_node);
+    SET_GROUP_START(group_start_node->status_);
+    SET_NON_LEAF(group_start_node->status_);
+    SET_TAG(group_start_node->nvm_node_->meta.header, GROUP_START_TAG);
     FLUSH(group_start_node->nvm_node_, CACHE_LINE_SIZE);
 
-    SET_GROUP_START(group_start_node->status_);
     heat_group->first_node_ = group_start_node;
     heat_group->last_node_ = art256->children_[first_char + 4];
     heat_group->group_manager_ = group_manager_;
@@ -199,10 +283,13 @@ void GlobalMemtable::InitFirstLevel() {
     next_inner_node = group_start_node;
   }
 
-  MEMORY_BARRIER;
-
-  head_->nvm_node_->meta.next1 =
+  root_->next_node_ = next_inner_node;
+  root_->nvm_node_->meta.next1 =
       GetNodeAllocator()->relative(next_inner_node->nvm_node_);
+
+  FLUSH(root_->nvm_node_, CACHE_LINE_SIZE);
+
+  MEMORY_BARRIER;
 }
 
 void GlobalMemtable::Put(Slice& slice, uint64_t base_vptr, size_t count) {
@@ -480,6 +567,8 @@ void GlobalMemtable::SplitLeaf(InnerNode* leaf, size_t level,
       level + 1, static_cast<unsigned char>(LAST_CHAR), nullptr);
   dummy_node->oldest_key_time_ = oldest_key_time;
   SET_NON_LEAF(dummy_node->status_);
+  SET_TAG(dummy_node->nvm_node_->meta.header, DUMMY_TAG);
+  PERSIST(dummy_node, 8);
 
   auto last_node = dummy_node;
   auto first_node = dummy_node;
@@ -611,6 +700,7 @@ void GlobalMemtable::InsertIntoLeaf(InnerNode* leaf, KVStruct& kv_info,
       // 3. use double buffer, but memory usage of the tree
       //    will be about 1.5 times higher.
       FlushBufferAndRelease(leaf, rows);
+      return;
     } else {
       if (EstimateDistinctCount(leaf->hll_) < SQUEEZE_THRESHOLD) {
         FlushBufferAndRelease(leaf, rows);
@@ -678,11 +768,11 @@ bool GlobalMemtable::FindKeyInInnerNode(InnerNode* leaf, size_t level,
 
   for (auto& nvm_node : nvm_nodes) {
     for (size_t i = 0; i < 16; ++i) {
-      if (!nvm_node->compaction_buffer[i * 2 + 1]) {
+      if (!nvm_node->temp_buffer[i * 2 + 1]) {
         break;
       }
 
-      if (nvm_node->compaction_buffer[i * 2] != hash) {
+      if (nvm_node->temp_buffer[i * 2] != hash) {
         continue;
       }
       type = vlog_manager_->GetKeyValue(

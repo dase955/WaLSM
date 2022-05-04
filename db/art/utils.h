@@ -141,6 +141,8 @@ InnerNode* AllocateLeafNode(uint8_t prefix_length,
                             unsigned char last_prefix,
                             InnerNode* next_node = nullptr);
 
+InnerNode* RecoverInnerNode(NVMNode* nvm_node);
+
 // inserted must be initialized
 void InsertSplitInnerNode(InnerNode* node, InnerNode* first_inserted,
                           InnerNode* last_inserted, size_t prefix_length);

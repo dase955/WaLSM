@@ -75,4 +75,6 @@ void InsertToArtNode(
     InnerNode* current, InnerNode* leaf,
     unsigned char c, bool insert_to_group);
 
+void DeleteInnerNode(InnerNode* inner_node);
+
 } // namespace ROCKSDB_NAMESPACE

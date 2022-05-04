@@ -65,13 +65,18 @@ class GlobalMemtable {
   void InitFirstLevel();
 
   GlobalMemtable()
-      : root_(nullptr), head_(nullptr), tail_(nullptr),
-        vlog_manager_(nullptr), group_manager_(nullptr),
-        env_(nullptr) {}
+      : root_(nullptr), vlog_manager_(nullptr),
+        group_manager_(nullptr), env_(nullptr) {}
 
   GlobalMemtable(VLogManager* vlog_manager,
                  HeatGroupManager* group_manager,
-                 Env* env);
+                 Env* env, bool recovery = false);
+
+  ~GlobalMemtable();
+
+  void Recovery();
+
+  InnerNode* RecoverNonLeaf(InnerNode* parent, int level, HeatGroup*& group);
 
   void Put(Slice& slice, uint64_t base_vptr, size_t count);
 
@@ -101,8 +106,6 @@ class GlobalMemtable {
                     uint64_t& leaf_vptr, autovector<KVStruct>* data);
 
   InnerNode* root_;
-  InnerNode* head_;
-  InnerNode* tail_;
 
   // TODO: Use prefixes to fast search inner nodes
   std::unordered_map<std::string, InnerNode*> prefixes_;

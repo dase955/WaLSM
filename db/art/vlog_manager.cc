@@ -89,7 +89,7 @@ void VLogManager::PushToUsedQueue(char* segment) {
 
 // Why size of vlog header equals vlog_segment_size_ / 128 ?
 // We assume that minimum length of single record is 16 byte,
-VLogManager::VLogManager(const DBOptions& options)
+VLogManager::VLogManager(const DBOptions& options, bool recovery)
     : gc_mu_(),
       gc_cv_(&gc_mu_),
       thread_stop_(false),
@@ -101,17 +101,7 @@ VLogManager::VLogManager(const DBOptions& options)
       force_gc_ratio_((size_t)
                           (options.vlog_force_gc_ratio_ * vlog_segment_num_)){
   pmemptr_ = GetMappedAddress("vlog");
-  char* cur_ptr = pmemptr_;
-  for (size_t i = 0; i < vlog_segment_num_; ++i) {
-    auto header = new (cur_ptr) VLogSegmentHeader();
-    header->status_ = kSegmentFree;
-    header->offset_ = vlog_header_size_;
-    header->total_count_ = header->compacted_count_ = 0;
-    memset(header->bitmap_, -1, vlog_bitmap_size_);
-    FLUSH(cur_ptr, vlog_header_size_);
-    free_segments_.emplace_back(cur_ptr);
-    cur_ptr += vlog_segment_size_;
-  }
+  recovery ? Recover() : Initialize();
 
   MEMORY_BARRIER;
 
@@ -128,7 +118,7 @@ VLogManager::~VLogManager() {
   gc_thread_.join();
 }
 
-void VLogManager::Recovery() {
+void VLogManager::Recover() {
   char* cur_ptr = pmemptr_;
   for (size_t i = 0; i < vlog_segment_num_; ++i) {
     auto header = (VLogSegmentHeader*)cur_ptr;
@@ -137,6 +127,7 @@ void VLogManager::Recovery() {
       header->status_ = kSegmentWritten;
       FLUSH(cur_ptr, vlog_header_size_);
       used_segments_.emplace_back(cur_ptr);
+      cur_ptr += vlog_segment_size_;
       continue;
     }
 
@@ -148,8 +139,20 @@ void VLogManager::Recovery() {
     free_segments_.emplace_back(cur_ptr);
     cur_ptr += vlog_segment_size_;
   }
+}
 
-  MEMORY_BARRIER;
+void VLogManager::Initialize() {
+  char* cur_ptr = pmemptr_;
+  for (size_t i = 0; i < vlog_segment_num_; ++i) {
+    auto header = new (cur_ptr) VLogSegmentHeader();
+    header->status_ = kSegmentFree;
+    header->offset_ = vlog_header_size_;
+    header->total_count_ = header->compacted_count_ = 0;
+    memset(header->bitmap_, -1, vlog_bitmap_size_);
+    FLUSH(cur_ptr, vlog_header_size_);
+    free_segments_.emplace_back(cur_ptr);
+    cur_ptr += vlog_segment_size_;
+  }
 }
 
 void VLogManager::SetMemtable(GlobalMemtable* mem) {

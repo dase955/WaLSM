@@ -77,7 +77,7 @@ class DBTest3 : public DBTestBase {
   DBTest3() : DBTestBase("/db_test3", /*env_do_fsync=*/false) {}
 };
 
-int count_per_thread = 16384 * 32;
+int count_per_thread = 16384 * 64;
 int sample_interval = 12;
 int sample_size = count_per_thread / sample_interval;
 
@@ -117,6 +117,12 @@ std::string next_key() {
   return "user" + key;
 }
 
+std::string next_key(int64_t c) {
+  auto keynum = fnvhash64(c);
+  std::string key = std::to_string(keynum);
+  return "user" + key;
+}
+
 void MultiThreadTest(DB *db, std::vector<std::string> *sampled_keys, int thread_id) {
   std::random_device rd;
   std::mt19937 gen(rd());
@@ -130,7 +136,9 @@ void MultiThreadTest(DB *db, std::vector<std::string> *sampled_keys, int thread_
 
   for (int i = 0; i < count_per_thread; ++i) {
     //std::shuffle(keyStr.begin(), keyStr.end(), generator);
-    std::string key = next_key();    // assumes 32 < number of characters in str
+    //std::string key = keyStr.substr(0, keyDis(gen));
+
+    std::string key = next_key();
     std::string value = repeat(key);
 
     ASSERT_OK(db->Put(WriteOptions(), key, value));
@@ -141,7 +149,6 @@ void MultiThreadTest(DB *db, std::vector<std::string> *sampled_keys, int thread_
 }
 
 TEST_F(DBTest3, MockEnvTest) {
-  std::unique_ptr<MockEnv> env{new MockEnv(Env::Default())};
   Options options;
   options.force_consistency_checks = false;
   options.create_if_missing = true;
@@ -154,11 +161,9 @@ TEST_F(DBTest3, MockEnvTest) {
   options.group_split_threshold = 20 << 20;
   options.compaction_threshold = 1024 << 20;
 
-  options.env = env.get();
   DB* db;
 
-  ASSERT_OK(DB::Open(options, "/dir/db", &db));
-
+  ASSERT_OK(DB::Open(options, "/tmp/db_test", &db));
 
   int thread_num = 16;
 
@@ -189,10 +194,44 @@ TEST_F(DBTest3, MockEnvTest) {
 
   std::cout << "Test get done" << std::endl;
 
+  db->Close();
+
   delete db;
 }
 
+TEST_F(DBTest3, MockEnvTest2) {
+  Options options;
+  options.force_consistency_checks = false;
+  options.create_if_missing = true;
+  options.enable_pipelined_write = true;
 
+  options.vlog_file_size = 4ULL << 30;
+  options.vlog_force_gc_ratio_ = 0.5;
+
+  options.group_min_size = 8 << 20;
+  options.group_split_threshold = 20 << 20;
+  options.compaction_threshold = 1024 << 20;
+
+  DB* db;
+
+  ASSERT_OK(DB::Open(options, "/tmp/db_test", &db));
+  
+  std::cout << "Start test get" << std::endl;
+  for (int i = 0; i < count_per_thread * 16; i += sample_interval) {
+    std::string key = next_key(i);
+    std::string res;
+    std::string expected = repeat(key);
+    auto status = db->Get(ReadOptions(), key, &res);
+    ASSERT_TRUE(!status.ok() || res == expected );
+    if (!status.ok()) {
+      std::cout << key << " Error!" << std::endl;
+    }
+  }
+  std::cout << "Test get done" << std::endl;
+
+  db->Close();
+  delete db;
+}
 
 }  // namespace ROCKSDB_NAMESPACE
 

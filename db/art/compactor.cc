@@ -103,7 +103,7 @@ void Compactor::CompactionPreprocess(SingleCompactionJob* job) {
     }
 
     // Also flush data in buffer
-    MEMCPY(cur_node->nvm_node_->compaction_buffer, cur_node->buffer_,
+    MEMCPY(cur_node->nvm_node_->temp_buffer, cur_node->buffer_,
            SIZE_TO_BYTES(GET_NODE_BUFFER_SIZE(cur_node->status_)),
            PMEM_F_MEM_NODRAIN);
     SET_NODE_BUFFER_SIZE(cur_node->status_, 0);

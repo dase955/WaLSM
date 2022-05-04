@@ -12,6 +12,7 @@
 #include <immintrin.h>
 
 #include "utils.h"
+#include "nvm_node.h"
 #include "timestamp.h"
 #include "global_memtable.h"
 #include "compactor.h"
@@ -323,6 +324,7 @@ void HeatGroupManager::SplitGroup(HeatGroup* group) {
   InnerNode* dummy_right_start = AllocateLeafNode(0, 0, nullptr);
   SET_GROUP_START(dummy_right_start->status_);
   SET_NON_LEAF(dummy_right_start->status_);
+  SET_TAG(dummy_right_start->nvm_node_->meta.header, GROUP_START_TAG);
   InsertInnerNode(left_end, dummy_right_start);
 
   right_group->ts = cur_ts;

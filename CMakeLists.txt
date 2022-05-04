@@ -255,7 +255,7 @@ endif(CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64|AARCH64")
 # Add configuration for pmem
 set(CMAKE_CXX_FLAGS "-mavx2 -lpmem ${CMAKE_CXX_FLAGS}")
 add_definitions(-DART)
-#add_definitions(-DUSE_PMEM)
+add_definitions(-DUSE_PMEM)
 
 option(PORTABLE "build a portable binary" OFF)
 option(FORCE_SSE42 "force building with SSE4.2, even when PORTABLE=ON" OFF)

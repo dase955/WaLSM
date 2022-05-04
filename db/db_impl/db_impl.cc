@@ -274,16 +274,16 @@ DBImpl::DBImpl(const DBOptions& options, const std::string& dbname,
   std::unordered_map<std::string, int64_t> memory_usages;
   memory_usages["vlog"] = options.vlog_file_size;
   memory_usages["nodememory"] = options.node_memory_size;
-  InitializeMemory(memory_usages);
+  bool recovery = InitializeMemory(memory_usages);
 
-  InitializeNodeAllocator(options);
-  vlog_manager_ = new VLogManager(options);
+  InitializeNodeAllocator(options, recovery);
+  vlog_manager_ = new VLogManager(options, recovery);
 
   group_manager_ = new HeatGroupManager(options);
   group_manager_->SetCompactor(&compactor_);
 
   global_memtable_ = new GlobalMemtable(
-      vlog_manager_, group_manager_, env_);
+      vlog_manager_, group_manager_, env_, recovery);
 
   Compactor::compaction_threshold_ = options.compaction_threshold;
   compactor_.SetDB(this);
@@ -2502,7 +2502,12 @@ Status DBImpl::CreateColumnFamily(const ColumnFamilyOptions& cf_options,
     s = WriteOptionsFile(true /*need_mutex_lock*/,
                          true /*need_enter_write_thread*/);
   }
-  return s;
+
+  //return s;
+
+  // Ignore error when column family already exists, just use default handle
+  *handle = DefaultColumnFamily();
+  return Status::OK();
 }
 
 Status DBImpl::CreateColumnFamilies(

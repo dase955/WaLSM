@@ -9,6 +9,7 @@
 
 #include "utils.h"
 #include "macros.h"
+#include "nvm_node.h"
 #include "heat_group.h"
 #include "global_memtable.h"
 
@@ -36,7 +37,7 @@ ArtNode256::ArtNode256() {
 ArtNodeType ChooseArtNodeType(size_t size) {
   // precalculate node type
   static int type[256] = {
-      1, 1, 1, 1, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 3, 3,
+      1, 1, 1, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 3, 3,
       3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3,
       3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 4, 4, 4, 4,
       4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4,
@@ -119,9 +120,9 @@ ArtNode* AllocateArtAfterSplit(
     const std::vector<InnerNode*>& inserted_nodes,
     const std::vector<unsigned char>& c) {
   size_t num_children = inserted_nodes.size();
-  auto nodeType = ChooseArtNodeType(num_children);
+  auto node_type = ChooseArtNodeType(num_children);
 
-  switch (nodeType) {
+  switch (node_type) {
     case kNode4:
       return AllocateArt4AndInsertNodes(inserted_nodes, c);
     case kNode16:
@@ -441,6 +442,60 @@ void InsertToArtNode(InnerNode* current, InnerNode* leaf, unsigned char c,
   if (insert_to_group) {
     InsertNodesToGroup(left_node, leaf);
   }
+}
+
+void DeleteInnerNode(InnerNode* inner_node) {
+  if (!inner_node) {
+    return;
+  }
+
+  if (IS_LEAF(inner_node->status_)) {
+    inner_node->opt_lock_.WriteLock();
+    std::lock_guard<std::mutex> flush_lk(inner_node->flush_mutex_);
+
+    auto nvm_node = inner_node->nvm_node_;
+    MEMCPY(nvm_node->temp_buffer, inner_node->buffer_,
+           SIZE_TO_BYTES(GET_NODE_BUFFER_SIZE(inner_node->status_)),
+           PMEM_F_MEM_NODRAIN);
+    nvm_node->meta.node_info = inner_node->estimated_size_;
+    FLUSH(nvm_node->temp_buffer, 256);
+    inner_node->opt_lock_.WriteUnlock(false);
+    delete inner_node;
+    return;
+  }
+
+  inner_node->nvm_node_->meta.node_info = inner_node->vptr_;
+  FLUSH(inner_node, CACHE_LINE_SIZE);
+
+  auto art = inner_node->art;
+  if (art->art_type_ == kNode4) {
+    auto art4 = (ArtNode4*)art;
+    for (int i = 0; i < art->num_children_; ++i) {
+      DeleteInnerNode(art4->children_[i]);
+    }
+  } else if (art->art_type_ == kNode16) {
+    auto art16 = (ArtNode16*)art;
+    for (int i = 0; i < art->num_children_; ++i) {
+      DeleteInnerNode(art16->children_[i]);
+    }
+  } else if (art->art_type_ == kNode48) {
+    auto art48 = (ArtNode48*)art;
+    for (auto& child : art48->children_) {
+      DeleteInnerNode(child);
+    }
+  } else {
+    auto art256 = (ArtNode256*)art;
+    for (auto& child : art256->children_) {
+      DeleteInnerNode(child);
+    }
+  }
+
+  assert(inner_node->last_child_node_ &&
+         inner_node->last_child_node_ != inner_node);
+  delete inner_node->last_child_node_;
+  delete art->backup_;
+  delete art;
+  delete inner_node;
 }
 
 } // namespace ROCKSDB_NAMESPACE
