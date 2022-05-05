@@ -37,6 +37,7 @@
 #include "db/dbformat.h"
 #include "db/file_indexer.h"
 #include "db/log_reader.h"
+#include "db/merge_qtable.h"
 #include "db/range_del_aggregator.h"
 #include "db/read_callback.h"
 #include "db/table_cache.h"
@@ -342,7 +343,7 @@ class VersionStorageInfo {
           smallest_(another->smallest_),
           largest_(another->largest_),
           files_(new std::vector<FileMetaData*>[another->level_]),
-          data_size_(another->data_size_),
+          data_size_(0),
           partition_statistics_(another->partition_statistics_) { };
 
     ~FilePartition() {
@@ -677,6 +678,8 @@ class VersionStorageInfo {
                               // is guaranteed to be empty.
 
   double l0_compaction_score;
+
+  MergeQTable *q_table_;
 
   // Per-level max bytes
   std::vector<uint64_t> level_max_bytes_;
