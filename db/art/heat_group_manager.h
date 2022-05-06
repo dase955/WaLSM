@@ -35,7 +35,7 @@ class HeatGroupManager {
  private:
   void BGWorkProcessHeatGroup();
 
-  void ChooseCompaction();
+  void ChooseCompaction(size_t num);
 
   // Split heat group
   void SplitGroup(HeatGroup* group);

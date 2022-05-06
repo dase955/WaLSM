@@ -512,6 +512,7 @@ Status DBImpl::CloseHelper() {
   // continuing with the shutdown
   mutex_.Lock();
   compactor_.StopCompactionThread();
+  printf("DbImpl::CloseHelper\n");
 
   shutdown_initiated_ = true;
   error_handler_.CancelErrorRecovery();
@@ -5026,7 +5027,7 @@ Status DBImpl::GetCreationTimeOfOldestFile(uint64_t* creation_time) {
 }
 
 void DBImpl::TestCompaction() {
-  compactor_.TestCompaction();
+  //compactor_.TestCompaction();
 }
 
 void DBImpl::TestGC() {

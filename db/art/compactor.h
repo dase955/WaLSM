@@ -40,7 +40,7 @@ struct SingleCompactionJob {
 class Compactor {
  public:
   Compactor() : thread_stop_(false), group_manager_(nullptr),
-                vlog_manager_(nullptr), chosen_group_(nullptr) {};
+                vlog_manager_(nullptr) {};
 
   ~Compactor() noexcept;
 
@@ -56,9 +56,7 @@ class Compactor {
 
   void BGWorkDoCompaction();
 
-  void TestCompaction();
-
-  void Notify(HeatGroup* heat_group);
+  void Notify(std::vector<HeatGroup*>& heat_groups);
 
   static int64_t compaction_threshold_;
 
@@ -83,12 +81,14 @@ class Compactor {
 
   int num_parallel_compaction_ = 4;
 
-  HeatGroup* chosen_group_;
+  std::vector<HeatGroup*> chosen_groups_;
 
   std::vector<SingleCompactionJob*> chosen_jobs_;
 
   std::vector<SingleCompactionJob*> compaction_jobs_;
 };
+
+int64_t GetMemTotalSize();
 
 void UpdateTotalSize(int32_t update_size);
 

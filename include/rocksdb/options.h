@@ -1171,20 +1171,20 @@ struct DBOptions {
 
   // Amount of data in global memtable before trigger compaction.
   // Default: 512M
-  int32_t compaction_threshold = 512 << 20;
+  int64_t compaction_threshold = 2560LL << 20;
 
   // A threshold for the max size of a group,
   // larger size will trigger group split.
   // Default: 12M
-  int group_split_threshold = 12 << 20;
+  int group_split_threshold = 18 << 20;
 
   // A threshold for the size of a group that can chosen to do compaction.
-  // Default: 8M
-  int group_min_size = 8 << 20;
+  // Default: 4M
+  int group_min_size = 6 << 20;
 
   // Size of vlog file.
   // Default: 4G
-  int64_t vlog_file_size = 4ULL << 30;
+  int64_t vlog_file_size = 6ULL << 30;
 
   // Vlog file is divided into several segments,
   // in order to do garbage collection.
@@ -1193,8 +1193,8 @@ struct DBOptions {
 
   // Trigger garbage collection when
   // ratio of free segments less than threshold.
-  // default: 0.25
-  float vlog_force_gc_ratio_ = 0.25f;
+  // default: 0.5
+  float vlog_force_gc_ratio_ = 0.5f;
 
   // Why choose 1.021897 ?
   // Because 1.021897 ^ 32 = 2.
@@ -1209,7 +1209,7 @@ struct DBOptions {
   int layer_ts_interval = 100;
 
   // default: 4G
-  int64_t node_memory_size = 4ULL << 30;
+  int64_t node_memory_size = 2LL << 30;
 };
 
 // Options to control the behavior of a database (passed to DB::Open)

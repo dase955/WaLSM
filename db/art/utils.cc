@@ -222,9 +222,11 @@ void InsertSplitInnerNode(InnerNode* node, InnerNode* first_inserted,
   SET_LEVEL(new_hdr, prefix_length);
   SET_SIZE(new_hdr, 0);
   SET_ROWS(new_hdr, 0);*/
+  CLEAR_TAG(new_hdr, VALID_TAG);
   prev_nvm_node->meta.header = new_hdr;
   PERSIST(prev_nvm_node, CACHE_LINE_SIZE);
 
+  node->estimated_size_ = 0;
   last_inserted->next_node_ = prev_node->next_node_;
   prev_node->next_node_ = first_inserted;
 

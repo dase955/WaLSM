@@ -77,9 +77,9 @@ class DBTest3 : public DBTestBase {
   DBTest3() : DBTestBase("/db_test3", /*env_do_fsync=*/false) {}
 };
 
-int count_per_thread = 16384 * 64;
-int sample_interval = 12;
-int sample_size = count_per_thread / sample_interval;
+int thread_num = 16;
+int total_count = 16384 * 1024;
+int count_per_thread = total_count / thread_num;
 
 std::string repeat(std::string& str) {
   int repeat_times = 1024UL / str.length();
@@ -123,39 +123,18 @@ std::string next_key(int64_t c) {
   return "user" + key;
 }
 
-void MultiThreadTest(DB *db, std::vector<std::string> *sampled_keys, int thread_id) {
-  std::random_device rd;
-  std::mt19937 gen(rd());
-  std::uniform_int_distribution<> keyDis(1, 32);
-  std::random_device rd2;
-  std::mt19937 generator(rd2());
-
-  std::string keyStr("0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz!@#$%^&*()-_=+[{]}|<,>.?/~`' ");
-
-  sampled_keys->reserve(sample_size);
-
+void MultiThreadTest(DB *db, int thread_id) {
   for (int i = 0; i < count_per_thread; ++i) {
-    //std::shuffle(keyStr.begin(), keyStr.end(), generator);
-    //std::string key = keyStr.substr(0, keyDis(gen));
-
     std::string key = next_key();
     std::string value = repeat(key);
-
     ASSERT_OK(db->Put(WriteOptions(), key, value));
-    if (i % sample_interval == 0) {
-      sampled_keys->push_back(key);
-    }
   }
 }
 
 TEST_F(DBTest3, MockEnvTest) {
   Options options;
-  options.force_consistency_checks = false;
   options.create_if_missing = true;
   options.enable_pipelined_write = true;
-
-  options.vlog_file_size = 4ULL << 30;
-  options.vlog_force_gc_ratio_ = 0.5;
 
   options.group_min_size = 8 << 20;
   options.group_split_threshold = 20 << 20;
@@ -165,14 +144,11 @@ TEST_F(DBTest3, MockEnvTest) {
 
   ASSERT_OK(DB::Open(options, "/tmp/db_test", &db));
 
-  int thread_num = 16;
-
   std::thread threads[thread_num];
   std::vector<std::string> sampled_keys[thread_num];
   int n = 0;
-  for (auto & thread : threads) {
-    thread = std::thread(MultiThreadTest, db, &(sampled_keys[n]), n);
-    n++;
+  for (auto& thread : threads) {
+    thread = std::thread(MultiThreadTest, db, n++);
   }
 
   for (auto & thread : threads) {
@@ -180,18 +156,16 @@ TEST_F(DBTest3, MockEnvTest) {
   }
 
   std::cout << "Start test get" << std::endl;
-  for (auto &vec : sampled_keys) {
-    for (auto &key : vec) {
-      std::string res;
-      std::string expected = repeat(key);
-      auto status = db->Get(ReadOptions(), key, &res);
-      ASSERT_TRUE(!status.ok() || res == expected );
-      if (!status.ok()) {
-        std::cout << key << " Error!" << std::endl;
-      }
+  for (int i = 0; i < total_count; i += 16) {
+    std::string key = next_key(i);
+    std::string res;
+    std::string expected = repeat(key);
+    auto status = db->Get(ReadOptions(), key, &res);
+    ASSERT_TRUE(!status.ok() || res == expected );
+    if (!status.ok()) {
+      std::cout << key << " Error!" << std::endl;
     }
   }
-
   std::cout << "Test get done" << std::endl;
 
   db->Close();
@@ -201,7 +175,6 @@ TEST_F(DBTest3, MockEnvTest) {
 
 TEST_F(DBTest3, MockEnvTest2) {
   Options options;
-  options.force_consistency_checks = false;
   options.create_if_missing = true;
   options.enable_pipelined_write = true;
 
@@ -217,7 +190,7 @@ TEST_F(DBTest3, MockEnvTest2) {
   ASSERT_OK(DB::Open(options, "/tmp/db_test", &db));
   
   std::cout << "Start test get" << std::endl;
-  for (int i = 0; i < count_per_thread * 16; i += sample_interval) {
+  for (int i = 0; i < count_per_thread * 16; i += 16) {
     std::string key = next_key(i);
     std::string res;
     std::string expected = repeat(key);

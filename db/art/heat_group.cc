@@ -58,8 +58,10 @@ bool HeatGroup::InsertNewNode(
     last_node_ = inserts.back();
   }
 
-  for (auto &inserted : inserts) {
-    inserted->heat_group_ = this;
+  for (auto& inserted : inserts) {
+    if (!inserted->heat_group_) {
+      inserted->heat_group_ = this;
+    }
   }
 
   return true;
@@ -96,8 +98,8 @@ void HeatGroup::UpdateSize(int32_t size) {
 }
 
 void HeatGroup::ResetSize() {
-  auto cur_size = group_size_.load(std::memory_order_relaxed);
-  group_size_.fetch_add(-cur_size, std::memory_order_relaxed);
+  auto cur_size = group_size_.load(std::memory_order_acquire);
+  group_size_.fetch_add(-cur_size, std::memory_order_release);
   UpdateTotalSize(-cur_size);
 }
 
@@ -243,7 +245,7 @@ void HeatGroupManager::BGWorkProcessHeatGroup() {
         ForceGroupLevelDown();
         break;
       case kOperationChooseCompaction:
-        ChooseCompaction();
+        ChooseCompaction(4);
         break;
       case kOperationStop:
         needStop = true;
@@ -288,7 +290,7 @@ void HeatGroupManager::SplitGroup(HeatGroup* group) {
     return;
   }
 
-  group->lock.lock();
+  std::lock_guard<std::mutex> lk(group->lock);
 
   auto cur_ts = group->ts.Copy();
 
@@ -296,8 +298,8 @@ void HeatGroupManager::SplitGroup(HeatGroup* group) {
   auto right_end = group->last_node_;
   auto left_end = left_start;
 
-  auto total_size = group->group_size_.load(std::memory_order_relaxed);
-  auto split_point = total_size >> 1;
+  auto stored_total_size = group->group_size_.load(std::memory_order_acquire);
+  auto split_point = stored_total_size / 2;
   int32_t left_size = 0;
 
   while (left_end != right_end) {
@@ -331,20 +333,27 @@ void HeatGroupManager::SplitGroup(HeatGroup* group) {
   auto right_start = dummy_right_start;
   right_group->first_node_ = right_start;
   right_group->last_node_ = right_end;
-  right_group->group_size_ = total_size - left_size;
   right_group->group_manager_ = group->group_manager_;
+  int32_t right_size = 0;
   while (right_start != right_end) {
     right_start->heat_group_ = right_group;
+    right_size += right_start->estimated_size_;
     right_start = right_start->next_node_;
   }
+  right_end->heat_group_ = right_group;
+  right_size += right_end->estimated_size_;
+  right_group->group_size_ = right_size;
 
-  group->group_manager_->MoveGroup(group);
+  RemoveFromQueue(group);
+  group->group_manager_->InsertIntoLayer(group, ChooseGroupLevel(group));
   group->group_manager_->InsertIntoLayer(right_group, ChooseGroupLevel(right_group));
 
   right_group->status_.store(kGroupNone, std::memory_order_release);
   group->status_.store(kGroupNone, std::memory_order_release);
   right_group->lock.unlock();
-  group->lock.unlock();
+
+  printf("Split group %p %p %d %d %d\n", group, right_group,
+         left_size, right_size, stored_total_size);
 }
 
 void HeatGroupManager::MoveAllGroupsToLayer(int from, int to) {
@@ -407,7 +416,7 @@ void HeatGroupManager::TestChooseCompaction() {
       if (size > (1 >> 20)) {
         RemoveFromQueue(group);
         InsertIntoLayer(group, TEMP_LAYER);
-        compactor_->Notify(group);
+        //compactor_->Notify(groups);
         return;
       }
       group = group->next;
@@ -416,11 +425,12 @@ void HeatGroupManager::TestChooseCompaction() {
   assert(false);
 }
 
-void HeatGroupManager::ChooseCompaction() {
-  for (int num_try = 0; num_try < 3; ++num_try) {
+void HeatGroupManager::ChooseCompaction(size_t num_chosen) {
+  std::vector<HeatGroup*> groups;
+  for (int num_try = 0; num_try < 2; ++num_try) {
     GroupLevelDown();
     auto group = group_queue_.heads[0]->next;
-    HeatGroup *nextGroup = group->next;
+    HeatGroup * next_group = group->next;
     if (group == group_queue_.tails[0]) {
       break;
     }
@@ -431,9 +441,7 @@ void HeatGroupManager::ChooseCompaction() {
       if (new_level == 0) {
         InsertIntoLayer(group, TEMP_LAYER);
         group->status_.store(kGroupCompaction, std::memory_order_relaxed);
-        compactor_->Notify(group);
-        //printf("Found candidate after %d round of search.\n", num_try);
-        return;
+        groups.push_back(group);
       } else {
         InsertIntoLayer(group, new_level);
         auto oldStatus = group->status_.load(std::memory_order_relaxed);
@@ -441,11 +449,16 @@ void HeatGroupManager::ChooseCompaction() {
         group->status_.store(newStatus, std::memory_order_relaxed);
       }
 
-      group = nextGroup;
-      nextGroup = nextGroup->next;
+      if (groups.size() == num_chosen) {
+        compactor_->Notify(groups);
+        return;
+      }
+
+      group = next_group;
+      next_group = next_group->next;
     }
   }
-  compactor_->Notify(nullptr);
+  compactor_->Notify(groups);
 }
 
 void HeatGroupManager::SetCompactor(Compactor* compactor) {

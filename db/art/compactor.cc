@@ -27,6 +27,10 @@ void UpdateTotalSize(int32_t update_size) {
   MemTotalSize.fetch_add(update_size, std::memory_order_relaxed);
 }
 
+int64_t GetMemTotalSize() {
+  return MemTotalSize.load(std::memory_order_relaxed);
+}
+
 ////////////////////////////////////////////////////////////
 
 int64_t Compactor::compaction_threshold_;
@@ -56,9 +60,9 @@ void Compactor::SetDB(DBImpl* db_impl) {
   db_impl_ = db_impl;
 }
 
-void Compactor::Notify(HeatGroup* heat_group) {
+void Compactor::Notify(std::vector<HeatGroup*>& heat_groups) {
   std::unique_lock<std::mutex> lock{mutex_};
-  chosen_group_ = heat_group;
+  chosen_groups_ = std::move(heat_groups);
   cond_var_.notify_one();
 }
 
@@ -88,6 +92,7 @@ void Compactor::CompactionPreprocess(SingleCompactionJob* job) {
   job->vlog_manager_ = vlog_manager_;
 
   // Get candidate nodes
+  int compacted_size = 0;
   while (cur_node != node_after_end) {
     auto& opt_lock = cur_node->opt_lock_;
     opt_lock.WriteLock();
@@ -107,6 +112,7 @@ void Compactor::CompactionPreprocess(SingleCompactionJob* job) {
            SIZE_TO_BYTES(GET_NODE_BUFFER_SIZE(cur_node->status_)),
            PMEM_F_MEM_NODRAIN);
     SET_NODE_BUFFER_SIZE(cur_node->status_, 0);
+    compacted_size += cur_node->estimated_size_;
     cur_node->estimated_size_ = 0;
     opt_lock.WriteUnlock(false);
 
@@ -124,6 +130,8 @@ void Compactor::CompactionPreprocess(SingleCompactionJob* job) {
   }
 
   job->candidates_.push_back(nullptr);
+  job->group_->group_size_.fetch_add(-compacted_size, std::memory_order_relaxed);
+  UpdateTotalSize(-compacted_size);
 }
 
 void Compactor::CompactionPostprocess(SingleCompactionJob* job) {
@@ -199,8 +207,7 @@ void Compactor::BGWorkDoCompaction() {
       continue;
     }
 
-    for (int i = 0; i < num_parallel_compaction_ &&
-                    mem_total_size > compaction_threshold_; ++i) {
+    {
       std::unique_lock<std::mutex> lock{mutex_};
       group_manager_->AddOperation(nullptr, kOperationChooseCompaction, true);
       cond_var_.wait(lock);
@@ -209,21 +216,15 @@ void Compactor::BGWorkDoCompaction() {
         return;
       }
 
-      if (!chosen_group_) {
+      if (chosen_groups_.empty()) {
         continue;
       }
 
-      auto job = compaction_jobs_[i];
-      job->group_ = chosen_group_;
-      chosen_jobs_.push_back(job);
-
-      chosen_group_->ResetSize();
-      chosen_group_ = nullptr;
-      mem_total_size = MemTotalSize.load(std::memory_order_acquire);
-    }
-
-    if (chosen_jobs_.empty()) {
-      continue;
+      for (size_t i = 0; i < chosen_groups_.size(); ++i) {
+        auto job = compaction_jobs_[i];
+        job->group_ = chosen_groups_[i];
+        chosen_jobs_.push_back(job);
+      }
     }
 
     SingleCompactionJob::thread_pool->SetJobCount(chosen_jobs_.size());
@@ -245,50 +246,18 @@ void Compactor::BGWorkDoCompaction() {
     // Use sfence after all vlog are modified
     MEMORY_BARRIER;
 
-#ifndef NDEBUG
-    float estimate = vlog_manager_->Estimate();
+//#ifndef NDEBUG
+   float estimate = vlog_manager_->Estimate();
     printf("%d Compaction done, number of free pages: "
-        "%zu, free vlog pages: %zu, free ratio:%f\n",
+        "%zu, free vlog pages: %zu, free ratio:%f, size:%zu\n",
         (int)chosen_jobs_.size(),
         GetNodeAllocator()->GetNumFreePages(),
-        vlog_manager_->free_segments_.size(), estimate);
-#endif
+        vlog_manager_->free_segments_.size(), estimate,
+        MemTotalSize.load(std::memory_order_relaxed));
+//#endif
 
     chosen_jobs_.clear();
   }
 }
 
-void Compactor::TestCompaction() {
-  int count = 4;
-  SingleCompactionJob::thread_pool->SetJobCount(count);
-  for (int i = 0; i < count; ++i) {
-    group_manager_->TestChooseCompaction();
-    auto job = new SingleCompactionJob();
-    job->group_ = chosen_group_;
-    chosen_group_ = nullptr;
-    chosen_jobs_.push_back(job);
-  }
-
-  SingleCompactionJob::thread_pool->SetJobCount(chosen_jobs_.size());
-  for (auto& job : chosen_jobs_) {
-    auto func = std::bind(&Compactor::CompactionPreprocess, this, job);
-    SingleCompactionJob::thread_pool->SubmitJob(func);
-  }
-  SingleCompactionJob::thread_pool->Join();
-
-  db_impl_->SyncCallFlush(chosen_jobs_);
-
-  SingleCompactionJob::thread_pool->SetJobCount(count);
-  for (auto& job : chosen_jobs_) {
-    auto func = std::bind(&Compactor::CompactionPostprocess, this, job);
-    SingleCompactionJob::thread_pool->SubmitJob(func);
-  }
-  SingleCompactionJob::thread_pool->Join();
-
-  for (auto& job : chosen_jobs_) {
-    delete[] job->compacted_indexes_;
-    delete job;
-  }
-
-}
 } // namespace ROCKSDB_NAMESPACE
