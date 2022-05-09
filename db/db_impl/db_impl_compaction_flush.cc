@@ -2526,6 +2526,7 @@ void DBImpl::SyncCallFlush(std::vector<SingleCompactionJob*>& jobs) {
     ColumnFamilyData* default_cfd = *cfd_set->begin();
     MutableCFOptions mutable_cf_options =
         *default_cfd->GetLatestMutableCFOptions();
+    default_cfd->mem()->SetNextLogNumber(logfile_number_);
 
     std::vector<DBCompactionJob> db_jobs;
     for (auto job : jobs) {

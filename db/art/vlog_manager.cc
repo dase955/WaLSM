@@ -114,6 +114,7 @@ VLogManager::VLogManager(const DBOptions& options, bool recovery)
 
 VLogManager::~VLogManager() {
   thread_stop_ = true;
+  printf("Stop vlog gc thread\n");
   gc_cv_.Signal();
   gc_thread_.join();
 }
@@ -122,8 +123,14 @@ void VLogManager::Recover() {
   char* cur_ptr = pmemptr_;
   for (size_t i = 0; i < vlog_segment_num_; ++i) {
     auto header = (VLogSegmentHeader*)cur_ptr;
+    assert(header->total_count_ >= header->compacted_count_);
     if (header->status_ == kSegmentWriting ||
         header->status_ == kSegmentWritten) {
+
+      if (header->status_ == kSegmentWriting) {
+        printf("Writing page: %p\n", cur_ptr);
+      }
+
       header->status_ = kSegmentWritten;
       FLUSH(cur_ptr, vlog_header_size_);
       used_segments_.emplace_back(cur_ptr);
@@ -131,6 +138,7 @@ void VLogManager::Recover() {
       continue;
     }
 
+    assert(header->total_count_ == 0 && header->compacted_count_ == 0);
     header->status_ = kSegmentFree;
     header->offset_ = vlog_header_size_;
     header->total_count_ = header->compacted_count_ = 0;
@@ -458,6 +466,7 @@ void VLogManager::WriteToNewSegment(std::string& record, uint64_t& new_vptr) {
     header = (VLogSegmentHeader*)segment_for_gc_;
     offset = header->offset_;
     count = header->total_count_;
+    assert(header->total_count_ == 0 && header->compacted_count_ == 0);
     remain = vlog_segment_size_ - offset;
   }
 

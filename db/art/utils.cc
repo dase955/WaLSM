@@ -89,6 +89,7 @@ InnerNode* RecoverInnerNode(NVMNode* nvm_node) {
   auto inode = new InnerNode();
 
   memcpy(inode->buffer_, nvm_node->temp_buffer, 256);
+  memset(nvm_node->temp_buffer, 0, 256);
   int buffer_size = 0;
   for (; buffer_size < 16; ++buffer_size) {
     if (inode->buffer_[buffer_size * 2] == 0) {
