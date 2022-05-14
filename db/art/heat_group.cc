@@ -351,9 +351,6 @@ void HeatGroupManager::SplitGroup(HeatGroup* group) {
   right_group->status_.store(kGroupNone, std::memory_order_release);
   group->status_.store(kGroupNone, std::memory_order_release);
   right_group->lock.unlock();
-
-  printf("Split group %p %p %d %d %d\n", group, right_group,
-         left_size, right_size, stored_total_size);
 }
 
 void HeatGroupManager::MoveAllGroupsToLayer(int from, int to) {

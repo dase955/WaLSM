@@ -62,7 +62,6 @@ void Compactor::SetDB(DBImpl* db_impl) {
 
 void Compactor::Notify(std::vector<HeatGroup*>& heat_groups) {
   std::unique_lock<std::mutex> lock{mutex_};
-  printf("Choose %d groups for compaction\n", (int)heat_groups.size());
   chosen_groups_ = std::move(heat_groups);
   cond_var_.notify_one();
 }

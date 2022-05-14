@@ -510,8 +510,8 @@ void DBImpl::CancelAllBackgroundWork(bool wait) {
 Status DBImpl::CloseHelper() {
   // Guarantee that there is no background error recovery in progress before
   // continuing with the shutdown
-  mutex_.Lock();
   compactor_.StopCompactionThread();
+  mutex_.Lock();
   printf("DbImpl::CloseHelper\n");
 
   shutdown_initiated_ = true;
