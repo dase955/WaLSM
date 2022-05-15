@@ -15,6 +15,7 @@
 #include <atomic>
 
 #include "db/memtable_list.h"
+#include "db/merge_qtable.h"
 #include "db/table_cache.h"
 #include "db/table_properties_collector.h"
 #include "db/write_batch_internal.h"
@@ -527,6 +528,8 @@ class ColumnFamilyData {
   const std::string name_;
   Version* dummy_versions_;  // Head of circular doubly-linked list of versions.
   Version* current_;         // == dummy_versions->prev_
+
+  MergeQTable* global_q_table_; // q table for compaction decision
 
   std::atomic<int> refs_;      // outstanding references to ColumnFamilyData
   std::atomic<bool> initialized_;

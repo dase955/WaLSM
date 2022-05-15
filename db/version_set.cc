@@ -1716,6 +1716,7 @@ VersionStorageInfo::VersionStorageInfo(
       num_levels_(levels),
       num_non_empty_levels_(0),
       l0_compaction_score(0.0),
+      q_table_(nullptr),
       file_indexer_(user_comparator),
       compaction_style_(compaction_style),
       files_(new std::vector<FileMetaData*>[num_levels_]),

@@ -22,6 +22,12 @@ struct QValue {
   QValue(double q_k, double q_m) : q_k(q_k), q_m(q_m) {}
 };
 
+struct QState {
+  std::vector<QValue> values_seq;
+  QValue cur;
+  QState(QValue val) : cur(val) {}
+}; // State for q value records
+
 class MergeQTable {
  public:
   // QTable constructor
