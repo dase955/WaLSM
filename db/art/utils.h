@@ -129,9 +129,6 @@ ArtNode* AllocateArtAfterSplit(
     const std::vector<unsigned char>& c,
     InnerNode* first_node_in_art);
 
-void InsertToArtNode(ArtNode* art, InnerNode* leaf,
-                     unsigned char c, bool insert_to_group = true);
-
 /////////////////////////////////////////////////////
 // NVMNode
 

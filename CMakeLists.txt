@@ -84,7 +84,7 @@ else()
 endif()
 
 if( NOT DEFINED CMAKE_CXX_STANDARD )
-  set(CMAKE_CXX_STANDARD 11)
+  set(CMAKE_CXX_STANDARD 17)
 endif()
 
 include(CMakeDependentOption)
@@ -591,6 +591,7 @@ set(SOURCES
         db/art/global_memtable.cc
         db/art/heat_group.cc
         db/art/lock.cc
+        db/art/logger.cc
         db/art/node_allocator.cc
         db/art/timestamp.cc
         db/art/utils.cc

@@ -34,17 +34,16 @@ struct VLogSegmentHeader {
 };
 
 struct GCData {
-  uint64_t vptr_;
-  std::string record_;
-  std::string key_;
+  std::string record;
+  uint64_t    vptr;
+  Slice       key;
 
   GCData() = default;
 
   GCData(uint32_t key_start, uint32_t key_length,
-         uint64_t vptr, std::string& record)
-      : vptr_(vptr), record_(record),
-        key_(std::string(record_.data() + key_start, key_length)){
-  };
+         uint64_t vptr_, std::string& record_)
+      : record(std::move(record_)), vptr(vptr_),
+        key(record.data() + key_start, key_length) {};
 };
 
 class GlobalMemtable;
@@ -76,7 +75,7 @@ class VLogManager {
   ValueType GetKeyValue(uint64_t offset, std::string& key, std::string& value);
 
   ValueType GetKeyValue(uint64_t offset,
-                        std::string& key, std::string& value,
+                        std::string& key, Slice& value,
                         SequenceNumber& seq_num, RecordIndex& index);
 
   void FreeQueue();

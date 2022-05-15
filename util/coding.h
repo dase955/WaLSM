@@ -450,7 +450,9 @@ inline bool GetLengthPrefixedSlice(Slice* input, Slice* result) {
 inline bool GetLengthPrefixedSlice(Slice* input, std::string& result) {
   uint32_t len = 0;
   if (GetVarint32(input, &len) && input->size() >= len) {
-    result = std::string(input->data(), len);
+    result.clear();
+    result.reserve(len + 8);
+    result.append(input->data(), len);
     input->remove_prefix(len);
     return true;
   } else {

@@ -114,7 +114,6 @@ VLogManager::VLogManager(const DBOptions& options, bool recovery)
 
 VLogManager::~VLogManager() {
   thread_stop_ = true;
-  printf("Stop vlog gc thread\n");
   gc_cv_.Signal();
   gc_thread_.join();
 }
@@ -206,7 +205,7 @@ void VLogManager::GetKey(uint64_t vptr, Slice& key) {
   GetLengthPrefixedSlice(&slice, &key);
 }
 
-void VLogManager::GetKeyIndex(uint64_t vptr, std::string &key,
+void VLogManager::GetKeyIndex(uint64_t vptr, std::string& key,
                               RecordIndex& index) {
   GetActualVptr(vptr);
   index = ((uint32_t*)(pmemptr_ + vptr + 9))[0];
@@ -215,7 +214,7 @@ void VLogManager::GetKeyIndex(uint64_t vptr, std::string &key,
 }
 
 ValueType VLogManager::GetKeyValue(uint64_t vptr,
-                                   std::string& key, std::string& value,
+                                   std::string& key, Slice& value,
                                    SequenceNumber& seq_num,
                                    RecordIndex& index) {
   GetActualVptr(vptr);
@@ -228,7 +227,7 @@ ValueType VLogManager::GetKeyValue(uint64_t vptr,
 
   switch (type) {
     case kTypeValue:
-      GetLengthPrefixedSlice(&slice, value);
+      GetLengthPrefixedSlice(&slice, &value);
       break;
     default:
       break;
@@ -297,8 +296,6 @@ void VLogManager::ReadAndSortData(std::vector<char*>& segments) {
         slice.remove_prefix(value_length);
       }
 
-      // Not fully tested.
-      //if (true) {
       if (bitmap[read / 8] & (1 << (read % 8))) {
         std::string record(record_start, slice.data() - record_start);
         dummy_info.vptr_ = record_start - pmemptr_;
@@ -312,7 +309,7 @@ void VLogManager::ReadAndSortData(std::vector<char*>& segments) {
 
   std::sort(gc_data.begin(), gc_data.end(),
             [](GCData& l, GCData& r) {
-              return l.key_ < r.key_;
+              return l.key.compare(r.key) < 0;
             });
 }
 
@@ -358,7 +355,7 @@ void VLogManager::BGWorkGarbageCollection() {
     while (index < data_count) {
       auto& cur_data = gc_data[index];
       auto inner_node = mem_->FindInnerNodeByKey(
-          cur_data.key_, level, stored_in_nvm);
+          cur_data.key, level, stored_in_nvm);
 
       // Right now we don't reclaim free nodes.
       if (unlikely(!inner_node)) {
@@ -368,12 +365,13 @@ void VLogManager::BGWorkGarbageCollection() {
 
       if (!stored_in_nvm) {
         inner_node->opt_lock_.WriteLock();
-        std::string& vptr_key = cur_data.key_;
-        while (index < data_count && gc_data[index].key_ == vptr_key) {
+        Slice vptr_key = cur_data.key;
+        while (index < data_count &&
+               gc_data[index].key.compare(vptr_key) == 0) {
           cur_data = gc_data[index++];
-          if (inner_node->vptr_ == cur_data.vptr_) {
-            WriteToNewSegment(cur_data.record_, new_vptr);
-            UpdateActualVptr(cur_data.vptr_, new_vptr);
+          if (inner_node->vptr_ == cur_data.vptr) {
+            WriteToNewSegment(cur_data.record, new_vptr);
+            UpdateActualVptr(cur_data.vptr, new_vptr);
             inner_node->vptr_ = new_vptr;
           }
         }
@@ -382,7 +380,7 @@ void VLogManager::BGWorkGarbageCollection() {
       }
 
       {
-        std::string cur_prefix = cur_data.key_.substr(0, level);
+        Slice cur_prefix = Slice(cur_data.key.data(), level);
 
         std::lock_guard<std::mutex> flush_lk(inner_node->flush_mutex_);
         if (unlikely(!IS_LEAF(inner_node->status_))) {
@@ -393,17 +391,16 @@ void VLogManager::BGWorkGarbageCollection() {
 
         while (index < data_count) {
           cur_data = gc_data[index];
-          if (cur_data.key_.compare(0, level, cur_prefix) != 0) {
+          if (!cur_data.key.starts_with(cur_prefix)) {
             break;
           }
 
-          auto& key = cur_data.key_;
-          auto hash = (uint8_t)Hash(key.data(), key.size(), 397);
+          auto hash = (uint8_t)Hash(cur_data.key.data(), cur_data.key.size(), 397);
           auto found_index = SearchVptr(
-              inner_node, hash, rows, cur_data.vptr_);
+              inner_node, hash, rows, cur_data.vptr);
           if (found_index != -1) {
-            WriteToNewSegment(cur_data.record_, new_vptr);
-            UpdateActualVptr(cur_data.vptr_, new_vptr);
+            WriteToNewSegment(cur_data.record, new_vptr);
+            UpdateActualVptr(cur_data.vptr, new_vptr);
 
             if (found_index >= 0) {
               nvm_node->data[found_index * 2 + 1] = new_vptr;

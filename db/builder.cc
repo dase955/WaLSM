@@ -354,15 +354,10 @@ Status BuildTable(
 
 struct CompactionRec {
   std::string* key;
-  std::string* value;
-  uint64_t    seq_num_;
-  ValueType   type;
+  Slice        value;
+  uint64_t     seq_num_;
 
   CompactionRec() = default;
-
-  CompactionRec(std::string* key_, std::string* value_,
-                uint64_t seq_num, ValueType type_)
-      : key(key_), value(value_), seq_num_(seq_num), type(type_){};
 
   friend bool operator<(const CompactionRec& l, const CompactionRec& r) {
     return *l.key < *r.key;
@@ -378,27 +373,29 @@ void ReadAndBuild(SingleCompactionJob* job,
                   FileMetaData* meta) {
   const size_t kReportFlushIOStatsEvery = 1048576;
 
+  ValueType type;
+  SequenceNumber seq_num;
   RecordIndex record_index = 0;
-  std::vector<std::string> keys(240);
-  std::vector<std::string> values(240);
+  std::vector<std::string>& keys = job->keys_in_node;
   std::vector<CompactionRec> kvs(240);
 
-  for (auto nvm_node : job->nvm_nodes_) {
-    int count = 0;
+  for (auto& pair : job->nvm_nodes_and_sizes) {
+    auto nvm_node = pair.first;
+    int data_size = pair.second;
     auto data = nvm_node->data;
-    int size = GET_SIZE(nvm_node->meta.header);
 
-    for (int i = -16; i < size; ++i) {
+    int count = 0;
+    for (int i = -16; i < data_size; ++i) {
       auto vptr = data[i * 2 + 1];
       if (!vptr) {
         continue;
       }
 
       auto& kv = kvs[count];
-      kv.type = job->vlog_manager_->GetKeyValue(
-          vptr, keys[count], values[count], kv.seq_num_, record_index);
-      kv.key = &keys[count];
-      kv.value = &values[count++];
+      type = job->vlog_manager_->GetKeyValue(
+          vptr, keys[count], kv.value, seq_num, record_index);
+      kv.seq_num_ = (seq_num << 8) | type;
+      kv.key = &keys[count++];
 
       GetActualVptr(vptr);
       job->compacted_indexes_[vptr >> 20].push_back(record_index);
@@ -407,10 +404,11 @@ void ReadAndBuild(SingleCompactionJob* job,
     std::stable_sort(kvs.begin(), kvs.begin() + count);
     auto end = std::unique(kvs.begin(), kvs.begin() + count);
     for (auto it = kvs.begin(); it != end; ++it) {
-      InternalKey ikey(*it->key, it->seq_num_, it->type);
-      builder->Add(ikey.Encode(), *it->value);
+      auto& key = it->key;
+      PutFixed64(key, it->seq_num_);
+      builder->Add(*key, it->value);
       meta->UpdateBoundaries(
-          ikey.Encode(), *it->value, it->seq_num_, it->type);
+          *key, it->value, it->seq_num_, kTypeValue);
     }
 
     // TODO(noetzli): Update stats after flush, too.

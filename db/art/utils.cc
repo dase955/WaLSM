@@ -156,7 +156,6 @@ ArtNode* RemoveChildrenNVMNode(InnerNode* parent) {
   PERSIST(cur_nvm_node, 8);
 
   auto art = parent->art;
-  delete art->backup_;
   parent->art = nullptr;
   auto status = parent->status_;
   SET_LEAF(status);

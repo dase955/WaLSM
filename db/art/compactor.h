@@ -32,9 +32,10 @@ struct SingleCompactionJob {
   InnerNode* start_node_;
   InnerNode* node_after_end_;
   VLogManager* vlog_manager_;
-  std::deque<InnerNode*> candidates_;
-  std::vector<NVMNode*> nvm_nodes_;
   autovector<RecordIndex>* compacted_indexes_;
+  std::deque<InnerNode*> candidates_;
+  std::vector<std::string> keys_in_node;
+  std::vector<std::pair<NVMNode*, int>> nvm_nodes_and_sizes;
 };
 
 class Compactor {
@@ -91,5 +92,10 @@ class Compactor {
 int64_t GetMemTotalSize();
 
 void UpdateTotalSize(int32_t update_size);
+
+inline uint64_t GetCompactionNum() {
+  static std::atomic<uint64_t> compaction_num{0};
+  return ++compaction_num;
+}
 
 } // namespace ROCKSDB_NAMESPACE

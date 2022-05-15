@@ -199,25 +199,24 @@ ArtNode* ReallocateArtNode256(ArtNode* art) {
   return new_art;
 }
 
-ArtNode* ReallocateArtNode(ArtNode* art) {
+void ReallocateArtNode(ArtNode** art) {
   ArtNode* new_art = nullptr;
-  switch (art->art_type_) {
+  switch ((*art)->art_type_) {
     case kNode4:
-      new_art = ReallocateArtNode16(art);
+      new_art = ReallocateArtNode16(*art);
       break;
     case kNode16:
-      new_art = ReallocateArtNode48(art);
+      new_art = ReallocateArtNode48(*art);
       break;
     case kNode48:
-      new_art = ReallocateArtNode256(art);
+      new_art = ReallocateArtNode256(*art);
       break;
     default:
       assert(false);
   }
 
-  delete art->backup_;
-  new_art->backup_ = art;
-  return new_art;
+  delete *art;
+  *art = new_art;
 }
 
 InnerNode* FindChildInNode4(ArtNode* art, unsigned char c) {
@@ -289,6 +288,8 @@ InnerNode* FindChildInNode256(ArtNode* art, unsigned char c) {
 }
 
 InnerNode* FindChild(InnerNode* node, unsigned char c) {
+  std::shared_lock read_lk(node->shared_mutex);
+
   auto art = node->art;
   switch (art->art_type_) {
     case kNode4:
@@ -410,27 +411,38 @@ InnerNode* InsertToArtNode256(ArtNode* art, InnerNode* leaf, unsigned char c) {
   return nullptr;
 }
 
-void InsertToArtNode(InnerNode* current, InnerNode* leaf, unsigned char c,
-                     bool insert_to_group) {
+void InsertToArtNode(InnerNode* current, InnerNode* leaf,
+                     unsigned char c, bool insert_to_group) {
   static int full_num[5] = {0, 4, 16, 48, 256};
 
   InnerNode* left_node = nullptr;
-  auto art = current->art;
-  switch (art->art_type_) {
-    case kNode4:
-      left_node = InsertToArtNode4(art, leaf, c);
-      break;
-    case kNode16:
-      left_node = InsertToArtNode16(art, leaf, c);
-      break;
-    case kNode48:
-      left_node = InsertToArtNode48(art, leaf, c);
-      break;
-    case kNode256:
-      left_node = InsertToArtNode256(art, leaf, c);
-      break;
-    default:
-      break;
+  ArtNode* art = nullptr;
+
+  {
+    std::lock_guard write_lk(current->shared_mutex);
+
+    if (IS_ART_FULL(current->status_)) {
+      ReallocateArtNode(&current->art);
+      SET_ART_NON_FULL(current->status_);
+    }
+
+    art = current->art;
+    switch (art->art_type_) {
+      case kNode4:
+        left_node = InsertToArtNode4(art, leaf, c);
+        break;
+      case kNode16:
+        left_node = InsertToArtNode16(art, leaf, c);
+        break;
+      case kNode48:
+        left_node = InsertToArtNode48(art, leaf, c);
+        break;
+      case kNode256:
+        left_node = InsertToArtNode256(art, leaf, c);
+        break;
+      default:
+        break;
+    }
   }
 
   InsertInnerNode(left_node, leaf);
@@ -493,7 +505,6 @@ void DeleteInnerNode(InnerNode* inner_node) {
   assert(inner_node->last_child_node_ &&
          inner_node->last_child_node_ != inner_node);
   delete inner_node->last_child_node_;
-  delete art->backup_;
   delete art;
   delete inner_node;
 }

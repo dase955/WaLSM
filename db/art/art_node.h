@@ -21,7 +21,6 @@ enum ArtNodeType : uint8_t {
 
 struct ArtNode{
   // backup is used for reallocate
-  ArtNode*    backup_ = nullptr;
   ArtNodeType art_type_ = kNode4;
   uint16_t    num_children_ = 0;
 };
@@ -67,7 +66,7 @@ ArtNode* AllocateArtAfterSplit(
     const std::vector<InnerNode*>& inserted_nodes,
     const std::vector<unsigned char>& c);
 
-ArtNode* ReallocateArtNode(ArtNode* art);
+void ReallocateArtNode(ArtNode** art);
 
 InnerNode* FindChild(InnerNode* node, unsigned char c);
 

@@ -50,6 +50,7 @@ void Compactor::SetVLogManager(VLogManager* vlog_manager) {
   vlog_manager_ = vlog_manager;
   for (int i = 0; i < num_parallel_compaction_; ++i) {
     auto job = new SingleCompactionJob;
+    job->keys_in_node = std::vector<std::string>(240);
     job->compacted_indexes_ =
         new autovector<RecordIndex>[vlog_manager_->vlog_segment_num_];
     compaction_jobs_.push_back(job);
@@ -73,7 +74,6 @@ void Compactor::StartCompactionThread() {
 
 void Compactor::StopCompactionThread() {
   thread_stop_ = true;
-  printf("Stop compaction thread\n");
   cond_var_.notify_one();
   compactor_thread_.join();
 }
@@ -87,7 +87,7 @@ void Compactor::CompactionPreprocess(SingleCompactionJob* job) {
   assert(IS_GROUP_START(start_node->status_));
 
   job->candidates_.clear();
-  job->nvm_nodes_.clear();
+  job->nvm_nodes_and_sizes.clear();
   job->start_node_ = start_node;
   job->node_after_end_ = node_after_end;
   job->vlog_manager_ = vlog_manager_;
@@ -120,7 +120,8 @@ void Compactor::CompactionPreprocess(SingleCompactionJob* job) {
     auto new_nvm_node = GetNodeAllocator()->AllocateNode();
     InsertNewNVMNode(cur_node, new_nvm_node);
     job->candidates_.push_back(cur_node);
-    job->nvm_nodes_.push_back(cur_node->backup_nvm_node_);
+    int data_size = GET_SIZE(cur_node->backup_nvm_node_->meta.header);
+    job->nvm_nodes_and_sizes.emplace_back(cur_node->backup_nvm_node_, data_size);
 
     job->oldest_key_time_ =
         std::min(job->oldest_key_time_, cur_node->oldest_key_time_);
@@ -195,6 +196,10 @@ void Compactor::CompactionPostprocess(SingleCompactionJob* job) {
 }
 
 void Compactor::BGWorkDoCompaction() {
+  static int64_t choose_threshold = compaction_threshold_ +
+                                    num_parallel_compaction_ *
+                                        HeatGroup::group_min_size_;
+
   while (true) {
     if (thread_stop_) {
       break;
@@ -205,7 +210,7 @@ void Compactor::BGWorkDoCompaction() {
     std::this_thread::sleep_for(std::chrono::milliseconds(10));
 
     auto mem_total_size = MemTotalSize.load(std::memory_order_relaxed);
-    if (mem_total_size < compaction_threshold_) {
+    if (mem_total_size < choose_threshold) {
       continue;
     }
 
@@ -248,7 +253,7 @@ void Compactor::BGWorkDoCompaction() {
     // Use sfence after all vlog are modified
     MEMORY_BARRIER;
 
-//#ifndef NDEBUG
+#ifndef NDEBUG
    float estimate = vlog_manager_->Estimate();
     printf("%d Compaction done, number of free pages: "
         "%zu, free vlog pages: %zu, free ratio:%f, size:%zu\n",
@@ -256,7 +261,7 @@ void Compactor::BGWorkDoCompaction() {
         GetNodeAllocator()->GetNumFreePages(),
         vlog_manager_->free_segments_.size(), estimate,
         MemTotalSize.load(std::memory_order_relaxed));
-//#endif
+#endif
 
     chosen_jobs_.clear();
   }

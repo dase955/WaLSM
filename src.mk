@@ -32,6 +32,7 @@ LIB_SOURCES =                                                   \
   db/art/global_memtable.cc                                     \
   db/art/heat_group.cc                                          \
   db/art/lock.cc                                                \
+  db/art/logger.cc                                              \
   db/art/node_allocator.cc                                      \
   db/art/timestamp.cc                                           \
   db/art/utils.cc                                               \

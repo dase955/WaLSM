@@ -16,6 +16,7 @@
 #include <string>
 #include <atomic>
 #include <mutex>
+#include <shared_mutex>
 #include <util/mutexlock.h>
 #include <util/autovector.h>
 #include <rocksdb/rocksdb_namespace.h>
@@ -57,6 +58,8 @@ struct InnerNode {
   uint32_t   status_;           // node status, see macros.h
   int64_t    oldest_key_time_;  // Just for compatibility
 
+  std::shared_mutex shared_mutex;
+
   InnerNode();
 };
 
@@ -82,7 +85,7 @@ class GlobalMemtable {
 
   bool Get(std::string& key, std::string& value, Status* s);
 
-  InnerNode* FindInnerNodeByKey(std::string& key, size_t& level,
+  InnerNode* FindInnerNodeByKey(Slice& key, size_t& level,
                                 bool& stored_in_nvm);
 
  private:

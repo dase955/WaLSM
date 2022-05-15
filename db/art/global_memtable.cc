@@ -352,7 +352,11 @@ void GlobalMemtable::Put(Slice& key, KVStruct& kv_info) {
   bool need_restart;
   size_t level = 1;
   uint32_t version;
-  InnerNode* current = FindChild(root_, key[0]);
+  InnerNode* first = FindChild(root_, key[0]);
+
+  // TODO: remove Restart to here
+
+  InnerNode* current = first;
   InnerNode* next_node;
 
   while (true) {
@@ -399,11 +403,6 @@ void GlobalMemtable::Put(Slice& key, KVStruct& kv_info) {
       ++leaf->status_;
       leaf->buffer_[0] = kv_info.hash_;
       leaf->buffer_[1] = kv_info.vptr_;
-
-      if (IS_ART_FULL(current->status_)) {
-        current->art = ReallocateArtNode(current->art);
-        SET_ART_NON_FULL(current->status_);
-      }
 
       InsertToArtNode(current, leaf, key[level], true);
       leaf->estimated_size_ = kv_info.kv_size_;
@@ -844,7 +843,7 @@ bool GlobalMemtable::FindKeyInInnerNode(InnerNode* leaf, size_t level,
   return false;
 }
 
-InnerNode* GlobalMemtable::FindInnerNodeByKey(std::string& key,
+InnerNode* GlobalMemtable::FindInnerNodeByKey(Slice& key,
                                               size_t& level,
                                               bool& stored_in_nvm) {
   size_t max_level = key.size();

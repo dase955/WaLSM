@@ -25,6 +25,7 @@
 #include <utility>
 #include <vector>
 
+#include "db/art/logger.h"
 #include "db/art/node_allocator.h"
 #include "db/art/nvm_manager.h"
 #include "db/arena_wrapped_db_iter.h"
@@ -271,6 +272,10 @@ DBImpl::DBImpl(const DBOptions& options, const std::string& dbname,
   // is called by client and this seqnum is advanced.
   preserve_deletes_seqnum_.store(0);
 
+  // Use init time as start time.
+  GetStartTime();
+  init_log_file();
+
   std::unordered_map<std::string, int64_t> memory_usages;
   memory_usages["vlog"] = options.vlog_file_size;
   memory_usages["nodememory"] = options.node_memory_size;
@@ -512,7 +517,6 @@ Status DBImpl::CloseHelper() {
   // continuing with the shutdown
   compactor_.StopCompactionThread();
   mutex_.Lock();
-  printf("DbImpl::CloseHelper\n");
 
   shutdown_initiated_ = true;
   error_handler_.CancelErrorRecovery();

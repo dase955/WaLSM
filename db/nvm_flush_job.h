@@ -82,7 +82,9 @@ class NVMFlushJob {
 
   void Preprocess();
 
-  void PostProcess();
+  void WriteResult(InternalStats::CompactionStats& stats);
+
+  void PostProcess(InternalStats::CompactionStats& stats);
 
   void Build();
 

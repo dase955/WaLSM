@@ -2528,6 +2528,7 @@ void DBImpl::SyncCallFlush(std::vector<SingleCompactionJob*>& jobs) {
         *default_cfd->GetLatestMutableCFOptions();
     default_cfd->mem()->SetNextLogNumber(logfile_number_);
 
+    int idx = 0;
     std::vector<DBCompactionJob> db_jobs;
     for (auto job : jobs) {
       num_running_flushes_++;
@@ -2545,7 +2546,7 @@ void DBImpl::SyncCallFlush(std::vector<SingleCompactionJob*>& jobs) {
       nvm_flush_job->logs_with_prep_tracker_ = &logs_with_prep_tracker_;
 
       DBCompactionJob db_job;
-      superversion_contexts.emplace_back(SuperVersionContext(true));
+      superversion_contexts.emplace_back(SuperVersionContext((idx++) == 0));
       db_job.superversion_context = &(superversion_contexts.back());
       db_job.nvm_flush_job = nvm_flush_job;
       db_job.nvm_flush_job->Preprocess();
@@ -2561,37 +2562,37 @@ void DBImpl::SyncCallFlush(std::vector<SingleCompactionJob*>& jobs) {
     }
     SingleCompactionJob::thread_pool->Join();
 
+    mutex_.Lock();
+    InternalStats::CompactionStats stats(CompactionReason::kFlush, 1);
     for (auto& db_job : db_jobs) {
-      mutex_.Lock();
+      db_job.nvm_flush_job->PostProcess(stats);
+    }
+    db_jobs.back().nvm_flush_job->WriteResult(stats);
 
-      db_job.nvm_flush_job->PostProcess();
-      InstallSuperVersionAndScheduleWork(default_cfd,
-                                         db_job.superversion_context,
-                                         mutable_cf_options);
+    InstallSuperVersionAndScheduleWork(default_cfd,
+                                       db_jobs.front().superversion_context,
+                                       mutable_cf_options);
 
-      const std::string& column_family_name = default_cfd->GetName();
-      Version* const current = default_cfd->current();
-      const VersionStorageInfo* const storage_info = current->storage_info();
+    const std::string& column_family_name = default_cfd->GetName();
+    Version* const current = default_cfd->current();
+    const VersionStorageInfo* const storage_info = current->storage_info();
 
-      VersionStorageInfo::LevelSummaryStorage tmp;
-      ROCKS_LOG_BUFFER(&log_buffer, "[%s] Level summary: %s\n",
-                       column_family_name.c_str(),
-                       storage_info->LevelSummary(&tmp));
+    VersionStorageInfo::LevelSummaryStorage tmp;
+    ROCKS_LOG_BUFFER(&log_buffer, "[%s] Level summary: %s\n",
+                     column_family_name.c_str(),
+                     storage_info->LevelSummary(&tmp));
 
-      auto sfm = static_cast<SstFileManagerImpl*>(
-          immutable_db_options_.sst_file_manager.get());
-      if (sfm) {
+    auto sfm = static_cast<SstFileManagerImpl*>(
+        immutable_db_options_.sst_file_manager.get());
+    if (sfm) {
+      for (auto& db_job : db_jobs) {
         // Notify sst_file_manager that a new file was added
         std::string file_path = MakeTableFileName(
             default_cfd->ioptions()->cf_paths[0].path,
             db_job.nvm_flush_job->meta_.fd.GetNumber());
         sfm->OnAddFile(file_path);
       }
-
-      mutex_.Unlock();
     }
-
-    mutex_.Lock();
 
     TEST_SYNC_POINT("DBImpl::SyncCallFlush:FlushFinish:0");
     ReleaseFileNumberFromPendingOutputs(pending_outputs_inserted_elem);
