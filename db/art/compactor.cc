@@ -21,14 +21,24 @@ namespace ROCKSDB_NAMESPACE {
 
 std::atomic<int64_t> MemTotalSize{0};
 
+std::atomic<int> BackupRead{0};
+
 ThreadPool* SingleCompactionJob::thread_pool = NewThreadPool(4);
 
 void UpdateTotalSize(int32_t update_size) {
-  MemTotalSize.fetch_add(update_size, std::memory_order_relaxed);
+  MemTotalSize.fetch_add(update_size, std::memory_order_release);
+}
+
+void IncrementBackupRead() {
+  BackupRead.fetch_add(1, std::memory_order_release);
+}
+
+void ReduceBackupRead() {
+  BackupRead.fetch_sub(1, std::memory_order_release);
 }
 
 int64_t GetMemTotalSize() {
-  return MemTotalSize.load(std::memory_order_relaxed);
+  return MemTotalSize.load(std::memory_order_acquire);
 }
 
 ////////////////////////////////////////////////////////////
@@ -203,6 +213,12 @@ void Compactor::BGWorkDoCompaction() {
   while (true) {
     if (thread_stop_) {
       break;
+    }
+
+    // Wait all reads in backup nvm node finish,
+    // then we can free vlog pages.
+    while (BackupRead.load(std::memory_order_acquire)) {
+      std::this_thread::yield();
     }
 
     vlog_manager_->FreeQueue();

@@ -355,7 +355,6 @@ void GlobalMemtable::Put(Slice& key, KVStruct& kv_info) {
   InnerNode* first = FindChild(root_, key[0]);
 
   // TODO: remove Restart to here
-
   InnerNode* current = first;
   InnerNode* next_node;
 
@@ -762,11 +761,67 @@ void GlobalMemtable::InsertIntoLeaf(InnerNode* leaf, KVStruct& kv_info,
   }
 }
 
+bool GlobalMemtable::ReadInNVMNode(NVMNode* nvm_node, uint64_t hash,
+                                   std::string& key, std::string& value,
+                                   Status* s) {
+  ValueType type;
+  uint64_t vptr;
+  std::string find_key;
+
+  for (size_t i = 0; i < 16; ++i) {
+    if (!nvm_node->temp_buffer[i * 2 + 1]) {
+      break;
+    }
+
+    if (nvm_node->temp_buffer[i * 2] != hash) {
+      continue;
+    }
+
+    type = vlog_manager_->GetKeyValue(
+        nvm_node->temp_buffer[i * 2 + 1], find_key, value);
+    if (find_key == key) {
+      *s = type == kTypeValue ? Status::OK() : Status::NotFound();
+      return true;
+    }
+  }
+
+  auto data = nvm_node->data;
+  auto fingerprints = nvm_node->meta.fingerprints_;
+  int rows = GET_ROWS(nvm_node->meta.header);
+
+  int search_rows = (rows + 1) / 2 - 1;
+  int size = rows * 16;
+  __m256i target = _mm256_set1_epi8((uint8_t)hash);
+
+  for (int row = search_rows; row >= 0; --row) {
+    int base = row << 5;
+    __m256i f = _mm256_loadu_si256(
+        reinterpret_cast<const __m256i *>(fingerprints + base));
+    __m256i r = _mm256_cmpeq_epi8(f, target);
+    auto res = (unsigned int)_mm256_movemask_epi8(r);
+    while (res > 0) {
+      int found = 31 - __builtin_clz(res);
+      res -= (1 << found);
+      int index = found + base;
+      vptr = data[index * 2 + 1];
+      if (index >= size || data[index * 2] != hash) {
+        continue;
+      }
+      type = vlog_manager_->GetKeyValue(vptr, find_key, value);
+      if (key == find_key) {
+        *s = type == kTypeValue ? Status::OK() : Status::NotFound();
+        return true;
+      }
+    }
+  }
+
+  return false;
+}
+
 bool GlobalMemtable::FindKeyInInnerNode(InnerNode* leaf, size_t level,
                                         std::string& key, std::string& value,
                                         Status* s) {
   std::string find_key;
-  uint64_t vptr;
   ValueType type;
 
   uint64_t hash = HashAndPrefix(key.c_str(), key.length(), level);
@@ -785,62 +840,24 @@ bool GlobalMemtable::FindKeyInInnerNode(InnerNode* leaf, size_t level,
     }
   }
 
-  __m256i target = _mm256_set1_epi8((uint8_t)hash);
-
-  std::vector<NVMNode*> nvm_nodes{leaf->nvm_node_};
+  auto nvm_node = leaf->nvm_node_;
   auto backup_nvm_node = leaf->backup_nvm_node_;
-  if (backup_nvm_node && backup_nvm_node != nvm_nodes[0]) {
-    nvm_nodes.push_back(backup_nvm_node);
+  bool need_search_backup = backup_nvm_node && backup_nvm_node != nvm_node;
+
+  if (need_search_backup) {
+    IncrementBackupRead();
   }
 
-  for (auto& nvm_node : nvm_nodes) {
-    for (size_t i = 0; i < 16; ++i) {
-      if (!nvm_node->temp_buffer[i * 2 + 1]) {
-        break;
-      }
-
-      if (nvm_node->temp_buffer[i * 2] != hash) {
-        continue;
-      }
-      type = vlog_manager_->GetKeyValue(
-          buffer[i * 2 + 1], find_key, value);
-      if (find_key == key) {
-        *s = type == kTypeValue ? Status::OK() : Status::NotFound();
-        return true;
-      }
-    }
-
-    auto data = nvm_node->data;
-    auto fingerprints = nvm_node->meta.fingerprints_;
-    int rows = GET_ROWS(nvm_node->meta.header);
-
-    int search_rows = (rows + 1) / 2 - 1;
-    int size = rows * 16;
-
-    for (int row = search_rows; row >= 0; --row) {
-      int base = row << 5;
-      __m256i f = _mm256_loadu_si256(
-          reinterpret_cast<const __m256i *>(fingerprints + base));
-      __m256i r = _mm256_cmpeq_epi8(f, target);
-      auto res = (unsigned int)_mm256_movemask_epi8(r);
-      while (res > 0) {
-        int found = 31 - __builtin_clz(res);
-        res -= (1 << found);
-        int index = found + base;
-        vptr = data[index * 2 + 1];
-        if (index >= size || data[index * 2] != hash) {
-          continue;
-        }
-        type = vlog_manager_->GetKeyValue(vptr, find_key, value);
-        if (key == find_key) {
-          *s = type == kTypeValue ? Status::OK() : Status::NotFound();
-          return true;
-        }
-      }
-    }
+  bool found = ReadInNVMNode(nvm_node, hash, key, value, s);
+  if (!found && need_search_backup) {
+    found = ReadInNVMNode(backup_nvm_node, hash, key, value, s);
   }
 
-  return false;
+  if (need_search_backup) {
+    ReduceBackupRead();
+  }
+
+  return found;
 }
 
 InnerNode* GlobalMemtable::FindInnerNodeByKey(Slice& key,

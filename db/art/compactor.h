@@ -93,9 +93,9 @@ int64_t GetMemTotalSize();
 
 void UpdateTotalSize(int32_t update_size);
 
-inline uint64_t GetCompactionNum() {
-  static std::atomic<uint64_t> compaction_num{0};
-  return ++compaction_num;
-}
+// record number of read in backup nvm node
+void IncrementBackupRead();
+
+void ReduceBackupRead();
 
 } // namespace ROCKSDB_NAMESPACE

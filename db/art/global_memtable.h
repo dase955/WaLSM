@@ -94,6 +94,9 @@ class GlobalMemtable {
   bool FindKeyInInnerNode(InnerNode* leaf, size_t level,
                           std::string& key, std::string& value, Status* s);
 
+  bool ReadInNVMNode(NVMNode* nvm_node, uint64_t hash,
+                     std::string& key, std::string& value, Status* s);
+
   void InsertIntoLeaf(InnerNode* leaf, KVStruct& kv_info, size_t level);
 
   void SqueezeNode(InnerNode* leaf);
