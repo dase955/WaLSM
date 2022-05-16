@@ -364,7 +364,7 @@ void VLogManager::BGWorkGarbageCollection() {
       }
 
       if (!stored_in_nvm) {
-        inner_node->opt_lock_.WriteLock();
+        std::lock_guard lk(inner_node->opt_lock_);
         Slice vptr_key = cur_data.key;
         while (index < data_count &&
                gc_data[index].key.compare(vptr_key) == 0) {
@@ -375,14 +375,13 @@ void VLogManager::BGWorkGarbageCollection() {
             inner_node->vptr_ = new_vptr;
           }
         }
-        inner_node->opt_lock_.WriteUnlock(false);
         continue;
       }
 
       {
         Slice cur_prefix = Slice(cur_data.key.data(), level);
 
-        std::lock_guard<std::mutex> flush_lk(inner_node->flush_mutex_);
+        std::lock_guard write_lk(inner_node->share_mutex_);
         if (unlikely(!IS_LEAF(inner_node->status_))) {
           continue;
         }

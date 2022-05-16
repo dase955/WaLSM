@@ -288,7 +288,7 @@ InnerNode* FindChildInNode256(ArtNode* art, unsigned char c) {
 }
 
 InnerNode* FindChild(InnerNode* node, unsigned char c) {
-  std::shared_lock read_lk(node->shared_mutex);
+  std::shared_lock read_lk(node->art_rw_lock);
 
   auto art = node->art;
   switch (art->art_type_) {
@@ -419,7 +419,7 @@ void InsertToArtNode(InnerNode* current, InnerNode* leaf,
   ArtNode* art = nullptr;
 
   {
-    std::lock_guard write_lk(current->shared_mutex);
+    std::lock_guard write_lk(current->art_rw_lock);
 
     if (IS_ART_FULL(current->status_)) {
       ReallocateArtNode(&current->art);
@@ -462,8 +462,8 @@ void DeleteInnerNode(InnerNode* inner_node) {
   }
 
   if (IS_LEAF(inner_node->status_)) {
-    inner_node->opt_lock_.WriteLock();
-    std::lock_guard<std::mutex> flush_lk(inner_node->flush_mutex_);
+    inner_node->opt_lock_.lock();
+    std::lock_guard write_lk(inner_node->share_mutex_);
 
     auto nvm_node = inner_node->nvm_node_;
     MEMCPY(nvm_node->temp_buffer, inner_node->buffer_,
@@ -471,7 +471,7 @@ void DeleteInnerNode(InnerNode* inner_node) {
            PMEM_F_MEM_NODRAIN);
     nvm_node->meta.node_info = inner_node->estimated_size_;
     FLUSH(nvm_node->temp_buffer, 256);
-    inner_node->opt_lock_.WriteUnlock(false);
+    inner_node->opt_lock_.unlock();
     delete inner_node;
     return;
   }

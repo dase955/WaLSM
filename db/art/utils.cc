@@ -131,7 +131,7 @@ InnerNode* RecoverInnerNode(NVMNode* nvm_node) {
 ArtNode* RemoveChildrenNVMNode(InnerNode* parent) {
   // assert parent lock is held, so last child node is unchanged
   InnerNode* last_child_node = parent->last_child_node_;
-  std::lock_guard<SpinMutex> link_lk(last_child_node->link_lock_);
+  std::lock_guard link_lk(last_child_node->link_lock_);
 
   InnerNode* next_inner_node = last_child_node->next_node_;
   [[maybe_unused]] InnerNode* first_remove_node = parent->next_node_;
@@ -168,7 +168,7 @@ ArtNode* RemoveChildrenNVMNode(InnerNode* parent) {
 }
 
 void InsertInnerNode(InnerNode* node, InnerNode* inserted) {
-  std::lock_guard<SpinMutex> link_lk(node->link_lock_);
+  std::lock_guard link_lk(node->link_lock_);
 
   auto prev_node = node->last_child_node_;
   inserted->next_node_ = prev_node->next_node_;
@@ -196,7 +196,7 @@ void InsertInnerNode(InnerNode* node, InnerNode* inserted) {
 void InsertSplitInnerNode(InnerNode* node, InnerNode* first_inserted,
                           InnerNode* last_inserted,
                           [[maybe_unused]] size_t prefix_length) {
-  std::lock_guard<SpinMutex> lk(node->link_lock_);
+  std::lock_guard link_lk(node->link_lock_);
 
   auto prev_node = node->last_child_node_;
   auto prev_nvm_node = prev_node->nvm_node_;
@@ -242,7 +242,7 @@ void InsertNewNVMNode(InnerNode* node, NVMNode* inserted) {
   SET_SIZE(inserted_hdr, 0);
 
   {
-    std::lock_guard<SpinMutex> link_lk(node->link_lock_);
+    std::lock_guard link_lk(node->link_lock_);
 
     node->backup_nvm_node_ = old_nvm_node;
     node->nvm_node_ = inserted;
@@ -291,7 +291,7 @@ void RemoveCompactedNodes(std::vector<InnerNode*>& inner_nodes) {
   std::vector<ArtNode*> removed_art;
 
   for (auto inner_node : inner_nodes) {
-    inner_node->opt_lock_.WriteLock();
+    inner_node->opt_lock_.lock();
   }
 
   for (int iter = 0; iter < 2; ++iter) {
@@ -305,9 +305,9 @@ void RemoveCompactedNodes(std::vector<InnerNode*>& inner_nodes) {
     for (auto& pair : parents_and_counts) {
       auto parent = pair.first;
       // lock parent
-      parent->opt_lock_.WriteLock();
+      parent->opt_lock_.lock();
       if (parent->art->num_children_ == pair.second) {
-        parent->opt_lock_.WriteUnlock(true);
+        parent->opt_lock_.unlock(false);
         next_iteration = false;
         continue;
       }
@@ -316,7 +316,7 @@ void RemoveCompactedNodes(std::vector<InnerNode*>& inner_nodes) {
     }
 
     for (auto inner_node : inner_nodes) {
-      inner_node->opt_lock_.WriteUnlock(false);
+      inner_node->opt_lock_.unlock(false);
     }
 
     inner_nodes = next_inner_nodes;
@@ -326,7 +326,7 @@ void RemoveCompactedNodes(std::vector<InnerNode*>& inner_nodes) {
   }
 
   for (auto inner_node : inner_nodes) {
-    inner_node->opt_lock_.WriteUnlock(false);
+    inner_node->opt_lock_.unlock(false);
   }
 }
 

@@ -106,15 +106,15 @@ void Compactor::CompactionPreprocess(SingleCompactionJob* job) {
   int compacted_size = 0;
   while (cur_node != node_after_end) {
     auto& opt_lock = cur_node->opt_lock_;
-    opt_lock.WriteLock();
+    opt_lock.lock();
 
-    std::lock_guard<std::mutex> flush_lk(cur_node->flush_mutex_);
+    std::lock_guard write_lk(cur_node->share_mutex_);
     if (!(IS_LEAF(cur_node->status_) &&
           cur_node->heat_group_ == chosen_group) ||
         (GET_ROWS(cur_node->nvm_node_->meta.header) == 0 &&
          GET_NODE_BUFFER_SIZE(cur_node->status_) == 0)) {
       cur_node = cur_node->next_node_;
-      opt_lock.WriteUnlock(true);
+      opt_lock.unlock();
       continue;
     }
 
@@ -125,7 +125,7 @@ void Compactor::CompactionPreprocess(SingleCompactionJob* job) {
     SET_NODE_BUFFER_SIZE(cur_node->status_, 0);
     compacted_size += cur_node->estimated_size_;
     cur_node->estimated_size_ = 0;
-    opt_lock.WriteUnlock(false);
+    opt_lock.unlock();
 
     auto new_nvm_node = GetNodeAllocator()->AllocateNode();
     InsertNewNVMNode(cur_node, new_nvm_node);
@@ -159,7 +159,7 @@ void Compactor::CompactionPostprocess(SingleCompactionJob* job) {
   auto candidate = candidates.front();
   candidates.pop_front();
   while (cur_node != node_after_end) {
-    std::lock_guard<SpinMutex> lk(cur_node->link_lock_);
+    std::lock_guard link_lk(cur_node->link_lock_);
     if (cur_node->next_node_ == candidate) {
       RemoveOldNVMNode(cur_node);
       candidate = candidates.front();

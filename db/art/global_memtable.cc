@@ -32,54 +32,16 @@ InnerNode::InnerNode()
   memset(buffer_, 0, 256);
 }
 
-void FlushBuffer(InnerNode* leaf, int row) {
-  NVMNode* node = leaf->nvm_node_;
-  uint64_t* buffer = leaf->buffer_;
-  uint8_t* hll = leaf->hll_;
-
-  int h, bucket;
-  uint8_t digit;
-  uint8_t fingerprints[16];
-  for (size_t i = 0; i < 16; ++i) {
-    auto hash = buffer[i << 1];
-    fingerprints[i] = static_cast<uint8_t>(hash);
-
-    bucket = (int)(hash & 63);
-    h = (int)(hash >> 6);
-    digit = h == 0 ? 0 : __builtin_ctz(h) + 1;
-    hll[bucket] = std::max(hll[bucket], digit);
-  }
-
-  auto data_flush_start = node->data + (row << 5);
-  auto finger_flush_start = node->meta.fingerprints_ + ROW_TO_SIZE(row);
-  MEMCPY(data_flush_start, buffer, ROW_SIZE, PMEM_F_MEM_NODRAIN);
-  MEMCPY(finger_flush_start, fingerprints, 16, PMEM_F_MEM_NODRAIN);
-
-  MEMORY_BARRIER;
-
-  // Write metadata
-  uint64_t hdr = node->meta.header;
-  uint8_t size = GET_SIZE(hdr);
-  SET_SIZE(hdr, size + 16);
-  SET_ROWS(hdr, row + 1);
-  node->meta.header = hdr;
-  PERSIST(node, 8);
-
-  SET_NODE_BUFFER_SIZE(leaf->status_, 0);
-}
-
 #ifdef ROCKSDB_SUPPORT_THREAD_LOCAL
 thread_local uint8_t fingerprints_copy[16];
-thread_local uint64_t buffer_copy[32];
 #endif
 
-void FlushBufferAndRelease(InnerNode* leaf, int row) {
+void FlushBuffer(InnerNode* leaf, int row) {
   NVMNode* node = leaf->nvm_node_;
   uint8_t* hll = leaf->hll_;
 
 #ifndef ROCKSDB_SUPPORT_THREAD_LOCAL
   uint8_t fingerprints_copy[16];
-  uint64_t buffer_copy[32];
 #endif
 
   int h, bucket;
@@ -111,7 +73,6 @@ void FlushBufferAndRelease(InnerNode* leaf, int row) {
   PERSIST(node, 8);
 
   SET_NODE_BUFFER_SIZE(leaf->status_, 0);
-  leaf->opt_lock_.WriteUnlock(false);
 }
 
 //////////////////////////////////////////////////////////
@@ -349,7 +310,6 @@ void GlobalMemtable::Put(Slice& slice, uint64_t base_vptr, size_t count) {
 void GlobalMemtable::Put(Slice& key, KVStruct& kv_info) {
   size_t max_level = key.size();
 
-  bool need_restart;
   size_t level = 1;
   uint32_t version;
   InnerNode* first = FindChild(root_, key[0]);
@@ -360,12 +320,10 @@ void GlobalMemtable::Put(Slice& key, KVStruct& kv_info) {
 
   while (true) {
   Restart:
-    need_restart = false;
-    version = current->opt_lock_.AwaitNodeUnlocked();
+    version = current->opt_lock_.AwaitUnlocked();
 
     if (IS_LEAF(current->status_)) {
-      current->opt_lock_.UpgradeToWriteLockOrRestart(version, need_restart);
-      if (need_restart) {
+      if (!current->opt_lock_.TryLock(version)) {
         goto Restart;
       }
 
@@ -374,42 +332,39 @@ void GlobalMemtable::Put(Slice& key, KVStruct& kv_info) {
       return;
     }
 
-    // level > maxDepth means key need to be stored in vptr_
+    // level == max_level means key need to be stored in vptr
     if (level == max_level) {
-      current->opt_lock_.WriteLock();
+      std::lock_guard lk(current->opt_lock_);
       current->vptr_ = kv_info.vptr_;
-      current->opt_lock_.WriteUnlock(false);
       return;
     }
 
     next_node = FindChild(current, key[level]);
-    current->opt_lock_.CheckOrRestart(version, need_restart);
+    /*current->opt_lock_.CheckOrRestart(version, need_restart);
     if (need_restart) {
       goto Restart;
-    }
+    }*/
 
     if (!next_node) {
-      current->opt_lock_.UpgradeToWriteLockOrRestart(version, need_restart);
-      if (need_restart) {
+      if (!current->opt_lock_.TryLock(version)) {
         goto Restart;
       }
 
       Rehash(key.data(), key.size(), kv_info.hash_, level + 1);
       InnerNode* leaf = AllocateLeafNode(level + 1, key[level], nullptr);
 
-      leaf->opt_lock_.WriteLock();
+      std::lock_guard leaf_lk(leaf->opt_lock_);
 
       ++leaf->status_;
       leaf->buffer_[0] = kv_info.hash_;
       leaf->buffer_[1] = kv_info.vptr_;
+      leaf->estimated_size_ = kv_info.kv_size_;
 
       InsertToArtNode(current, leaf, key[level], true);
-      leaf->estimated_size_ = kv_info.kv_size_;
-      current->opt_lock_.WriteUnlock(false);
+      current->opt_lock_.unlock();
       leaf->heat_group_->UpdateSize(kv_info.kv_size_);
       leaf->heat_group_->UpdateHeat();
 
-      leaf->opt_lock_.WriteUnlock(true);
       return;
     }
 
@@ -429,6 +384,7 @@ bool GlobalMemtable::Get(std::string& key, std::string& value, Status* s) {
     }
 
     if (level == max_level) {
+      std::lock_guard lk(current->opt_lock_);
       if (current->vptr_ == 0) {
         return false;
       }
@@ -691,14 +647,13 @@ void GlobalMemtable::SplitLeaf(InnerNode* leaf, size_t level,
 void GlobalMemtable::InsertIntoLeaf(InnerNode* leaf, KVStruct& kv_info,
                                     size_t level) {
   int write_pos = GET_NODE_BUFFER_SIZE(++leaf->status_) << 1;
-  assert(write_pos <= 32);
 
   leaf->buffer_[write_pos - 2] = kv_info.hash_;
   leaf->buffer_[write_pos - 1] = kv_info.vptr_;
   leaf->estimated_size_ += kv_info.kv_size_;
 
   if (likely(write_pos < 32)) {
-    leaf->opt_lock_.WriteUnlock(true);
+    leaf->opt_lock_.unlock();
     leaf->heat_group_->UpdateSize(kv_info.kv_size_);
     leaf->heat_group_->UpdateHeat();
     return;
@@ -710,42 +665,36 @@ void GlobalMemtable::InsertIntoLeaf(InnerNode* leaf, KVStruct& kv_info,
   InnerNode* next_to_split = nullptr;
 
   {
-    std::lock_guard<std::mutex> flush_lk(leaf->flush_mutex_);
+    // If we use read lock here, we can do concurrent read but block write,
+    // if we use write lock here, we block read but allow concurrent write.
+    std::shared_lock<std::shared_mutex> read_lk(leaf->share_mutex_);
 
     env_->GetCurrentTime(&leaf->oldest_key_time_);
 
     int rows = GET_ROWS(leaf->nvm_node_->meta.header);
     assert(rows < NVM_MAX_ROWS);
 
+    FlushBuffer(leaf, rows);
+
     if (likely(rows < NVM_MAX_ROWS - 1)) {
-      // We can't release the lock directly,
-      // because we will use data in buffer
-      // Two solutions:
-      // 1. release opt lock after flushing data
-      // 2. copy buffer and release lock, then flush (currently used)
-      // 3. use double buffer, but memory usage of the tree
-      //    will be about 1.5 times higher.
-      FlushBufferAndRelease(leaf, rows);
+      leaf->opt_lock_.unlock();
       return;
-    } else {
-      if (EstimateDistinctCount(leaf->hll_) < SQUEEZE_THRESHOLD) {
-        FlushBufferAndRelease(leaf, rows);
-        //std::lock_guard<std::mutex> gc_lk(leaf->gc_mutex_);
-        SqueezeNode(leaf);
-        return;
-      } else {
-        //std::lock_guard<std::mutex> gc_lk(leaf->gc_mutex_);
-        FlushBuffer(leaf, rows);
-        SplitLeaf(leaf, level, &next_to_split);
-
-        if (next_to_split) {
-          next_to_split->opt_lock_.WriteLock();
-          next_to_split->flush_mutex_.lock();
-        }
-
-        leaf->opt_lock_.WriteUnlock(true);
-      }
     }
+
+    if (EstimateDistinctCount(leaf->hll_) < SQUEEZE_THRESHOLD) {
+      SqueezeNode(leaf);
+      leaf->opt_lock_.unlock();
+      return;
+    }
+
+    SplitLeaf(leaf, level, &next_to_split);
+
+    if (next_to_split) {
+      next_to_split->opt_lock_.lock();
+      next_to_split->share_mutex_.lock();
+    }
+
+    leaf->opt_lock_.unlock();
   }
 
   while (next_to_split) {
@@ -753,11 +702,11 @@ void GlobalMemtable::InsertIntoLeaf(InnerNode* leaf, KVStruct& kv_info,
     SplitLeaf(current, ++level, &next_to_split);
 
     if (next_to_split) {
-      next_to_split->opt_lock_.WriteLock();
-      next_to_split->flush_mutex_.lock();
+      next_to_split->opt_lock_.lock();
+      next_to_split->share_mutex_.lock();
     }
-    current->opt_lock_.WriteUnlock(true);
-    current->flush_mutex_.unlock();
+    current->opt_lock_.unlock(false);
+    current->share_mutex_.unlock();
   }
 }
 
@@ -766,7 +715,7 @@ bool GlobalMemtable::ReadInNVMNode(NVMNode* nvm_node, uint64_t hash,
                                    Status* s) {
   ValueType type;
   uint64_t vptr;
-  std::string find_key;
+  std::string found_key;
 
   for (size_t i = 0; i < 16; ++i) {
     if (!nvm_node->temp_buffer[i * 2 + 1]) {
@@ -778,8 +727,8 @@ bool GlobalMemtable::ReadInNVMNode(NVMNode* nvm_node, uint64_t hash,
     }
 
     type = vlog_manager_->GetKeyValue(
-        nvm_node->temp_buffer[i * 2 + 1], find_key, value);
-    if (find_key == key) {
+        nvm_node->temp_buffer[i * 2 + 1], found_key, value);
+    if (found_key == key) {
       *s = type == kTypeValue ? Status::OK() : Status::NotFound();
       return true;
     }
@@ -807,8 +756,8 @@ bool GlobalMemtable::ReadInNVMNode(NVMNode* nvm_node, uint64_t hash,
       if (index >= size || data[index * 2] != hash) {
         continue;
       }
-      type = vlog_manager_->GetKeyValue(vptr, find_key, value);
-      if (key == find_key) {
+      type = vlog_manager_->GetKeyValue(vptr, found_key, value);
+      if (key == found_key) {
         *s = type == kTypeValue ? Status::OK() : Status::NotFound();
         return true;
       }
@@ -821,7 +770,9 @@ bool GlobalMemtable::ReadInNVMNode(NVMNode* nvm_node, uint64_t hash,
 bool GlobalMemtable::FindKeyInInnerNode(InnerNode* leaf, size_t level,
                                         std::string& key, std::string& value,
                                         Status* s) {
-  std::string find_key;
+  std::shared_lock read_lk(leaf->share_mutex_);
+
+  std::string found_key;
   ValueType type;
 
   uint64_t hash = HashAndPrefix(key.c_str(), key.length(), level);
@@ -833,8 +784,8 @@ bool GlobalMemtable::FindKeyInInnerNode(InnerNode* leaf, size_t level,
       continue;
     }
     type = vlog_manager_->GetKeyValue(
-        buffer[i * 2 + 1], find_key, value);
-    if (find_key == key) {
+        buffer[i * 2 + 1], found_key, value);
+    if (found_key == key) {
       *s = type == kTypeValue ? Status::OK() : Status::NotFound();
       return true;
     }

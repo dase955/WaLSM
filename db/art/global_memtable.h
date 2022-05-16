@@ -22,6 +22,7 @@
 #include <rocksdb/rocksdb_namespace.h>
 #include <rocksdb/slice.h>
 #include "timestamp.h"
+#include "rwspinlock.h"
 
 namespace ROCKSDB_NAMESPACE {
 
@@ -51,14 +52,14 @@ struct InnerNode {
   InnerNode* next_node_;
   uint64_t   vptr_;
 
-  std::mutex flush_mutex_;      // Used for flush and split operation
-  SpinMutex  link_lock_;
+  std::shared_mutex share_mutex_; // Used for flush and split operation
+  RWSpinLock        art_rw_lock;  // Protect art pointer
+  RWSpinLock        link_lock_;   // Protect last child node
+
   OptLock    opt_lock_;
   int32_t    estimated_size_;   // Estimated kv size in this node
   uint32_t   status_;           // node status, see macros.h
   int64_t    oldest_key_time_;  // Just for compatibility
-
-  std::shared_mutex shared_mutex;
 
   InnerNode();
 };

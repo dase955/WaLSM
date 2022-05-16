@@ -10,18 +10,19 @@
 
 namespace ROCKSDB_NAMESPACE {
 
-void OptLock::UpgradeToWriteLockOrRestart(uint32_t& version, bool& need_restart) {
+bool OptLock::TryLock(uint32_t& version) {
   if (type_version_lock_.compare_exchange_strong(
           version, version + 0b10, std::memory_order_release)) {
     version = version + 0b10;
+    return true;
   }
   else {
     _mm_pause();
-    need_restart = true;
+    return false;
   }
 }
 
-void OptLock::WriteLock() {
+void OptLock::lock() {
   uint32_t version;
   for (size_t tries = 0;; ++tries) {
     version = type_version_lock_.load(std::memory_order_acquire);
@@ -37,17 +38,16 @@ void OptLock::WriteLock() {
   }
 }
 
-void OptLock::WriteUnlock(bool reverse) {
+void OptLock::unlock(bool reverse) {
   reverse ? type_version_lock_.fetch_sub(0b10, std::memory_order_release)
           : type_version_lock_.fetch_add(0b10, std::memory_order_release);
 }
 
-void OptLock::CheckOrRestart(uint32_t start_read, bool& need_restart) const {
-  need_restart =
-      (start_read != type_version_lock_.load(std::memory_order_acquire));
+bool OptLock::CheckOrRestart(uint32_t start_read) const {
+  return (start_read != type_version_lock_.load(std::memory_order_acquire));
 }
 
-uint32_t OptLock::AwaitNodeUnlocked() {
+uint32_t OptLock::AwaitUnlocked() {
   uint32_t version;
   for (size_t tries = 0;; ++tries) {
     if (((version = type_version_lock_.load(std::memory_order_acquire))

@@ -22,27 +22,15 @@ struct OptLock {
     return ((version & 0b10) == 0b10);
   }
 
-  static bool IsObsolete(uint32_t version) {
-    return (version & 1) == 1;
-  }
+  bool TryLock(uint32_t& version);
 
-  void SetObsolete() {
-    type_version_lock_ &= 1;
-  }
+  void lock();
 
-  void RemoveObsolete() {
-    type_version_lock_ &= -2;
-  }
+  void unlock(bool reverse = false);
 
-  void UpgradeToWriteLockOrRestart(uint32_t& version, bool& need_restart);
+  uint32_t AwaitUnlocked();
 
-  void WriteLock();
-
-  void WriteUnlock(bool reverse = false);
-
-  uint32_t AwaitNodeUnlocked();
-
-  void CheckOrRestart(uint32_t start_read, bool& need_restart) const;
+  bool CheckOrRestart(uint32_t start_read) const;
 
   // Function for read
   uint32_t AwaitNodeReadable();
