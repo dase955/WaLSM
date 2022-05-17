@@ -12,11 +12,11 @@
 
 namespace ROCKSDB_NAMESPACE {
 
-#define RECORD_INFO(format, ...) write_log(format, ##__VA_ARGS__)
+#define RECORD_INFO(format, ...) WriteLog(format, ##__VA_ARGS__)
 
-extern void init_log_file();
+extern void InitLogFile();
 
-extern void write_log(const char* format, ...);
+extern void WriteLog(const char* format, ...);
 
 inline uint64_t GetNowMicros() {
   struct timeval tv;

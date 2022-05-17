@@ -274,7 +274,7 @@ DBImpl::DBImpl(const DBOptions& options, const std::string& dbname,
 
   // Use init time as start time.
   GetStartTime();
-  init_log_file();
+  InitLogFile();
 
   std::unordered_map<std::string, int64_t> memory_usages;
   memory_usages["vlog"] = options.vlog_file_size;

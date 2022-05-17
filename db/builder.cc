@@ -504,6 +504,7 @@ Status BuildTableFromArt(
   if (s.ok()) {
     uint64_t file_size = builder->FileSize();
     meta->fd.file_size = file_size;
+    job->out_file_size = file_size;
     meta->marked_for_compaction = builder->NeedCompact();
     assert(meta->fd.GetFileSize() > 0);
     tp = builder->GetTableProperties(); // refresh now that builder is finished

@@ -27,6 +27,7 @@ class DBImpl;
 struct SingleCompactionJob {
   static ThreadPool* thread_pool;
 
+  uint64_t out_file_size;
   HeatGroup* group_;
   int64_t oldest_key_time_;
   InnerNode* start_node_;
@@ -97,5 +98,7 @@ void UpdateTotalSize(int32_t update_size);
 void IncrementBackupRead();
 
 void ReduceBackupRead();
+
+int GetCompactionNum();
 
 } // namespace ROCKSDB_NAMESPACE

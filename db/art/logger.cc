@@ -4,21 +4,28 @@
 
 #include "logger.h"
 
+#include <mutex>
+
 namespace ROCKSDB_NAMESPACE {
 
 const std::string compaction_log = "/tmp/compaction.csv";
 
-void init_log_file() {
-  FILE* fp = fopen(compaction_log.c_str(), "w");
+void InitLogFile() {
+  FILE* fp = fopen(compaction_log.c_str(), "a");
   if (fp == nullptr) {
     printf("log failed\n");
   }
   fclose(fp);
-  RECORD_INFO("compaction, read(MB), write(MB)"
-              ", time(s), start(s), is_level0\n");
+  RECORD_INFO(
+      "id, read(MB), write(MB), read_write_amp, write_amp"
+      ", time(s), start(s), is_level0\n");
 }
 
-void write_log(const char* format, ...) {
+std::mutex m;
+
+void WriteLog(const char* format, ...) {
+  std::lock_guard write_lk(m);
+
   va_list ap;
   va_start(ap, format);
   char buf[8192];
@@ -35,4 +42,3 @@ void write_log(const char* format, ...) {
 }
 
 }  // namespace ROCKSDB_NAMESPACE
-

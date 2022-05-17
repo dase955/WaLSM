@@ -568,8 +568,8 @@ ColumnFamilyOptions* ColumnFamilyOptions::OptimizeLevelStyleCompaction(
   // level style compaction
   compaction_style = kCompactionStyleLevel;
 
-  // only compress levels >= 2
-  compression_per_level.resize(num_levels);
+  // no compression
+  /* compression_per_level.resize(num_levels);
   for (int i = 0; i < num_levels; ++i) {
     if (i < 2) {
       compression_per_level[i] = kNoCompression;
@@ -579,7 +579,8 @@ ColumnFamilyOptions* ColumnFamilyOptions::OptimizeLevelStyleCompaction(
               ? kLZ4Compression
               : (Snappy_Supported() ? kSnappyCompression : kNoCompression);
     }
-  }
+  }*/
+  compression = kNoCompression;
   return this;
 }
 

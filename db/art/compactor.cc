@@ -9,6 +9,7 @@
 #include <db/db_impl/db_impl.h>
 
 #include "utils.h"
+#include "logger.h"
 #include "macros.h"
 #include "nvm_node.h"
 #include "heat_group.h"
@@ -20,6 +21,8 @@
 namespace ROCKSDB_NAMESPACE {
 
 std::atomic<int64_t> MemTotalSize{0};
+
+std::atomic<int> CompactionAndFlushCount{0};
 
 std::atomic<int> BackupRead{0};
 
@@ -39,6 +42,10 @@ void ReduceBackupRead() {
 
 int64_t GetMemTotalSize() {
   return MemTotalSize.load(std::memory_order_acquire);
+}
+
+int GetCompactionNum() {
+  return CompactionAndFlushCount++;
 }
 
 ////////////////////////////////////////////////////////////
@@ -250,6 +257,8 @@ void Compactor::BGWorkDoCompaction() {
       }
     }
 
+    auto start_time = GetStartTime();
+
     SingleCompactionJob::thread_pool->SetJobCount(chosen_jobs_.size());
     for (auto& job : chosen_jobs_) {
       auto func = std::bind(&Compactor::CompactionPreprocess, this, job);
@@ -259,18 +268,28 @@ void Compactor::BGWorkDoCompaction() {
 
     db_impl_->SyncCallFlush(chosen_jobs_);
 
+    uint64_t total_out_size = 0;
     SingleCompactionJob::thread_pool->SetJobCount(chosen_jobs_.size());
     for (auto& job : chosen_jobs_) {
+      total_out_size += job->out_file_size;
       auto func = std::bind(&Compactor::CompactionPostprocess, this, job);
       SingleCompactionJob::thread_pool->SubmitJob(func);
     }
     SingleCompactionJob::thread_pool->Join();
 
+    auto end_time = GetStartTime();
+
     // Use sfence after all vlog are modified
     MEMORY_BARRIER;
 
+    RECORD_INFO("%ld, %.2fMB, %.2fMB, %.3lf, %.3lf, %.5fs, %.3fs, %ld\n",
+                CompactionAndFlushCount++, total_out_size / 1048576.0,
+                total_out_size / 1048576.0, 1.0, 1.0,
+                (end_time - start_time) * 1e-6, start_time * 1e-6,
+                0);
+
 #ifndef NDEBUG
-   float estimate = vlog_manager_->Estimate();
+    float estimate = vlog_manager_->Estimate();
     printf("%d Compaction done, number of free pages: "
         "%zu, free vlog pages: %zu, free ratio:%f, size:%zu\n",
         (int)chosen_jobs_.size(),

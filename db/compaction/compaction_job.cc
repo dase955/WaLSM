@@ -732,8 +732,6 @@ Status CompactionJob::Run() {
 }
 
 Status CompactionJob::Install(const MutableCFOptions& mutable_cf_options) {
-  static std::atomic<uint64_t> compaction_num{0};
-
   AutoThreadOperationStageUpdater stage_updater(
       ThreadStatus::STAGE_COMPACTION_INSTALL);
   db_mutex_->AssertHeld();
@@ -774,15 +772,15 @@ Status CompactionJob::Install(const MutableCFOptions& mutable_cf_options) {
 
   uint64_t read_all = stats.bytes_read_non_output_levels +
                       stats.bytes_read_output_level;
-  RECORD_INFO("%ld, %.2fMB, %.2fMB, %.3lf, %.3lf, %.5fs, %.3fs, %d\n",
-              compaction_num++,
+  RECORD_INFO("%ld, %.2fMB, %.2fMB, %.3lf, %.3lf, %.5fs, %.3fs, %ld\n",
+              GetCompactionNum(),
               read_all / 1048576.0,
               stats.bytes_written / 1048576.0,
               read_write_amp,
               write_amp,
               stats.micros * 1e-6,
               (GetStartTime() - stats.micros) * 1e-6,
-              compact_->compaction->output_level() == 1);
+              compact_->compaction->output_level());
 
   ROCKS_LOG_BUFFER(
       log_buffer_,
