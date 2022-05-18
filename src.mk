@@ -77,6 +77,7 @@ LIB_SOURCES =                                                   \
   db/write_batch_base.cc                                        \
   db/write_controller.cc                                        \
   db/write_thread.cc                                            \
+  db/logger.cc                                                  \
   env/env.cc                                                    \
   env/env_chroot.cc                                             \
   env/env_encryption.cc                                         \
@@ -103,7 +104,6 @@ LIB_SOURCES =                                                   \
   memory/arena.cc                                               \
   memory/concurrent_arena.cc                                    \
   memory/jemalloc_nodump_allocator.cc                           \
-  memory/memkind_kmem_allocator.cc                              \
   memtable/alloc_tracker.cc                                     \
   memtable/hash_linklist_rep.cc                                 \
   memtable/hash_skiplist_rep.cc                                 \
@@ -446,7 +446,6 @@ TEST_MAIN_SOURCES =                                                     \
   logging/env_logger_test.cc                                            \
   logging/event_logger_test.cc                                          \
   memory/arena_test.cc                                                  \
-  memory/memkind_kmem_allocator_test.cc                                 \
   memtable/inlineskiplist_test.cc                                       \
   memtable/skiplist_test.cc                                             \
   memtable/write_buffer_manager_test.cc                                 \

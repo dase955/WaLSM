@@ -20,6 +20,7 @@
 #include <utility>
 #include <vector>
 
+#include "db/logger.h"
 #include "db/builder.h"
 #include "db/db_impl/db_impl.h"
 #include "db/db_iter.h"
@@ -730,6 +731,7 @@ Status CompactionJob::Run() {
 }
 
 Status CompactionJob::Install(const MutableCFOptions& mutable_cf_options) {
+  static int compaction_num = 0;
   AutoThreadOperationStageUpdater stage_updater(
       ThreadStatus::STAGE_COMPACTION_INSTALL);
   db_mutex_->AssertHeld();
@@ -767,6 +769,16 @@ Status CompactionJob::Install(const MutableCFOptions& mutable_cf_options) {
     bytes_written_per_sec =
         stats.bytes_written / static_cast<double>(stats.micros);
   }
+
+  uint64_t read_all = stats.bytes_read_non_output_levels +
+                      stats.bytes_read_output_level;
+  RECORD_INFO("%ld, %.2fMB, %.2fMB, %.5fs, %.3fs, %ld\n",
+              compaction_num++,
+              read_all / 1048576.0,
+              stats.bytes_written / 1048576.0,
+              stats.micros * 1e-6,
+              (GetStartTime() - stats.micros) * 1e-6,
+              compact_->compaction->output_level());
 
   ROCKS_LOG_BUFFER(
       log_buffer_,

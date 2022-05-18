@@ -8,6 +8,7 @@
 // found in the LICENSE file. See the AUTHORS file for names of contributors.
 #include <cinttypes>
 
+#include "db/logger.h"
 #include "db/builder.h"
 #include "db/db_impl/db_impl.h"
 #include "db/error_handler.h"
@@ -153,6 +154,8 @@ Status DBImpl::FlushMemTableToOutputFile(
   assert(cfd->imm()->NumNotFlushed() != 0);
   assert(cfd->imm()->IsFlushPending());
 
+  auto start_time = GetStartTime();
+
   FlushJob flush_job(
       dbname_, cfd, immutable_db_options_, mutable_cf_options,
       nullptr /* memtable_id */, file_options_for_compaction_, versions_.get(),
@@ -240,6 +243,15 @@ Status DBImpl::FlushMemTableToOutputFile(
     }
   }
 
+  auto end_time = GetStartTime();
+
+  auto out_size = file_meta.fd.GetFileSize();
+  RECORD_INFO("%ld, %.2fMB, %.2fMB, %.5fs, %.3fs, %ld\n",
+              0, out_size / 1048576.0,
+              out_size / 1048576.0,
+              (end_time - start_time) * 1e-6, start_time * 1e-6,
+              0);
+
   if (!s.ok() && !s.IsShutdownInProgress() && !s.IsColumnFamilyDropped()) {
     if (!io_s.ok() && !io_s.IsShutdownInProgress() &&
         !io_s.IsColumnFamilyDropped()) {
@@ -319,10 +331,12 @@ Status DBImpl::FlushMemTablesToOutputFiles(
     ColumnFamilyData* cfd = arg.cfd_;
     MutableCFOptions mutable_cf_options = *cfd->GetLatestMutableCFOptions();
     SuperVersionContext* superversion_context = arg.superversion_context_;
+
     Status s = FlushMemTableToOutputFile(
         cfd, mutable_cf_options, made_progress, job_context,
         superversion_context, snapshot_seqs, earliest_write_conflict_snapshot,
         snapshot_checker, log_buffer, thread_pri);
+
     if (!s.ok()) {
       status = s;
       if (!s.IsShutdownInProgress() && !s.IsColumnFamilyDropped()) {

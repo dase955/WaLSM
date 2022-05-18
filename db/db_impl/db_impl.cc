@@ -25,6 +25,7 @@
 #include <utility>
 #include <vector>
 
+#include "db/logger.h"
 #include "db/arena_wrapped_db_iter.h"
 #include "db/builder.h"
 #include "db/compaction/compaction_job.h"
@@ -268,6 +269,10 @@ DBImpl::DBImpl(const DBOptions& options, const std::string& dbname,
   // we won't drop any deletion markers until SetPreserveDeletesSequenceNumber()
   // is called by client and this seqnum is advanced.
   preserve_deletes_seqnum_.store(0);
+
+  // Use init time as start time.
+  GetStartTime();
+  init_log_file();
 }
 
 Status DBImpl::Resume() {

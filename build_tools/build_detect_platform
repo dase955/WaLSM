@@ -478,9 +478,9 @@ EOF
           }
 EOF
         if [ "$?" = 0 ]; then
-            COMMON_FLAGS="$COMMON_FLAGS -DMEMKIND"
-            PLATFORM_LDFLAGS="$PLATFORM_LDFLAGS -lmemkind"
-            JAVA_LDFLAGS="$JAVA_LDFLAGS -lmemkind"
+            COMMON_FLAGS="$COMMON_FLAGS"
+            PLATFORM_LDFLAGS="$PLATFORM_LDFLAGS"
+            JAVA_LDFLAGS="$JAVA_LDFLAGS"
         fi
     fi
 
