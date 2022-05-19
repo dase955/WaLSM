@@ -7,6 +7,7 @@
 #include <rocksdb/rocksdb_namespace.h>
 #include <rocksdb/slice.h>
 #include <db/dbformat.h>
+#include <util/autovector.h>
 #include "concurrent_queue.h"
 
 namespace ROCKSDB_NAMESPACE {
@@ -66,11 +67,9 @@ class VLogManager {
 
   uint64_t AddRecord(const Slice& slice, uint32_t record_count);
 
-  void GetKey(uint64_t vptr, std::string &key);
+  void GetKey(uint64_t vptr, Slice& key);
 
-  void GetKey(uint64_t vptr, Slice &key);
-
-  void GetKeyIndex(uint64_t vptr, std::string &key, RecordIndex& index);
+  void GetKeyIndex(uint64_t vptr, std::string& key, RecordIndex& index);
 
   ValueType GetKeyValue(uint64_t offset, std::string& key, std::string& value);
 
@@ -78,12 +77,12 @@ class VLogManager {
                         std::string& key, Slice& value,
                         SequenceNumber& seq_num, RecordIndex& index);
 
-  void FreeQueue();
-
   void UpdateBitmap(
       std::unordered_map<uint64_t, std::vector<RecordIndex>>& all_indexes);
 
-  void UpdateBitmap(uint64_t vptr);
+  void UpdateBitmap(autovector<RecordIndex>* all_indexes);
+
+  void FreeQueue();
 
   float Estimate();
 

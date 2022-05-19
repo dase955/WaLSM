@@ -144,9 +144,6 @@ InnerNode* RecoverInnerNode(NVMNode* nvm_node);
 void InsertSplitInnerNode(InnerNode* node, InnerNode* first_inserted,
                           InnerNode* last_inserted, size_t prefix_length);
 
-// Remove nvm node from linked list and set to nullptr
-ArtNode* RemoveChildrenNVMNode(InnerNode* node);
-
 // inserted must be initialized
 void InsertInnerNode(InnerNode* node, InnerNode* inserted);
 
@@ -155,8 +152,6 @@ void InsertNewNVMNode(InnerNode* node, NVMNode* inserted);
 
 // Different from RemoveChildrenNVMNode, this function is used to remove backup node
 void RemoveOldNVMNode(InnerNode* node);
-
-void RemoveCompactedNodes(std::vector<InnerNode*> inner_nodes);
 
 NVMNode* GetNextNode(NVMNode* node);
 

@@ -70,7 +70,7 @@ InnerNode* AllocateLeafNode(uint8_t prefix_length,
 
   auto nvm_node = mgr->AllocateNode();
   inode->nvm_node_ = nvm_node;
-  inode->last_child_node_ = inode;
+  inode->support_node_ = inode;
   inode->next_node_ = next_node;
 
   uint64_t hdr = 0;
@@ -122,55 +122,16 @@ InnerNode* RecoverInnerNode(NVMNode* nvm_node) {
 
   inode->status_ = status;
   inode->estimated_size_ = nvm_node->meta.node_info;
-  inode->last_child_node_ = inode;
+  inode->support_node_ = inode;
   inode->nvm_node_ = nvm_node;
   inode->backup_nvm_node_ = nullptr;
   return inode;
 }
 
-ArtNode* RemoveChildrenNVMNode(InnerNode* parent) {
-  // assert parent lock is held, so last child node is unchanged
-  InnerNode* last_child_node = parent->last_child_node_;
-  std::lock_guard link_lk(last_child_node->link_lock_);
-
-  InnerNode* next_inner_node = last_child_node->next_node_;
-  [[maybe_unused]] InnerNode* first_remove_node = parent->next_node_;
-  parent->next_node_ = next_inner_node;
-
-  NVMNode* cur_nvm_node = parent->nvm_node_;
-  NVMNode* next_nvm_node = next_inner_node->nvm_node_;
-  int64_t next_relative = GetNodeAllocator()->relative(next_nvm_node);
-
-  auto old_hdr = cur_nvm_node->meta.header;
-  auto new_hdr = old_hdr;
-  if (GET_TAG(old_hdr, ALT_FIRST_TAG)) {
-    CLEAR_TAG(new_hdr, ALT_FIRST_TAG);
-    cur_nvm_node->meta.next2 = next_relative;
-  } else {
-    SET_TAG(new_hdr, ALT_FIRST_TAG);
-    cur_nvm_node->meta.next1 = next_relative;
-  }
-  SET_ROWS(new_hdr, 0);
-  SET_SIZE(new_hdr, 0);
-  cur_nvm_node->meta.header = new_hdr;
-  PERSIST(cur_nvm_node, 8);
-
-  auto art = parent->art;
-  parent->art = nullptr;
-  auto status = parent->status_;
-  SET_LEAF(status);
-  SET_NON_GROUP_START(status);
-  SET_ART_NON_FULL(status);
-  SET_NODE_BUFFER_SIZE(status, 0);
-  SET_GC_FLUSH_SIZE(status, 0);
-  parent->status_ = status;
-  return art;
-}
-
 void InsertInnerNode(InnerNode* node, InnerNode* inserted) {
   std::lock_guard link_lk(node->link_lock_);
 
-  auto prev_node = node->last_child_node_;
+  auto prev_node = node->support_node_;
   inserted->next_node_ = prev_node->next_node_;
   prev_node->next_node_ = inserted;
 
@@ -198,7 +159,7 @@ void InsertSplitInnerNode(InnerNode* node, InnerNode* first_inserted,
                           [[maybe_unused]] size_t prefix_length) {
   std::lock_guard link_lk(node->link_lock_);
 
-  auto prev_node = node->last_child_node_;
+  auto prev_node = node->support_node_;
   auto prev_nvm_node = prev_node->nvm_node_;
   auto inserted_first_nvm_node = first_inserted->nvm_node_;
   auto inserted_last_nvm_node = last_inserted->nvm_node_;
@@ -231,7 +192,7 @@ void InsertSplitInnerNode(InnerNode* node, InnerNode* first_inserted,
   prev_node->next_node_ = first_inserted;
 
   // Update last child node
-  node->last_child_node_ = last_inserted;
+  node->support_node_ = last_inserted;
 }
 
 void InsertNewNVMNode(InnerNode* node, NVMNode* inserted) {
@@ -283,51 +244,6 @@ void RemoveOldNVMNode(InnerNode* node) {
   auto backup_nvm_node = next_node->backup_nvm_node_;
   next_node->backup_nvm_node_ = nullptr;
   GetNodeAllocator()->DeallocateNode(backup_nvm_node);
-}
-
-void RemoveCompactedNodes(std::vector<InnerNode*>& inner_nodes) {
-  // remove parent's children from linked list
-  // and store art, these art nodes will be free in next time
-  std::vector<ArtNode*> removed_art;
-
-  for (auto inner_node : inner_nodes) {
-    inner_node->opt_lock_.lock();
-  }
-
-  for (int iter = 0; iter < 2; ++iter) {
-    std::unordered_map<InnerNode*, int> parents_and_counts;
-    std::vector<InnerNode*> next_inner_nodes;
-    for (auto inner_node : inner_nodes) {
-      ++parents_and_counts[inner_node->parent_node_];
-    }
-
-    bool next_iteration = true;
-    for (auto& pair : parents_and_counts) {
-      auto parent = pair.first;
-      // lock parent
-      parent->opt_lock_.lock();
-      if (parent->art->num_children_ == pair.second) {
-        parent->opt_lock_.unlock(false);
-        next_iteration = false;
-        continue;
-      }
-      next_inner_nodes.push_back(parent);
-      removed_art.push_back(RemoveChildrenNVMNode(parent));
-    }
-
-    for (auto inner_node : inner_nodes) {
-      inner_node->opt_lock_.unlock(false);
-    }
-
-    inner_nodes = next_inner_nodes;
-    if (!next_iteration) {
-      break;
-    }
-  }
-
-  for (auto inner_node : inner_nodes) {
-    inner_node->opt_lock_.unlock(false);
-  }
 }
 
 NVMNode* GetNextNode(NVMNode* node) {

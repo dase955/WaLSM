@@ -23,20 +23,32 @@ class VLogManager;
 struct InnerNode;
 struct NVMNode;
 class DBImpl;
+struct ArtNode;
 
 struct SingleCompactionJob {
   static ThreadPool* thread_pool;
 
-  uint64_t out_file_size;
-  HeatGroup* group_;
-  int64_t oldest_key_time_;
-  InnerNode* start_node_;
-  InnerNode* node_after_end_;
+  HeatGroup*   group_;
   VLogManager* vlog_manager_;
-  autovector<RecordIndex>* compacted_indexes_;
-  std::deque<InnerNode*> candidates_;
+  uint64_t     out_file_size;
+  int64_t      oldest_key_time_;
+
+  std::deque<InnerNode*>   candidates;
+  std::vector<InnerNode*>  candidates_removed;
+  std::vector<InnerNode*>  candidate_parents;
+  std::vector<ArtNode*>    removed_arts;
+
   std::vector<std::string> keys_in_node;
+  autovector<RecordIndex>* compacted_indexes;
   std::vector<std::pair<NVMNode*, int>> nvm_nodes_and_sizes;
+
+  void Reset() {
+    candidates.clear();
+    candidates_removed.clear();
+    candidate_parents.clear();
+    removed_arts.clear();
+    nvm_nodes_and_sizes.clear();
+  }
 };
 
 class Compactor {
@@ -98,7 +110,5 @@ void UpdateTotalSize(int32_t update_size);
 void IncrementBackupRead();
 
 void ReduceBackupRead();
-
-int GetCompactionNum();
 
 } // namespace ROCKSDB_NAMESPACE

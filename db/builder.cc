@@ -398,7 +398,7 @@ void ReadAndBuild(SingleCompactionJob* job,
       kv.key = &keys[count++];
 
       GetActualVptr(vptr);
-      job->compacted_indexes_[vptr >> 20].push_back(record_index);
+      job->compacted_indexes[vptr >> 20].push_back(record_index);
     }
 
     std::stable_sort(kvs.begin(), kvs.begin() + count);

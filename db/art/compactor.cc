@@ -17,12 +17,11 @@
 #include "vlog_manager.h"
 #include "global_memtable.h"
 #include "node_allocator.h"
+#include "art_node.h"
 
 namespace ROCKSDB_NAMESPACE {
 
 std::atomic<int64_t> MemTotalSize{0};
-
-std::atomic<int> CompactionAndFlushCount{0};
 
 std::atomic<int> BackupRead{0};
 
@@ -44,17 +43,13 @@ int64_t GetMemTotalSize() {
   return MemTotalSize.load(std::memory_order_acquire);
 }
 
-int GetCompactionNum() {
-  return CompactionAndFlushCount++;
-}
-
 ////////////////////////////////////////////////////////////
 
 int64_t Compactor::compaction_threshold_;
 
 Compactor::~Compactor() noexcept {
   for (auto job : compaction_jobs_) {
-    delete[] job->compacted_indexes_;
+    delete[] job->compacted_indexes;
     delete job;
   }
 }
@@ -68,7 +63,7 @@ void Compactor::SetVLogManager(VLogManager* vlog_manager) {
   for (int i = 0; i < num_parallel_compaction_; ++i) {
     auto job = new SingleCompactionJob;
     job->keys_in_node = std::vector<std::string>(240);
-    job->compacted_indexes_ =
+    job->compacted_indexes =
         new autovector<RecordIndex>[vlog_manager_->vlog_segment_num_];
     compaction_jobs_.push_back(job);
   }
@@ -95,6 +90,114 @@ void Compactor::StopCompactionThread() {
   compactor_thread_.join();
 }
 
+void RemoveChildren(InnerNode* parent, InnerNode* child) {
+  // assert opt_lock and shared_mutex are held
+
+  auto support_node = parent->support_node_;
+  assert(GET_TAG(support_node->nvm_node_->meta.header, DUMMY_TAG));
+  assert(!GET_TAG(support_node->nvm_node_->meta.header, GROUP_START_TAG));
+
+  {
+    auto heat_group = parent->heat_group_;
+    std::scoped_lock scoped_lock(parent->link_lock_, heat_group->lock);
+
+    InnerNode* next_node = support_node->next_node_;
+
+    if (support_node == heat_group->last_node_) {
+      heat_group->last_node_ = parent;
+    } else if (child == heat_group->last_node_) {
+      heat_group->last_node_ = parent;
+      next_node = child->next_node_;
+
+      auto after = support_node->next_node_;
+      std::lock_guard next_link_lk(after->link_lock_);
+
+      next_node->next_node_ = after;
+      auto next_nvm_node = GetNodeAllocator()->relative(
+          after->backup_nvm_node_
+              ? after->backup_nvm_node_ : after->nvm_node_);
+
+      auto& nvm_meta = next_node->nvm_node_->meta;
+      if (GET_TAG(nvm_meta.header, ALT_FIRST_TAG)) {
+        nvm_meta.next1 = next_nvm_node;
+      } else {
+        nvm_meta.next2 = next_nvm_node;
+      }
+      PERSIST(nvm_node, CACHE_LINE_SIZE);
+    }
+
+    {
+      std::lock_guard next_link_lk(next_node->link_lock_);
+      parent->next_node_ = next_node;
+      auto next_nvm_node =
+          GetNodeAllocator()->relative(next_node->backup_nvm_node_
+                  ? next_node->backup_nvm_node_ : next_node->nvm_node_);
+      auto old_hdr = parent->nvm_node_->meta.header;
+      auto new_hdr = old_hdr;
+      if (GET_TAG(old_hdr, ALT_FIRST_TAG)) {
+        CLEAR_TAG(new_hdr, ALT_FIRST_TAG);
+        parent->nvm_node_->meta.next2 = next_nvm_node;
+      } else {
+        SET_TAG(new_hdr, ALT_FIRST_TAG);
+        parent->nvm_node_->meta.next1 = next_nvm_node;
+      }
+      SET_ROWS(new_hdr, 0);
+      SET_SIZE(new_hdr, 0);
+      parent->nvm_node_->meta.header = new_hdr;
+      parent->support_node_ = parent;
+      PERSIST(parent->nvm_node_, 8);
+    }
+
+    GetNodeAllocator()->DeallocateNode(support_node->nvm_node_);
+    delete support_node;
+  }
+
+  {
+    std::lock_guard art_lk(parent->art_rw_lock_);
+    parent->backup_art = parent->art;
+    parent->art = nullptr;
+  }
+
+  {
+    std::lock_guard vptr_write_lk(parent->vptr_lock_);
+    SET_LEAF(parent->status_);
+    SET_ART_NON_FULL(parent->status_);
+    SET_NODE_BUFFER_SIZE(parent->status_, 0);
+    memset(parent->buffer_, 0, 256);
+    parent->estimated_size_ = 0;
+    if (parent->vptr_) {
+      ++parent->status_;
+      parent->estimated_size_ = parent->vptr_ >> 48;
+      parent->buffer_[0] = parent->hash_;
+      parent->buffer_[1] = parent->vptr_;
+    }
+    parent->hash_ = parent->vptr_ = 0;
+  }
+}
+
+void ProcessNodes(InnerNode* parent, std::vector<InnerNode*>& children,
+                  SingleCompactionJob* job) {
+  std::lock_guard opt_lk(parent->opt_lock_);
+  std::lock_guard write_lk(parent->share_mutex_);
+
+  if (children.size() == parent->art->num_children_) {
+    RemoveChildren(parent, children.back());
+    job->candidate_parents.push_back(parent);
+    for (auto child : children) {
+      assert(child->heat_group_ == job->group_);
+      assert(child->heat_group_ == parent->heat_group_);
+      SET_NODE_INVALID(child->status_);
+      job->candidates_removed.push_back(child);
+      child->opt_lock_.unlock();
+    }
+  } else {
+    for (auto child : children) {
+      job->candidates.push_back(child);
+      child->opt_lock_.unlock();
+    }
+  }
+}
+
 void Compactor::CompactionPreprocess(SingleCompactionJob* job) {
   auto chosen_group = job->group_;
   InnerNode* start_node = chosen_group->first_node_;
@@ -103,61 +206,69 @@ void Compactor::CompactionPreprocess(SingleCompactionJob* job) {
   InnerNode* cur_node = start_node->next_node_;
   assert(IS_GROUP_START(start_node->status_));
 
-  job->candidates_.clear();
-  job->nvm_nodes_and_sizes.clear();
-  job->start_node_ = start_node;
-  job->node_after_end_ = node_after_end;
+  job->Reset();
   job->vlog_manager_ = vlog_manager_;
 
-  // Get candidate nodes
-  int compacted_size = 0;
-  while (cur_node != node_after_end) {
-    auto& opt_lock = cur_node->opt_lock_;
-    opt_lock.lock();
+  int32_t compacted_size = 0;
+  std::vector<InnerNode*> children;
+  InnerNode* cur_parent = nullptr;
 
-    std::lock_guard write_lk(cur_node->share_mutex_);
+  while (cur_node != node_after_end) {
+    cur_node->opt_lock_.lock();
+    cur_node->share_mutex_.lock();
+
     if (!(IS_LEAF(cur_node->status_) &&
-          cur_node->heat_group_ == chosen_group) ||
-        (GET_ROWS(cur_node->nvm_node_->meta.header) == 0 &&
-         GET_NODE_BUFFER_SIZE(cur_node->status_) == 0)) {
+          cur_node->heat_group_ == chosen_group)) {
+      cur_node->share_mutex_.unlock();
+      cur_node->opt_lock_.unlock();
       cur_node = cur_node->next_node_;
-      opt_lock.unlock();
       continue;
     }
 
-    // Also flush data in buffer
-    MEMCPY(cur_node->nvm_node_->temp_buffer, cur_node->buffer_,
-           SIZE_TO_BYTES(GET_NODE_BUFFER_SIZE(cur_node->status_)),
-           PMEM_F_MEM_NODRAIN);
-    SET_NODE_BUFFER_SIZE(cur_node->status_, 0);
-    compacted_size += cur_node->estimated_size_;
-    cur_node->estimated_size_ = 0;
-    opt_lock.unlock();
-
-    auto new_nvm_node = GetNodeAllocator()->AllocateNode();
-    InsertNewNVMNode(cur_node, new_nvm_node);
-    job->candidates_.push_back(cur_node);
-    int data_size = GET_SIZE(cur_node->backup_nvm_node_->meta.header);
-    job->nvm_nodes_and_sizes.emplace_back(cur_node->backup_nvm_node_, data_size);
-
+    job->nvm_nodes_and_sizes.emplace_back(
+        cur_node->nvm_node_, GET_SIZE(cur_node->nvm_node_->meta.header));
     job->oldest_key_time_ =
         std::min(job->oldest_key_time_, cur_node->oldest_key_time_);
-    cur_node->oldest_key_time_ = LONG_LONG_MAX;
+
+    MEMCPY(cur_node->nvm_node_->temp_buffer, cur_node->buffer_,
+           SIZE_TO_BYTES(GET_NODE_BUFFER_SIZE(cur_node->status_)),
+           PMEM_F_MEM_NODRAIN | PMEM_F_MEM_NONTEMPORAL);
+    SET_NODE_BUFFER_SIZE(cur_node->status_, 0);
+    auto new_nvm_node = GetNodeAllocator()->AllocateNode();
+    InsertNewNVMNode(cur_node, new_nvm_node);
+    compacted_size += cur_node->estimated_size_;
+    cur_node->estimated_size_ = 0;
     memset(cur_node->hll_, 0, 64);
 
+    cur_node->share_mutex_.unlock();
+
+    if (cur_parent && cur_node->parent_node_ != cur_parent) {
+      ProcessNodes(cur_parent, children, job);
+      children.clear();
+    }
+
+    children.push_back(cur_node);
+    cur_parent = cur_node->parent_node_;
     cur_node = cur_node->next_node_;
   }
 
-  job->candidates_.push_back(nullptr);
+  MEMORY_BARRIER;
+
+  if (cur_parent && !children.empty()) {
+    ProcessNodes(cur_parent, children, job);
+  }
+
+  job->candidates.push_back(nullptr);
   job->group_->group_size_.fetch_add(-compacted_size, std::memory_order_relaxed);
   UpdateTotalSize(-compacted_size);
 }
 
 void Compactor::CompactionPostprocess(SingleCompactionJob* job) {
   // remove compacted node form list
-  auto cur_node = job->start_node_;
-  auto node_after_end = job->node_after_end_;
-  auto candidates = job->candidates_;
+  auto cur_node = job->group_->first_node_;
+  auto node_after_end = job->group_->last_node_->next_node_;
+  auto candidates = job->candidates;
+  assert(IS_GROUP_START(cur_node->status_));
 
   auto vlog_segment_num = vlog_manager_->vlog_segment_num_;
   auto vlog_segment_size = vlog_manager_->vlog_segment_size_;
@@ -165,48 +276,31 @@ void Compactor::CompactionPostprocess(SingleCompactionJob* job) {
 
   auto candidate = candidates.front();
   candidates.pop_front();
-  while (cur_node != node_after_end) {
+  while (candidate && cur_node != node_after_end) {
     std::lock_guard link_lk(cur_node->link_lock_);
     if (cur_node->next_node_ == candidate) {
       RemoveOldNVMNode(cur_node);
       candidate = candidates.front();
       candidates.pop_front();
     }
-
     cur_node = cur_node->next_node_;
   }
 
   assert(candidates.empty());
 
-  for (size_t i = 0; i < vlog_segment_num; ++i) {
-    auto& indexes = job->compacted_indexes_[i];
-    auto header = (VLogSegmentHeader*)(
-        vlog_manager_->pmemptr_ + vlog_segment_size * i);
-
-    if (!header->lock.mutex_.try_lock()) {
-      indexes.clear();
-      continue;
-    }
-
-    if (header->status_ != kSegmentWritten) {
-      header->lock.mutex_.unlock();
-      indexes.clear();
-      continue;
-    }
-
-    auto bitmap = header->bitmap_;
-    for (auto& index : indexes) {
-      assert(index / 8 < vlog_bitmap_size);
-      bitmap[index / 8] &= ~(1 << (index % 8));
-    }
-    header->compacted_count_ += indexes.size();
-    assert(header->total_count_ >= header->compacted_count_);
-    PERSIST(header, vlog_manager_->vlog_header_size_);
-
-    header->lock.mutex_.unlock();
-
-    indexes.clear();
+  for (auto removed : job->candidates_removed) {
+    GetNodeAllocator()->DeallocateNode(removed->backup_nvm_node_);
+    removed->backup_nvm_node_ = nullptr;
   }
+
+  for (auto parent : job->candidate_parents) {
+    assert(parent->backup_art);
+    std::lock_guard art_lk(parent->art_rw_lock_);
+    job->removed_arts.push_back(parent->backup_art);
+    parent->backup_art = nullptr;
+  }
+
+  vlog_manager_->UpdateBitmap(job->compacted_indexes);
 
   job->group_->status_.store(kGroupWaitMove, std::memory_order_relaxed);
   group_manager_->AddOperation(job->group_, kOperatorMove, true);
@@ -229,6 +323,13 @@ void Compactor::BGWorkDoCompaction() {
     }
 
     vlog_manager_->FreeQueue();
+    GetNodeAllocator()->FreeNodes();
+    for (auto job : chosen_jobs_) {
+      for (auto art : job->removed_arts) {
+        DeleteArtNode(art);
+      }
+    }
+    chosen_jobs_.clear();
 
     std::this_thread::sleep_for(std::chrono::milliseconds(10));
 
@@ -283,7 +384,7 @@ void Compactor::BGWorkDoCompaction() {
     MEMORY_BARRIER;
 
     RECORD_INFO("%ld, %.2fMB, %.2fMB, %.3lf, %.3lf, %.5fs, %.3fs, %ld\n",
-                CompactionAndFlushCount++, total_out_size / 1048576.0,
+                0, total_out_size / 1048576.0,
                 total_out_size / 1048576.0, 1.0, 1.0,
                 (end_time - start_time) * 1e-6, start_time * 1e-6,
                 0);
@@ -297,8 +398,6 @@ void Compactor::BGWorkDoCompaction() {
         vlog_manager_->free_segments_.size(), estimate,
         MemTotalSize.load(std::memory_order_relaxed));
 #endif
-
-    chosen_jobs_.clear();
   }
 }
 

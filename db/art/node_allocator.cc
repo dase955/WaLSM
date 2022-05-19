@@ -59,7 +59,7 @@ NodeAllocator::NodeAllocator(const DBOptions& options, bool recovery)
   char* cur_ptr = pmemptr_;
   for (int i = 0; i < num_free_; ++i) {
     if (!non_free_pages[i]) {
-      free_pages_.emplace_back(cur_ptr);
+      free_nodes_.emplace_back(cur_ptr);
     }
     cur_ptr += PAGE_SIZE;
   }
@@ -68,14 +68,21 @@ NodeAllocator::NodeAllocator(const DBOptions& options, bool recovery)
 }
 
 NVMNode* NodeAllocator::AllocateNode() {
-  char* ptr = free_pages_.pop_front();
+  char* ptr = free_nodes_.pop_front();
   memset(ptr, 0, 4096);
   auto nvm_node = (NVMNode*)ptr;
   return nvm_node;
 }
 
+void NodeAllocator::FreeNodes() {
+  auto size = waiting_nodes_.size();
+  while (size--) {
+    free_nodes_.emplace_back(waiting_nodes_.pop_front());
+  }
+}
+
 void NodeAllocator::DeallocateNode(NVMNode* node) {
-  free_pages_.emplace_back((char*)node);
+  waiting_nodes_.emplace_back((char*)node);
 }
 
 int64_t NodeAllocator::relative(NVMNode* node) {

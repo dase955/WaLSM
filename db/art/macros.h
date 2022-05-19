@@ -40,6 +40,9 @@ namespace ROCKSDB_NAMESPACE {
 #define SET_GROUP_START(s)        (s) |= 0x20000000
 #define SET_NON_GROUP_START(s)    (s) &= ~(0x20000000)
 
+#define IS_INVALID(s)             ((s) & 0x10000000)
+#define SET_NODE_INVALID(s)       (s) |= 0x10000000
+
 #define GET_GC_FLUSH_SIZE(s)        (((s) >> 16) & 0x000000ff)
 #define SET_GC_FLUSH_SIZE(s, size)  (s) &= 0xff00ffff; (s) |= ((size) << 16)
 

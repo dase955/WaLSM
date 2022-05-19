@@ -178,19 +178,16 @@ TEST_F(DBTest3, MockEnvTest2) {
   options.create_if_missing = true;
   options.enable_pipelined_write = true;
 
-  options.vlog_file_size = 4ULL << 30;
-  options.vlog_force_gc_ratio_ = 0.5;
-
-  options.group_min_size = 8 << 20;
-  options.group_split_threshold = 20 << 20;
   options.compaction_threshold = 1024 << 20;
+  options.vlog_force_gc_ratio_ = 0.5;
+  options.OptimizeLevelStyleCompaction();
 
   DB* db;
 
   ASSERT_OK(DB::Open(options, "/tmp/db_test", &db));
   
   std::cout << "Start test get" << std::endl;
-  for (int i = 0; i < count_per_thread * 16; i += 16) {
+  for (int i = 0; i < total_count; i += 4) {
     std::string key = next_key(i);
     std::string res;
     std::string expected = repeat(key);

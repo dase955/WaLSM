@@ -73,7 +73,7 @@ void VLogManager::PopFreeSegment() {
 char* VLogManager::GetSegmentFromFreeQueue() {
   char* segment = free_segments_.pop_front();
   auto header = (VLogSegmentHeader*)segment;
-  std::lock_guard<SpinMutex> lk(header->lock.mutex_);
+  std::lock_guard<SpinMutex> status_lk(header->lock.mutex_);
   header->status_ = kSegmentWriting;
   PERSIST(segment, 8);
   return segment;
@@ -81,7 +81,7 @@ char* VLogManager::GetSegmentFromFreeQueue() {
 
 void VLogManager::PushToUsedQueue(char* segment) {
   auto header = (VLogSegmentHeader*)segment;
-  std::lock_guard<SpinMutex> gc_lk(header->lock.mutex_);
+  std::lock_guard<SpinMutex> status_lk(header->lock.mutex_);
   header->status_ = kSegmentWritten;
   PERSIST(segment, 8);
   used_segments_.emplace_back(segment);
@@ -191,12 +191,6 @@ uint64_t VLogManager::AddRecord(const Slice& slice, uint32_t record_count) {
 
 RecordIndex VLogManager::GetFirstIndex(size_t wal_size) const {
   return segment_remain_ < wal_size ? 0 : header_->total_count_;
-}
-
-void VLogManager::GetKey(uint64_t vptr, std::string& key) {
-  GetActualVptr(vptr);
-  Slice slice(pmemptr_ + vptr + RecordPrefixSize, vlog_segment_size_);
-  GetLengthPrefixedSlice(&slice, key);
 }
 
 void VLogManager::GetKey(uint64_t vptr, Slice& key) {
@@ -338,7 +332,7 @@ void VLogManager::BGWorkGarbageCollection() {
 
     for (auto segment : segments) {
       auto* header_gc = (VLogSegmentHeader*)segment;
-      std::lock_guard<SpinMutex> gc_lock(header_gc->lock.mutex_);
+      std::lock_guard<SpinMutex> status_lk(header_gc->lock.mutex_);
       header_gc->status_ = kSegmentGC;
       PERSIST(segment, 8);
     }
@@ -357,15 +351,25 @@ void VLogManager::BGWorkGarbageCollection() {
       auto inner_node = mem_->FindInnerNodeByKey(
           cur_data.key, level, stored_in_nvm);
 
-      // Right now we don't reclaim free nodes.
+      // If inner node is not found, this record will be compacted later,
+      // so we just pass it.
       if (unlikely(!inner_node)) {
         ++index;
         continue;
       }
 
       if (!stored_in_nvm) {
-        std::lock_guard lk(inner_node->opt_lock_);
+        std::lock_guard vptr_lk(inner_node->vptr_lock_);
+
+        // If inner node is leaf node after holding vptr_lock,
+        // this record has been stored into node buffer.
+        if (unlikely(IS_LEAF(inner_node->status_))) {
+          continue;
+        }
+
         Slice vptr_key = cur_data.key;
+        KVStruct kv_info(0, 0);
+        kv_info.key_length_ = level;
         while (index < data_count &&
                gc_data[index].key.compare(vptr_key) == 0) {
           cur_data = gc_data[index++];
@@ -373,18 +377,22 @@ void VLogManager::BGWorkGarbageCollection() {
             WriteToNewSegment(cur_data.record, new_vptr);
             UpdateActualVptr(cur_data.vptr, new_vptr);
             inner_node->vptr_ = new_vptr;
+            inner_node->hash_ = kv_info.hash_;
           }
         }
         continue;
       }
 
       {
-        Slice cur_prefix = Slice(cur_data.key.data(), level);
-
         std::lock_guard write_lk(inner_node->share_mutex_);
-        if (unlikely(!IS_LEAF(inner_node->status_))) {
+
+        // node is split or compacted
+        if (unlikely(!IS_LEAF(inner_node->status_) ||
+                     IS_INVALID(inner_node->status_))) {
           continue;
         }
+
+        Slice cur_prefix = Slice(cur_data.key.data(), level);
         auto nvm_node = inner_node->nvm_node_;
         int rows = GET_ROWS(nvm_node->meta.header);
 
@@ -475,19 +483,6 @@ void VLogManager::WriteToNewSegment(std::string& record, uint64_t& new_vptr) {
   header->offset_ += left;
   PERSIST(header, CACHE_LINE_SIZE);
 }
-
-void VLogManager::FreeQueue() {
-  size_t size = gc_pages_.size();
-  while (size--) {
-    auto segment = gc_pages_.pop_front();
-    auto header = (VLogSegmentHeader*)segment;
-    std::lock_guard<SpinMutex> lk(header->lock.mutex_);
-    header->status_ = kSegmentFree;
-    PERSIST(segment, 8);
-    free_segments_.emplace_back(segment);
-  }
-}
-
 void VLogManager::UpdateBitmap(
     std::unordered_map<uint64_t, std::vector<RecordIndex>>& all_indexes) {
   for (auto& pair : all_indexes) {
@@ -498,12 +493,8 @@ void VLogManager::UpdateBitmap(
     auto header = (VLogSegmentHeader*)(
         pmemptr_ + vlog_segment_size_ * segment_id);
 
-    if (!header->lock.mutex_.try_lock()) {
-      continue;
-    }
-
+    std::lock_guard status_lk(header->lock.mutex_);
     if (header->status_ != kSegmentWritten) {
-      header->lock.mutex_.unlock();
       continue;
     }
 
@@ -514,15 +505,47 @@ void VLogManager::UpdateBitmap(
     }
     header->compacted_count_ += indexes.size();
     PERSIST(header, vlog_header_size_);
-
-    header->lock.mutex_.unlock();
   }
 
   MEMORY_BARRIER;
 }
 
-void VLogManager::UpdateBitmap([[maybe_unused]] uint64_t vptr) {
+void VLogManager::UpdateBitmap(autovector<RecordIndex>* all_indexes) {
+  for (size_t i = 0; i < vlog_segment_num_; ++i) {
+    auto& indexes = all_indexes[i];
+    auto header = (VLogSegmentHeader*)(pmemptr_ + vlog_segment_size_ * i);
 
+    std::lock_guard status_lk(header->lock.mutex_);
+    if (header->status_ != kSegmentWritten) {
+      indexes.clear();
+      continue;
+    }
+
+    auto bitmap = header->bitmap_;
+    for (auto& index : indexes) {
+      assert(index / 8 < vlog_bitmap_size_);
+      bitmap[index / 8] &= ~(1 << (index % 8));
+    }
+    header->compacted_count_ += indexes.size();
+    assert(header->total_count_ >= header->compacted_count_);
+    FLUSH(header, vlog_manager_->vlog_header_size_);
+
+    indexes.clear();
+  }
+
+  MEMORY_BARRIER;
+}
+
+void VLogManager::FreeQueue() {
+  size_t size = gc_pages_.size();
+  while (size--) {
+    auto segment = gc_pages_.pop_front();
+    auto header = (VLogSegmentHeader*)segment;
+    std::lock_guard<SpinMutex> status_lk(header->lock.mutex_);
+    header->status_ = kSegmentFree;
+    PERSIST(segment, 8);
+    free_segments_.emplace_back(segment);
+  }
 }
 
 float VLogManager::Estimate() {

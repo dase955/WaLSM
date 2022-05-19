@@ -308,6 +308,7 @@ void HeatGroupManager::SplitGroup(HeatGroup* group) {
     if (left_size > split_point) {
       break;
     }
+    assert(left_end->next_node_);
     left_end = left_end->next_node_;
   }
 
@@ -351,6 +352,8 @@ void HeatGroupManager::SplitGroup(HeatGroup* group) {
   right_group->status_.store(kGroupNone, std::memory_order_release);
   group->status_.store(kGroupNone, std::memory_order_release);
   right_group->lock.unlock();
+
+  //printf("Split size: %d %d %d\n", left_size, right_size, stored_total_size);
 }
 
 void HeatGroupManager::MoveAllGroupsToLayer(int from, int to) {

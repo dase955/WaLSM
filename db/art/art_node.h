@@ -70,10 +70,17 @@ void ReallocateArtNode(ArtNode** art);
 
 InnerNode* FindChild(InnerNode* node, unsigned char c);
 
+InnerNode* FindChild(InnerNode* node, std::string& key, size_t level,
+                     InnerNode** backup, size_t& backup_level);
+
+InnerNode* FindChild(ArtNode* backup, unsigned char c);
+
 void InsertToArtNode(
     InnerNode* current, InnerNode* leaf,
     unsigned char c, bool insert_to_group);
 
 void DeleteInnerNode(InnerNode* inner_node);
+
+void DeleteArtNode(ArtNode* art);
 
 } // namespace ROCKSDB_NAMESPACE

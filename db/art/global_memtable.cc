@@ -23,9 +23,10 @@ namespace ROCKSDB_NAMESPACE {
 #define SQUEEZE_THRESHOLD 104
 
 InnerNode::InnerNode()
-    : heat_group_(nullptr), art(nullptr),
+    : heat_group_(nullptr), art(nullptr), backup_art(nullptr),
+
       nvm_node_(nullptr), backup_nvm_node_(nullptr),
-      last_child_node_(nullptr), next_node_(nullptr),
+      support_node_(nullptr), next_node_(nullptr),
       vptr_(0), estimated_size_(0),
       status_(0), oldest_key_time_(0) {
   memset(hll_, 0, 64);
@@ -156,11 +157,13 @@ InnerNode* GlobalMemtable::RecoverNonLeaf(InnerNode* parent, int level,
     }
 
     if (GET_TAG(cur->meta.header, DUMMY_TAG)) {
+      assert((int)GET_LEVEL(cur->meta.header) == level);
       parent->art = AllocateArtAfterSplit(children, prefixes);
-      parent->last_child_node_ = inner_node;
+      parent->support_node_ = inner_node;
       return inner_node;
     }
 
+    assert((int)GET_LEVEL(inner_node->nvm_node_->meta.header) == level);
     auto prefix = GET_LAST_PREFIX(cur->meta.header);
     children.push_back(inner_node);
     prefixes.push_back(prefix);
@@ -198,14 +201,15 @@ void GlobalMemtable::Recovery() {
 
 void GlobalMemtable::InitFirstLevel() {
   root_ = AllocateLeafNode(0, 0, nullptr);
-  auto tail = AllocateLeafNode(0, 0, nullptr);
+  auto tail = AllocateLeafNode(1, 0, nullptr);
+  tail->parent_node_ = root_;
   SET_TAG(tail->nvm_node_->meta.header, DUMMY_TAG);
   FLUSH(tail->nvm_node_, CACHE_LINE_SIZE);
   SET_NON_LEAF(root_->status_);
   SET_ART_FULL(root_->status_);
 
   // First level
-  root_->last_child_node_ = tail;
+  root_->support_node_ = tail;
   root_->art = AllocateArtNode(kNode256);
   auto art256 = (ArtNode256*)root_->art;
   art256->header_.num_children_ = 256;
@@ -310,20 +314,25 @@ void GlobalMemtable::Put(Slice& slice, uint64_t base_vptr, size_t count) {
 void GlobalMemtable::Put(Slice& key, KVStruct& kv_info) {
   size_t max_level = key.size();
 
-  size_t level = 1;
   uint32_t version;
   InnerNode* first = FindChild(root_, key[0]);
 
-  // TODO: remove Restart to here
+Restart:
+  size_t level = 1;
   InnerNode* current = first;
-  InnerNode* next_node;
+  InnerNode* next_node = nullptr;
 
   while (true) {
-  Restart:
+LocalRestart:
     version = current->opt_lock_.AwaitUnlocked();
 
     if (IS_LEAF(current->status_)) {
       if (!current->opt_lock_.TryLock(version)) {
+        goto LocalRestart;
+      }
+
+      if (unlikely(IS_INVALID(current->status_))) {
+        current->opt_lock_.unlock();
         goto Restart;
       }
 
@@ -332,22 +341,27 @@ void GlobalMemtable::Put(Slice& key, KVStruct& kv_info) {
       return;
     }
 
-    // level == max_level means key need to be stored in vptr
     if (level == max_level) {
-      std::lock_guard lk(current->opt_lock_);
+      std::lock_guard vptr_lk(current->vptr_lock_);
+      if (unlikely(IS_LEAF(current->status_))) {
+        goto LocalRestart;
+      }
+
+      Rehash(key.data(), key.size(), kv_info.hash_, level);
+      current->hash_ = kv_info.hash_;
       current->vptr_ = kv_info.vptr_;
       return;
     }
 
     next_node = FindChild(current, key[level]);
-    /*current->opt_lock_.CheckOrRestart(version, need_restart);
-    if (need_restart) {
-      goto Restart;
-    }*/
-
     if (!next_node) {
       if (!current->opt_lock_.TryLock(version)) {
-        goto Restart;
+        goto LocalRestart;
+      }
+
+      if (IS_LEAF(current->status_)) {
+        current->opt_lock_.unlock();
+        goto LocalRestart;
       }
 
       Rehash(key.data(), key.size(), kv_info.hash_, level + 1);
@@ -359,6 +373,7 @@ void GlobalMemtable::Put(Slice& key, KVStruct& kv_info) {
       leaf->buffer_[0] = kv_info.hash_;
       leaf->buffer_[1] = kv_info.vptr_;
       leaf->estimated_size_ = kv_info.kv_size_;
+      leaf->parent_node_ = current;
 
       InsertToArtNode(current, leaf, key[level], true);
       current->opt_lock_.unlock();
@@ -375,30 +390,46 @@ void GlobalMemtable::Put(Slice& key, KVStruct& kv_info) {
 
 bool GlobalMemtable::Get(std::string& key, std::string& value, Status* s) {
   size_t max_level = key.length();
-  size_t level = 1;
-  InnerNode* current = FindChild(root_, key[0]);
+  size_t level = 0;
+  InnerNode* backup_node = nullptr;
+  size_t backup_level = 0;
+  InnerNode* current = root_;
 
-  while (true) {
+  bool found = false;
+  while (current) {
     if (IS_LEAF(current->status_)) {
-      return FindKeyInInnerNode(current, level, key, value, s);
+      found = FindKeyInInnerNode(current, level, key, value, s);
+      break;
     }
 
     if (level == max_level) {
-      std::lock_guard lk(current->opt_lock_);
-      if (current->vptr_ == 0) {
-        return false;
+      std::shared_lock read_lk(current->vptr_lock_);
+
+      // This mean children of current node is waiting to be reclaimed,
+      // so this node becomes a leaf node again.
+      if (unlikely(IS_LEAF(current->status_))) {
+        found = FindKeyInInnerNode(current, level, key, value, s);
+      } else if (current->vptr_ > 0) {
+        auto type = vlog_manager_->GetKeyValue(current->vptr_, key, value);
+        *s = type == kTypeValue ? Status::OK() : Status::NotFound();
+        found = true;
       }
 
-      auto type = vlog_manager_->GetKeyValue(current->vptr_, key, value);
-      *s = type == kTypeValue ? Status::OK() : Status::NotFound();
-      return true;
+      break;
     }
 
-    current = FindChild(current, key[level++]);
-    if (!current) {
-      return false;
-    }
+    current = FindChild(current, key, level++, &backup_node, backup_level);
   }
+
+  if (!found && backup_node) {
+    found = FindKeyInInnerNode(backup_node, backup_level, key, value, s);
+  }
+
+  if (backup_level) {
+    ReduceBackupRead();
+  }
+
+  return found;
 }
 
 void GlobalMemtable::SqueezeNode(InnerNode* leaf) {
@@ -425,9 +456,9 @@ void GlobalMemtable::SqueezeNode(InnerNode* leaf) {
       continue;
     }
     std::string key;
-    GetActualVptr(vptr);
     vlog_manager_->GetKeyIndex(vptr, key, index);
     if (key_set.find(key) != key_set.end()) {
+      GetActualVptr(vptr);
       unused_indexes[vptr >> 20].emplace_back(index);
       continue;
     }
@@ -448,9 +479,11 @@ void GlobalMemtable::SqueezeNode(InnerNode* leaf) {
   int flush_size = ALIGN_UP(fpos, 16);
   int flush_rows = SIZE_TO_ROWS(flush_size);
   MEMCPY(node->data, temp_data,
-         SIZE_TO_BYTES(flush_size), PMEM_F_MEM_NODRAIN);
+         SIZE_TO_BYTES(flush_size),
+         PMEM_F_MEM_NODRAIN | PMEM_F_MEM_NONTEMPORAL);
   MEMCPY(node->meta.fingerprints_,
-         temp_fingerprints, flush_size, PMEM_F_MEM_NODRAIN);
+         temp_fingerprints, flush_size,
+         PMEM_F_MEM_NODRAIN | PMEM_F_MEM_NONTEMPORAL);
 
   MEMORY_BARRIER;
 
@@ -466,7 +499,7 @@ void GlobalMemtable::SqueezeNode(InnerNode* leaf) {
 
 // For level 1, 4, 7..., we read key and modify prefixes in hash.
 int32_t GlobalMemtable::ReadFromVLog(NVMNode* nvm_node, size_t level,
-                                  uint64_t& leaf_vptr,
+                                  uint64_t& leaf_vptr, uint64_t& leaf_hash,
                                   autovector<KVStruct>* split_buckets) {
   int32_t delta = 0;
   int32_t final_size = 0;
@@ -478,15 +511,16 @@ int32_t GlobalMemtable::ReadFromVLog(NVMNode* nvm_node, size_t level,
       continue;
     }
 
-    std::string key;
+    Slice key;
     vlog_manager_->GetKey(kv_info.vptr_, key);
 
-    if (key.length() == level) {
+    if (key.size() == level) {
       final_size = kv_info.kv_size_;
       delta += final_size;
       leaf_vptr = kv_info.vptr_;
+      leaf_hash = kv_info.hash_;
     } else {
-      Rehash(key.c_str(), key.size(), kv_info.hash_, level + 1);
+      Rehash(key.data(), key.size(), kv_info.hash_, level + 1);
       split_buckets[static_cast<unsigned char>(key[level])]
           .push_back(kv_info);
     }
@@ -496,7 +530,7 @@ int32_t GlobalMemtable::ReadFromVLog(NVMNode* nvm_node, size_t level,
 }
 
 int32_t GlobalMemtable::ReadFromNVM(NVMNode* nvm_node, size_t level,
-                                 uint64_t& leaf_vptr,
+                                 uint64_t& leaf_vptr, uint64_t& leaf_hash,
                                  autovector<KVStruct>* split_buckets) {
   int32_t delta = 0;
   int32_t final_size = 0;
@@ -512,6 +546,7 @@ int32_t GlobalMemtable::ReadFromNVM(NVMNode* nvm_node, size_t level,
       final_size = kv_info.kv_size_;
       delta += final_size;
       leaf_vptr = kv_info.vptr_;
+      leaf_hash = kv_info.hash_;
     } else {
       split_buckets[static_cast<unsigned char>(GetPrefix(kv_info, level))]
           .push_back(kv_info);
@@ -521,6 +556,11 @@ int32_t GlobalMemtable::ReadFromNVM(NVMNode* nvm_node, size_t level,
   return final_size - delta;
 }
 
+#ifdef ROCKSDB_SUPPORT_THREAD_LOCAL
+thread_local uint8_t temp_fingerprints[224] = {0};
+thread_local uint64_t temp_data[448] = {0};
+#endif
+
 void GlobalMemtable::SplitLeaf(InnerNode* leaf, size_t level,
                                InnerNode** node_need_split) {
 
@@ -528,12 +568,13 @@ void GlobalMemtable::SplitLeaf(InnerNode* leaf, size_t level,
   *node_need_split = nullptr;
 
   uint64_t leaf_vptr = 0;
+  uint64_t leaf_hash = 0;
   int32_t delta;
   autovector<KVStruct> split_buckets[256];
   if (level % 3 == 0) {
-    delta = ReadFromVLog(old_nvm_node, level, leaf_vptr, split_buckets);
+    delta = ReadFromVLog(old_nvm_node, level, leaf_vptr, leaf_hash, split_buckets);
   } else {
-    delta = ReadFromNVM(old_nvm_node, level, leaf_vptr, split_buckets);
+    delta = ReadFromNVM(old_nvm_node, level, leaf_vptr, leaf_hash, split_buckets);
   }
   leaf->heat_group_->UpdateSize(delta);
 
@@ -549,6 +590,7 @@ void GlobalMemtable::SplitLeaf(InnerNode* leaf, size_t level,
 
   auto dummy_node = AllocateLeafNode(
       level + 1, static_cast<unsigned char>(LAST_CHAR), nullptr);
+  dummy_node->parent_node_ = leaf;
   dummy_node->oldest_key_time_ = oldest_key_time;
   SET_NON_LEAF(dummy_node->status_);
   SET_TAG(dummy_node->nvm_node_->meta.header, DUMMY_TAG);
@@ -563,8 +605,10 @@ void GlobalMemtable::SplitLeaf(InnerNode* leaf, size_t level,
   new_leaves.reserve(split_num + 1);
   prefixes.reserve(split_num);
 
+#ifndef ROCKSDB_SUPPORT_THREAD_LOCAL
   uint8_t temp_fingerprints[224] = {0};
   uint64_t temp_data[448] = {0};
+#endif
 
   int h, bucket;
   uint8_t digit;
@@ -601,10 +645,10 @@ void GlobalMemtable::SplitLeaf(InnerNode* leaf, size_t level,
 
     memset(temp_data + pos, 0, SIZE_TO_BYTES(flush_size - fpos));
     memset(temp_fingerprints + fpos, 0, flush_size - fpos);
-    MEMCPY(nvm_node->data, temp_data,
-           SIZE_TO_BYTES(flush_size), PMEM_F_MEM_NODRAIN);
-    MEMCPY(nvm_node->meta.fingerprints_, temp_fingerprints,
-           flush_size, PMEM_F_MEM_NODRAIN);
+    MEMCPY(nvm_node->data, temp_data, SIZE_TO_BYTES(flush_size),
+           PMEM_F_MEM_NODRAIN | PMEM_F_MEM_NONTEMPORAL);
+    MEMCPY(nvm_node->meta.fingerprints_, temp_fingerprints, flush_size,
+           PMEM_F_MEM_NODRAIN | PMEM_F_MEM_NONTEMPORAL);
 
     auto hdr = nvm_node->meta.header;
     SET_SIZE(hdr, flush_size);
@@ -630,6 +674,7 @@ void GlobalMemtable::SplitLeaf(InnerNode* leaf, size_t level,
 
   leaf->art = art;
   leaf->vptr_ = leaf_vptr;
+  leaf->hash_ = leaf_hash;
   SET_ART_NON_FULL(leaf->status_);
 
   new_leaves.push_back(final_node);
@@ -795,7 +840,7 @@ bool GlobalMemtable::FindKeyInInnerNode(InnerNode* leaf, size_t level,
   auto backup_nvm_node = leaf->backup_nvm_node_;
   bool need_search_backup = backup_nvm_node && backup_nvm_node != nvm_node;
 
-  if (need_search_backup) {
+  if (backup_nvm_node) {
     IncrementBackupRead();
   }
 
@@ -804,7 +849,7 @@ bool GlobalMemtable::FindKeyInInnerNode(InnerNode* leaf, size_t level,
     found = ReadInNVMNode(backup_nvm_node, hash, key, value, s);
   }
 
-  if (need_search_backup) {
+  if (backup_nvm_node) {
     ReduceBackupRead();
   }
 
@@ -820,7 +865,7 @@ InnerNode* GlobalMemtable::FindInnerNodeByKey(Slice& key,
   stored_in_nvm = true;
   InnerNode* current = FindChild(root_, key[0]);
 
-  while (true) {
+  while (current) {
     if (IS_LEAF(current->status_)) {
       return current;
     }
@@ -831,10 +876,9 @@ InnerNode* GlobalMemtable::FindInnerNodeByKey(Slice& key,
     }
 
     current = FindChild(current, key[level++]);
-    if (!current) {
-      return nullptr;
-    }
   }
+
+  return nullptr;
 }
 
 } // namespace ROCKSDB_NAMESPACE

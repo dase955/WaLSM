@@ -39,22 +39,29 @@ struct InnerNode {
   uint8_t    hll_[64];        // hyper log log use 64 buckets
 
   HeatGroup* heat_group_;
-  ArtNode*   art;
 
   // Backup is used for compaction
+  ArtNode*   art;
+  ArtNode*   backup_art;
+
+  // Backup is used for compaction
+
   NVMNode*   nvm_node_;
   NVMNode*   backup_nvm_node_;
 
-  // Used for inserting new node
-  InnerNode* last_child_node_;
+  // support node is used to simplify insert operation,
+  // it itself doesn't store any data.
+  InnerNode* support_node_;
   InnerNode* parent_node_;
-
   InnerNode* next_node_;
+
   uint64_t   vptr_;
+  uint64_t   hash_;
 
   std::shared_mutex share_mutex_; // Used for flush and split operation
-  RWSpinLock        art_rw_lock;  // Protect art pointer
+  RWSpinLock        art_rw_lock_;  // Protect art pointer
   RWSpinLock        link_lock_;   // Protect last child node
+  RWSpinLock        vptr_lock_;
 
   OptLock    opt_lock_;
   int32_t    estimated_size_;   // Estimated kv size in this node
@@ -107,10 +114,12 @@ class GlobalMemtable {
                  InnerNode** node_need_split);
 
   int32_t ReadFromNVM(NVMNode* nvm_node, size_t level,
-                   uint64_t& leaf_vptr, autovector<KVStruct>* data);
+                      uint64_t& leaf_vptr, uint64_t& leaf_hash,
+                      autovector<KVStruct>* data);
 
   int32_t ReadFromVLog(NVMNode* nvm_node, size_t level,
-                    uint64_t& leaf_vptr, autovector<KVStruct>* data);
+                       uint64_t& leaf_vptr, uint64_t& leaf_hash,
+                       autovector<KVStruct>* data);
 
   InnerNode* root_;
 

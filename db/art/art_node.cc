@@ -12,6 +12,8 @@
 #include "nvm_node.h"
 #include "heat_group.h"
 #include "global_memtable.h"
+#include "node_allocator.h"
+#include "compactor.h"
 
 namespace ROCKSDB_NAMESPACE {
 
@@ -288,7 +290,11 @@ InnerNode* FindChildInNode256(ArtNode* art, unsigned char c) {
 }
 
 InnerNode* FindChild(InnerNode* node, unsigned char c) {
-  std::shared_lock read_lk(node->art_rw_lock);
+  std::shared_lock read_lk(node->art_rw_lock_);
+
+  if (!node->art) {
+    return nullptr;
+  }
 
   auto art = node->art;
   switch (art->art_type_) {
@@ -300,6 +306,51 @@ InnerNode* FindChild(InnerNode* node, unsigned char c) {
       return FindChildInNode48(art, c);
     case kNode256:
       return FindChildInNode256(art, c);
+    default:
+      return nullptr;
+  }
+}
+
+InnerNode* FindChild(ArtNode* backup, unsigned char c) {
+  switch (backup->art_type_) {
+    case kNode4:
+      return FindChildInNode4(backup, c);
+    case kNode16:
+      return FindChildInNode16(backup, c);
+    case kNode48:
+      return FindChildInNode48(backup, c);
+    case kNode256:
+      return FindChildInNode256(backup, c);
+    default:
+      return nullptr;
+  }
+}
+
+InnerNode* FindChild(InnerNode* node, std::string& key, size_t level,
+                     InnerNode** backup, size_t& backup_level) {
+  std::shared_lock read_lk(node->art_rw_lock_);
+
+  if (node->backup_art) {
+    assert(backup_level == 0);
+    *backup = FindChild(node->backup_art, key[level]);
+    backup_level = level;
+    IncrementBackupRead();
+  }
+
+  auto art = node->art;
+  if (!art) {
+    return nullptr;
+  }
+
+  switch (art->art_type_) {
+    case kNode4:
+      return FindChildInNode4(art, key[level]);
+    case kNode16:
+      return FindChildInNode16(art, key[level]);
+    case kNode48:
+      return FindChildInNode48(art, key[level]);
+    case kNode256:
+      return FindChildInNode256(art, key[level]);
     default:
       return nullptr;
   }
@@ -419,7 +470,7 @@ void InsertToArtNode(InnerNode* current, InnerNode* leaf,
   ArtNode* art = nullptr;
 
   {
-    std::lock_guard write_lk(current->art_rw_lock);
+    std::lock_guard write_lk(current->art_rw_lock_);
 
     if (IS_ART_FULL(current->status_)) {
       ReallocateArtNode(&current->art);
@@ -456,6 +507,54 @@ void InsertToArtNode(InnerNode* current, InnerNode* leaf,
   }
 }
 
+void DeleteArtNode(ArtNode* art) {
+  if (art->art_type_ == kNode4) {
+    auto art4 = (ArtNode4*)art;
+    for (int i = 0; i < art->num_children_; ++i) {
+      auto inner_node = art4->children_[i];
+      if (inner_node) {
+        inner_node->share_mutex_.lock();
+        GetNodeAllocator()->DeallocateNode(inner_node->nvm_node_);
+        inner_node->share_mutex_.unlock();
+        delete inner_node;
+      }
+    }
+  } else if (art->art_type_ == kNode16) {
+    auto art16 = (ArtNode16*)art;
+    for (int i = 0; i < art->num_children_; ++i) {
+      auto inner_node = art16->children_[i];
+      if (inner_node) {
+        inner_node->share_mutex_.lock();
+        GetNodeAllocator()->DeallocateNode(inner_node->nvm_node_);
+        inner_node->share_mutex_.unlock();
+        delete inner_node;
+      }
+    }
+  } else if (art->art_type_ == kNode48) {
+    auto art48 = (ArtNode48*)art;
+    for (auto& child : art48->children_) {
+      if (child) {
+        child->share_mutex_.lock();
+        GetNodeAllocator()->DeallocateNode(child->nvm_node_);
+        child->share_mutex_.unlock();
+        delete child;
+      }
+    }
+  } else {
+    auto art256 = (ArtNode256*)art;
+    for (auto& child : art256->children_) {
+      if (child) {
+        child->share_mutex_.lock();
+        GetNodeAllocator()->DeallocateNode(child->nvm_node_);
+        child->share_mutex_.unlock();
+        delete child;
+      }
+    }
+  }
+
+  delete art;
+}
+
 void DeleteInnerNode(InnerNode* inner_node) {
   if (!inner_node) {
     return;
@@ -468,7 +567,7 @@ void DeleteInnerNode(InnerNode* inner_node) {
     auto nvm_node = inner_node->nvm_node_;
     MEMCPY(nvm_node->temp_buffer, inner_node->buffer_,
            SIZE_TO_BYTES(GET_NODE_BUFFER_SIZE(inner_node->status_)),
-           PMEM_F_MEM_NODRAIN);
+           PMEM_F_MEM_NONTEMPORAL);
     nvm_node->meta.node_info = inner_node->estimated_size_;
     FLUSH(nvm_node->temp_buffer, 256);
     inner_node->opt_lock_.unlock();
@@ -502,9 +601,7 @@ void DeleteInnerNode(InnerNode* inner_node) {
     }
   }
 
-  assert(inner_node->last_child_node_ &&
-         inner_node->last_child_node_ != inner_node);
-  delete inner_node->last_child_node_;
+  delete inner_node->support_node_;
   delete art;
   delete inner_node;
 }

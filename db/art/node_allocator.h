@@ -21,12 +21,14 @@ class NodeAllocator {
   NVMNode* GetHead();
 
   size_t GetNumFreePages() {
-    return free_pages_.size();
+    return free_nodes_.size();
   }
 
   NVMNode* AllocateNode();
 
   void DeallocateNode(NVMNode* node);
+
+  void FreeNodes();
 
   int64_t relative(NVMNode* node);
 
@@ -39,7 +41,9 @@ class NodeAllocator {
 
   std::atomic<int> num_free_;
 
-  TQueueConcurrent<char*> free_pages_;
+  TQueueConcurrent<char*> waiting_nodes_;
+
+  TQueueConcurrent<char*> free_nodes_;
 };
 
 void InitializeNodeAllocator(const DBOptions& options, bool recovery = false);
