@@ -103,7 +103,7 @@ VLogManager::VLogManager(const DBOptions& options, bool recovery)
   pmemptr_ = GetMappedAddress("vlog");
   recovery ? Recover() : Initialize();
 
-  MEMORY_BARRIER;
+  NVM_BARRIER;
 
   segment_for_gc_ = GetSegmentFromFreeQueue();
 
@@ -236,8 +236,6 @@ ValueType VLogManager::GetKeyValue(uint64_t vptr,
 
   [[maybe_unused]] char* segment =
       pmemptr_ + vptr / vlog_segment_size_ * vlog_segment_size_;
-  assert(((VLogSegmentHeader*)segment)->status_ != kSegmentGC);
-
 
   ValueType type = ((ValueType *)(pmemptr_ + vptr))[0];
   assert(type == kTypeValue || type == kTypeDeletion);
@@ -368,8 +366,8 @@ void VLogManager::BGWorkGarbageCollection() {
         }
 
         Slice vptr_key = cur_data.key;
-        KVStruct kv_info(0, 0);
-        kv_info.key_length_ = level;
+        /*uint64_t new_hash = HashAndPrefix(
+            cur_data.key.data(), cur_data.key.size(), cur_data.key.size());*/
         while (index < data_count &&
                gc_data[index].key.compare(vptr_key) == 0) {
           cur_data = gc_data[index++];
@@ -377,7 +375,7 @@ void VLogManager::BGWorkGarbageCollection() {
             WriteToNewSegment(cur_data.record, new_vptr);
             UpdateActualVptr(cur_data.vptr, new_vptr);
             inner_node->vptr_ = new_vptr;
-            inner_node->hash_ = kv_info.hash_;
+            // inner_node->hash_ = new_hash;
           }
         }
         continue;
@@ -387,8 +385,7 @@ void VLogManager::BGWorkGarbageCollection() {
         std::lock_guard write_lk(inner_node->share_mutex_);
 
         // node is split or compacted
-        if (unlikely(!IS_LEAF(inner_node->status_) ||
-                     IS_INVALID(inner_node->status_))) {
+        if (unlikely(!IS_LEAF(inner_node->status_))) {
           continue;
         }
 
@@ -483,6 +480,7 @@ void VLogManager::WriteToNewSegment(std::string& record, uint64_t& new_vptr) {
   header->offset_ += left;
   PERSIST(header, CACHE_LINE_SIZE);
 }
+
 void VLogManager::UpdateBitmap(
     std::unordered_map<uint64_t, std::vector<RecordIndex>>& all_indexes) {
   for (auto& pair : all_indexes) {
@@ -507,7 +505,7 @@ void VLogManager::UpdateBitmap(
     PERSIST(header, vlog_header_size_);
   }
 
-  MEMORY_BARRIER;
+  NVM_BARRIER;
 }
 
 void VLogManager::UpdateBitmap(autovector<RecordIndex>* all_indexes) {
@@ -528,12 +526,12 @@ void VLogManager::UpdateBitmap(autovector<RecordIndex>* all_indexes) {
     }
     header->compacted_count_ += indexes.size();
     assert(header->total_count_ >= header->compacted_count_);
-    FLUSH(header, vlog_manager_->vlog_header_size_);
+    FLUSH(header, vlog_header_size_);
 
     indexes.clear();
   }
 
-  MEMORY_BARRIER;
+  NVM_BARRIER;
 }
 
 void VLogManager::FreeQueue() {

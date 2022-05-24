@@ -205,11 +205,13 @@ void InsertNewNVMNode(InnerNode* node, NVMNode* inserted) {
   {
     std::lock_guard link_lk(node->link_lock_);
 
+    // Add memory barrier to prevent false reading,
+    // otherwise we may only read an empty nvm node(inserted)
     node->backup_nvm_node_ = old_nvm_node;
+    MEMORY_BARRIER;
     node->nvm_node_ = inserted;
 
     auto old_hdr = old_nvm_node->meta.header;
-    auto new_hdr = old_hdr;
 
     if (GET_TAG(old_hdr, ALT_FIRST_TAG)) {
       inserted->meta.next1 = old_nvm_node->meta.next1;
@@ -222,7 +224,6 @@ void InsertNewNVMNode(InnerNode* node, NVMNode* inserted) {
     inserted->meta.header = inserted_hdr;
     PERSIST(inserted, CACHE_LINE_SIZE);
 
-    old_nvm_node->meta.header = new_hdr;
     PERSIST(old_nvm_node, CACHE_LINE_SIZE);
   }
 }

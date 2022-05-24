@@ -161,28 +161,5 @@ int64_t GetNextRelativeNode(NVMNode* node);
 
 int64_t GetNextRelativeNode(int64_t offset);
 
-/////////////////////////////////////////////////////
-// PMem
-
-#ifndef USE_PMEM
-#define MEMORY_PATH "/tmp/nodememory"
-
-#define MEMCPY(des, src, size, flag) memcpy((des), (src), (size))
-#define PERSIST(ptr, len)
-#define FLUSH(addr, len)
-#define MEMORY_BARRIER
-#define CLWB(ptr, len)
-#else
-#define MEMORY_PATH "/mnt/chen/nodememory"
-
-#define MEMCPY(des, src, size, flags) \
-  pmem_memcpy((des), (src), (size), flags)
-// PERSIST = FLUSH + FENCE
-#define PERSIST(addr, len) pmem_persist((addr), (len))
-#define FLUSH(addr, len) pmem_flush(addr, len)
-#define MEMORY_BARRIER pmem_drain()
-#define CLWB(ptr, len)
-#endif
-
 } // namespace ROCKSDB_NAMESPACE
 

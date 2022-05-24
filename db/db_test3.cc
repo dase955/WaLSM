@@ -110,12 +110,8 @@ unsigned long fnvhash64(int64_t val) {
   return hashval > 0 ? hashval : -hashval;
 }
 
+int* arr = new int[total_count];
 std::atomic<int64_t> counter{0};
-std::string next_key() {
-  auto keynum = fnvhash64(counter++);
-  std::string key = std::to_string(keynum);
-  return "user" + key;
-}
 
 std::string next_key(int64_t c) {
   auto keynum = fnvhash64(c);
@@ -123,15 +119,50 @@ std::string next_key(int64_t c) {
   return "user" + key;
 }
 
-void MultiThreadTest(DB *db, int thread_id) {
+void PutThread(DB *db) {
   for (int i = 0; i < count_per_thread; ++i) {
-    std::string key = next_key();
+    int64_t c = counter++;
+    assert(arr[c] == 0);
+    auto keynum = fnvhash64(c);
+    std::string key = "user" + std::to_string(keynum);
     std::string value = repeat(key);
     ASSERT_OK(db->Put(WriteOptions(), key, value));
+    arr[c] = 1;
+  }
+}
+
+void GetThread(DB *db) {
+  while (true) {
+    int cur_counter = counter.load(std::memory_order_relaxed);
+    if (cur_counter > total_count - 10000) {
+      break;
+    }
+
+    if (cur_counter <= 50000) {
+      continue;
+    }
+
+    std::uniform_int_distribution<long> dist {1, cur_counter - 50000};
+    std::random_device rd;
+    std::default_random_engine rng {rd()};
+
+    auto c = dist(rng);
+    assert(arr[c] == 1);
+    std::string key = next_key(c);
+    std::string res;
+    std::string expected = repeat(key);
+    auto status = db->Get(ReadOptions(), key, &res);
+    ASSERT_TRUE(!status.ok() || res == expected);
+    if (!status.ok()) {
+      status = db->Get(ReadOptions(), key, &res);
+      std::cout << key << " Error!" << std::endl;
+    }
   }
 }
 
 TEST_F(DBTest3, MockEnvTest) {
+  memset(arr, 0, sizeof(int) * total_count);
+
   Options options;
   options.create_if_missing = true;
   options.enable_pipelined_write = true;
@@ -146,23 +177,25 @@ TEST_F(DBTest3, MockEnvTest) {
 
   std::thread threads[thread_num];
   std::vector<std::string> sampled_keys[thread_num];
-  int n = 0;
   for (auto& thread : threads) {
-    thread = std::thread(MultiThreadTest, db, n++);
+    thread = std::thread(PutThread, db);
   }
 
   for (auto & thread : threads) {
     thread.join();
   }
 
+  std::this_thread::sleep_for(std::chrono::seconds(30));
+
   std::cout << "Start test get" << std::endl;
-  for (int i = 0; i < total_count; i += 4) {
+  for (int i = 0; i < total_count; i += 2) {
     std::string key = next_key(i);
     std::string res;
     std::string expected = repeat(key);
     auto status = db->Get(ReadOptions(), key, &res);
     ASSERT_TRUE(!status.ok() || res == expected );
     if (!status.ok()) {
+      status = db->Get(ReadOptions(), key, &res);
       std::cout << key << " Error!" << std::endl;
     }
   }
@@ -200,6 +233,53 @@ TEST_F(DBTest3, MockEnvTest2) {
   std::cout << "Test get done" << std::endl;
 
   db->Close();
+  delete db;
+}
+
+TEST_F(DBTest3, MockEnvTest3) {
+  Options options;
+  options.create_if_missing = true;
+  options.enable_pipelined_write = true;
+
+  options.compaction_threshold = 1024 << 20;
+  options.vlog_force_gc_ratio_ = 0.5;
+  options.OptimizeLevelStyleCompaction();
+
+  DB* db;
+
+  ASSERT_OK(DB::Open(options, "/tmp/db_test", &db));
+
+  std::thread read_threads[thread_num];
+  std::thread write_threads[thread_num];
+  std::vector<std::string> sampled_keys[thread_num];
+  for (int i = 0; i < thread_num; ++i) {
+    write_threads[i] = std::thread(PutThread, db);
+    read_threads[i] = std::thread(GetThread, db);
+  }
+
+  for (auto & thread : read_threads) {
+    thread.join();
+  }
+
+  for (auto & thread : write_threads) {
+    thread.join();
+  }
+
+  std::cout << "Start test get" << std::endl;
+  for (int i = 0; i < total_count; i += 4) {
+    std::string key = next_key(i);
+    std::string res;
+    std::string expected = repeat(key);
+    auto status = db->Get(ReadOptions(), key, &res);
+    ASSERT_TRUE(!status.ok() || res == expected );
+    if (!status.ok()) {
+      std::cout << key << " Error!" << std::endl;
+    }
+  }
+  std::cout << "Test get done" << std::endl;
+
+  db->Close();
+
   delete db;
 }
 

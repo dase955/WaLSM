@@ -6,6 +6,10 @@
 
 #include <rocksdb/rocksdb_namespace.h>
 
+#ifdef USE_PMEM
+#include <libpmem.h>
+#endif
+
 namespace ROCKSDB_NAMESPACE {
 
 #ifndef ART_LITTLE_ENDIAN
@@ -100,5 +104,30 @@ namespace ROCKSDB_NAMESPACE {
 
 // TEMP_LAYER is for groups doing compaction.
 #define TEMP_LAYER (-2)
+
+/////////////////////////////////////////////////////
+// PMem
+
+#define MEMORY_BARRIER __asm__ volatile("mfence":::"memory")
+
+#ifndef USE_PMEM
+#define MEMORY_PATH "/tmp/nodememory"
+
+#define MEMCPY(des, src, size, flag) memcpy((des), (src), (size))
+#define PERSIST(ptr, len)
+#define FLUSH(addr, len)
+#define NVM_BARRIER
+#define CLWB(ptr, len)
+#else
+#define MEMORY_PATH "/mnt/chen/nodememory"
+
+#define MEMCPY(des, src, size, flags) \
+  pmem_memcpy((des), (src), (size), flags)
+// PERSIST = FLUSH + FENCE
+#define PERSIST(addr, len) pmem_persist((addr), (len))
+#define FLUSH(addr, len) pmem_flush(addr, len)
+#define NVM_BARRIER pmem_drain()
+#define CLWB(ptr, len)
+#endif
 
 }  // namespace ROCKSDB_NAMESPACE

@@ -333,15 +333,15 @@ InnerNode* FindChild(InnerNode* node, std::string& key, size_t level,
   if (node->backup_art) {
     assert(backup_level == 0);
     *backup = FindChild(node->backup_art, key[level]);
-    backup_level = level;
+    backup_level = level + 1;
     IncrementBackupRead();
   }
 
-  auto art = node->art;
-  if (!art) {
+  if (!node->art) {
     return nullptr;
   }
 
+  auto art = node->art;
   switch (art->art_type_) {
     case kNode4:
       return FindChildInNode4(art, key[level]);

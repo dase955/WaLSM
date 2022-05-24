@@ -63,7 +63,7 @@ void FlushBuffer(InnerNode* leaf, int row) {
   MEMCPY(finger_flush_start, fingerprints_copy, 16,
          PMEM_F_MEM_NODRAIN | PMEM_F_MEM_NONTEMPORAL);
 
-  MEMORY_BARRIER;
+  NVM_BARRIER;
 
   // Write metadata
   uint64_t hdr = node->meta.header;
@@ -284,7 +284,7 @@ void GlobalMemtable::InitFirstLevel() {
 
   FLUSH(root_->nvm_node_, CACHE_LINE_SIZE);
 
-  MEMORY_BARRIER;
+  NVM_BARRIER;
 }
 
 void GlobalMemtable::Put(Slice& slice, uint64_t base_vptr, size_t count) {
@@ -390,19 +390,17 @@ LocalRestart:
 
 bool GlobalMemtable::Get(std::string& key, std::string& value, Status* s) {
   size_t max_level = key.length();
-  size_t level = 0;
+  size_t level = 1;
   InnerNode* backup_node = nullptr;
   size_t backup_level = 0;
-  InnerNode* current = root_;
+  InnerNode* current = FindChild(root_, key[0]);
 
+  // assume first level will not become non-leaf again
   bool found = false;
-  while (current) {
+  while (current && !found) {
     if (IS_LEAF(current->status_)) {
       found = FindKeyInInnerNode(current, level, key, value, s);
-      break;
-    }
-
-    if (level == max_level) {
+    } else if (level == max_level) {
       std::shared_lock read_lk(current->vptr_lock_);
 
       // This mean children of current node is waiting to be reclaimed,
@@ -432,6 +430,11 @@ bool GlobalMemtable::Get(std::string& key, std::string& value, Status* s) {
   return found;
 }
 
+#ifdef ROCKSDB_SUPPORT_THREAD_LOCAL
+thread_local uint8_t temp_fingerprints[224] = {0};
+thread_local uint64_t temp_data[448] = {0};
+#endif
+
 void GlobalMemtable::SqueezeNode(InnerNode* leaf) {
   auto node = leaf->nvm_node_;
   auto data = node->data;
@@ -445,8 +448,11 @@ void GlobalMemtable::SqueezeNode(InnerNode* leaf) {
   int32_t prev_size = leaf->estimated_size_;
   int32_t cur_size = 0;
   int count = 0, fpos = 0;
+
+#ifndef ROCKSDB_SUPPORT_THREAD_LOCAL
   uint8_t temp_fingerprints[224] = {0};
   uint64_t temp_data[448] = {0};
+#endif
 
   for (int i = NVM_MAX_SIZE - 1; i >= 0; --i) {
     uint64_t hash = data[(i << 1)];
@@ -471,13 +477,18 @@ void GlobalMemtable::SqueezeNode(InnerNode* leaf) {
   }
 
   assert(fpos <= NVM_MAX_SIZE - 16);
-  assert(count <= (NVM_MAX_SIZE * 2));
+  assert(fpos * 2 == count);
 
   leaf->estimated_size_ = cur_size;
   leaf->heat_group_->UpdateSize(cur_size - prev_size);
 
   int flush_size = ALIGN_UP(fpos, 16);
   int flush_rows = SIZE_TO_ROWS(flush_size);
+  assert(flush_rows <= NVM_MAX_ROWS);
+  assert(flush_size <= NVM_MAX_SIZE);
+
+  memset(temp_data + count, 0, SIZE_TO_BYTES(flush_size - fpos));
+  memset(temp_fingerprints + fpos, 0, flush_size - fpos);
   MEMCPY(node->data, temp_data,
          SIZE_TO_BYTES(flush_size),
          PMEM_F_MEM_NODRAIN | PMEM_F_MEM_NONTEMPORAL);
@@ -485,7 +496,7 @@ void GlobalMemtable::SqueezeNode(InnerNode* leaf) {
          temp_fingerprints, flush_size,
          PMEM_F_MEM_NODRAIN | PMEM_F_MEM_NONTEMPORAL);
 
-  MEMORY_BARRIER;
+  NVM_BARRIER;
 
   uint64_t hdr = node->meta.header;
   SET_SIZE(hdr, flush_size);
@@ -555,11 +566,6 @@ int32_t GlobalMemtable::ReadFromNVM(NVMNode* nvm_node, size_t level,
 
   return final_size - delta;
 }
-
-#ifdef ROCKSDB_SUPPORT_THREAD_LOCAL
-thread_local uint8_t temp_fingerprints[224] = {0};
-thread_local uint64_t temp_data[448] = {0};
-#endif
 
 void GlobalMemtable::SplitLeaf(InnerNode* leaf, size_t level,
                                InnerNode** node_need_split) {
@@ -666,25 +672,26 @@ void GlobalMemtable::SplitLeaf(InnerNode* leaf, size_t level,
     }
   }
 
-  MEMORY_BARRIER;
+  NVM_BARRIER;
 
   std::reverse(new_leaves.begin(), new_leaves.end());
   std::reverse(prefixes.begin(), prefixes.end());
   auto art = AllocateArtAfterSplit(new_leaves, prefixes);
-
-  leaf->art = art;
-  leaf->vptr_ = leaf_vptr;
-  leaf->hash_ = leaf_hash;
-  SET_ART_NON_FULL(leaf->status_);
 
   new_leaves.push_back(final_node);
   InsertSplitInnerNode(leaf, first_node, final_node, level + 1);
   leaf->estimated_size_ = 0;
   InsertNodesToGroup(leaf, new_leaves);
 
-  SET_NON_LEAF(leaf->status_);
+  {
+    std::scoped_lock scoped_lk(leaf->art_rw_lock_, leaf->vptr_lock_);
+    leaf->art = art;
+    leaf->vptr_ = leaf_vptr;
+    leaf->hash_ = leaf_hash;
+    SET_ART_NON_FULL(leaf->status_);
+    SET_NON_LEAF(leaf->status_);
+  }
 
-  //printf("split leaf at level %d\n", (int)level);
 }
 
 // "4b prefix + 4b hash + 8b pointer" OR "4b SeqNum + 4b hash + 8b pointer"

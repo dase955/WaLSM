@@ -1175,8 +1175,8 @@ struct DBOptions {
 
   // A threshold for the max size of a group,
   // larger size will trigger group split.
-  // Default: 9M
-  int group_split_threshold = 9 << 20;
+  // Default: 10M
+  int group_split_threshold = 10 << 20;
 
   // A threshold for the size of a group that can chosen to do compaction.
   // Default: 6M
