@@ -97,10 +97,10 @@ void HeatGroup::UpdateSize(int32_t size) {
   }
 }
 
-void HeatGroup::ResetSize() {
-  auto cur_size = group_size_.load(std::memory_order_acquire);
-  group_size_.fetch_add(-cur_size, std::memory_order_release);
-  UpdateTotalSize(-cur_size);
+void HeatGroup::UpdateSqueezedSize(int32_t squeezed_size) {
+  group_size_.fetch_sub(squeezed_size, std::memory_order_relaxed);
+  UpdateTotalSize(-squeezed_size);
+  UpdateTotalSqueezedSize(squeezed_size);
 }
 
 void HeatGroup::UpdateHeat() {
@@ -395,8 +395,6 @@ void HeatGroupManager::GroupLevelDown() {
 }
 
 void HeatGroupManager::ForceGroupLevelDown() {
-  printf("ForceGroupLevelDown: GlobalDecay increased by 200\n");
-
   if (group_queue_.totalLayers < 6) {
     return;
   }

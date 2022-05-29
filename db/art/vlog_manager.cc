@@ -61,13 +61,14 @@ int SearchVptr(
 auto RecordPrefixSize = WriteBatchInternal::kRecordPrefixSize;
 
 void VLogManager::PopFreeSegment() {
+  while (free_segments_.size() < 8) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+  }
+
   cur_segment_ = GetSegmentFromFreeQueue();
   header_ = (VLogSegmentHeader*)cur_segment_;
   segment_remain_ = vlog_segment_size_ - header_->offset_;
   assert(header_->offset_ < vlog_segment_size_);
-  if (!gc_ && free_segments_.size() < force_gc_ratio_) {
-    gc_cv_.Signal();
-  }
 }
 
 char* VLogManager::GetSegmentFromFreeQueue() {
@@ -90,9 +91,7 @@ void VLogManager::PushToUsedQueue(char* segment) {
 // Why size of vlog header equals vlog_segment_size_ / 128 ?
 // We assume that minimum length of single record is 16 byte,
 VLogManager::VLogManager(const DBOptions& options, bool recovery)
-    : gc_mu_(),
-      gc_cv_(&gc_mu_),
-      thread_stop_(false),
+    : thread_stop_(false),
       vlog_file_size_(options.vlog_file_size),
       vlog_segment_size_(options.vlog_segment_size),
       vlog_segment_num_(vlog_file_size_ / vlog_segment_size_),
@@ -114,7 +113,6 @@ VLogManager::VLogManager(const DBOptions& options, bool recovery)
 
 VLogManager::~VLogManager() {
   thread_stop_ = true;
-  gc_cv_.Signal();
   gc_thread_.join();
 }
 
@@ -125,10 +123,6 @@ void VLogManager::Recover() {
     assert(header->total_count_ >= header->compacted_count_);
     if (header->status_ == kSegmentWriting ||
         header->status_ == kSegmentWritten) {
-
-      if (header->status_ == kSegmentWriting) {
-        printf("Writing page: %p\n", cur_ptr);
-      }
 
       header->status_ = kSegmentWritten;
       FLUSH(cur_ptr, vlog_header_size_);
@@ -309,8 +303,11 @@ void VLogManager::BGWorkGarbageCollection() {
   std::vector<char*> segments;
 
   while (!thread_stop_) {
-    gc_cv_.Wait();
-    gc_ = true;
+    if (free_segments_.size() > force_gc_ratio_) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(5));
+      continue;
+    }
+
     if (thread_stop_) {
       break;
     }
@@ -426,8 +423,6 @@ void VLogManager::BGWorkGarbageCollection() {
 
       gc_pages_.emplace_back((char*)header_gc);
     }
-
-    gc_ = false;
   }
 }
 
@@ -492,7 +487,8 @@ void VLogManager::UpdateBitmap(
         pmemptr_ + vlog_segment_size_ * segment_id);
 
     std::lock_guard status_lk(header->lock.mutex_);
-    if (header->status_ != kSegmentWritten) {
+    if (header->status_ != kSegmentWritten &&
+        header->status_ != kSegmentWriting) {
       continue;
     }
 
@@ -514,7 +510,8 @@ void VLogManager::UpdateBitmap(autovector<RecordIndex>* all_indexes) {
     auto header = (VLogSegmentHeader*)(pmemptr_ + vlog_segment_size_ * i);
 
     std::lock_guard status_lk(header->lock.mutex_);
-    if (header->status_ != kSegmentWritten) {
+    if (header->status_ != kSegmentWritten &&
+        header->status_ != kSegmentWriting) {
       indexes.clear();
       continue;
     }

@@ -22,6 +22,9 @@
 namespace ROCKSDB_NAMESPACE {
 
 std::atomic<int64_t> MemTotalSize{0};
+std::atomic<int64_t> SqueezedSize{0};
+std::atomic<int64_t> CompactedSize{0};
+std::atomic<int64_t> SqueezedSizeInCompaction{0};
 
 std::atomic<int> BackupRead{0};
 
@@ -29,6 +32,10 @@ ThreadPool* SingleCompactionJob::thread_pool = NewThreadPool(4);
 
 void UpdateTotalSize(int32_t update_size) {
   MemTotalSize.fetch_add(update_size, std::memory_order_release);
+}
+
+void UpdateTotalSqueezedSize(int64_t update_size) {
+  SqueezedSize.fetch_add(update_size, std::memory_order_release);
 }
 
 void IncrementBackupRead() {
@@ -156,6 +163,14 @@ void ProcessNodes(InnerNode* parent, std::vector<InnerNode*>& children,
 int64_t Compactor::compaction_threshold_;
 
 Compactor::~Compactor() noexcept {
+  printf("Statistics:\n"
+      "Data remain in nvm:   %zu\n"
+      "Total compacted size: %zu\n"
+      "Total squeezed size:  %zu\n",
+      MemTotalSize.load(std::memory_order_relaxed),
+      CompactedSize.load(std::memory_order_relaxed),
+      SqueezedSize.load(std::memory_order_relaxed));
+
   for (auto job : compaction_jobs_) {
     delete[] job->compacted_indexes;
     delete job;
@@ -208,7 +223,16 @@ void Compactor::BGWorkDoCompaction() {
       break;
     }
 
-    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    std::this_thread::sleep_for(std::chrono::milliseconds(5));
+
+    vlog_manager_->FreeQueue();
+    GetNodeAllocator()->FreeNodes();
+    for (auto job : chosen_jobs_) {
+      for (auto art : job->removed_arts) {
+        DeleteArtNode(art);
+      }
+    }
+    chosen_jobs_.clear();
 
     auto mem_total_size = MemTotalSize.load(std::memory_order_relaxed);
     if (mem_total_size < choose_threshold) {
@@ -267,31 +291,23 @@ void Compactor::BGWorkDoCompaction() {
                 0);
 
 #ifndef NDEBUG
-    float estimate = vlog_manager_->Estimate();
-    printf("%d Compaction done, number of free pages: "
-        "%zu, free vlog pages: %zu, free ratio:%f, size:%zu\n",
-        (int)chosen_jobs_.size(),
+    printf("free pages: "
+        "%zu, %zu(%.2f), size: %zu, %zu, %zu; squeezed in groups %zu\n",
         GetNodeAllocator()->GetNumFreePages(),
-        vlog_manager_->free_segments_.size(), estimate,
-        MemTotalSize.load(std::memory_order_relaxed));
+        vlog_manager_->free_segments_.size(), vlog_manager_->Estimate(),
+        MemTotalSize.load(std::memory_order_relaxed),
+        CompactedSize.load(std::memory_order_relaxed),
+        SqueezedSize.load(std::memory_order_relaxed),
+        SqueezedSizeInCompaction.load(std::memory_order_relaxed));
 #endif
 
-    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    SqueezedSizeInCompaction.store(0);
 
     // Wait all reading in backup nvm node finish,
     // then we can free vlog pages and nodes.
     while (BackupRead.load(std::memory_order_acquire)) {
       std::this_thread::yield();
     }
-
-    vlog_manager_->FreeQueue();
-    GetNodeAllocator()->FreeNodes();
-    for (auto job : chosen_jobs_) {
-      for (auto art : job->removed_arts) {
-        DeleteArtNode(art);
-      }
-    }
-    chosen_jobs_.clear();
   }
 }
 
@@ -307,6 +323,7 @@ void Compactor::CompactionPreprocess(SingleCompactionJob* job) {
   job->vlog_manager_ = vlog_manager_;
 
   int32_t compacted_size = 0;
+  int64_t squeezed_size = 0;
   std::vector<InnerNode*> children;
   InnerNode* cur_parent = nullptr;
 
@@ -335,6 +352,8 @@ void Compactor::CompactionPreprocess(SingleCompactionJob* job) {
     InsertNewNVMNode(cur_node, new_nvm_node);
     compacted_size += cur_node->estimated_size_;
     cur_node->estimated_size_ = 0;
+    squeezed_size += cur_node->squeezed_size_;
+    cur_node->squeezed_size_ = 0;
     memset(cur_node->hll_, 0, 64);
 
     cur_node->share_mutex_.unlock();
@@ -358,6 +377,8 @@ void Compactor::CompactionPreprocess(SingleCompactionJob* job) {
   job->candidates.push_back(nullptr);
   job->group_->group_size_.fetch_add(-compacted_size, std::memory_order_relaxed);
   UpdateTotalSize(-compacted_size);
+  SqueezedSizeInCompaction.fetch_add(squeezed_size, std::memory_order_release);
+  CompactedSize.fetch_add(compacted_size, std::memory_order_release);
 }
 
 void Compactor::CompactionPostprocess(SingleCompactionJob* job) {

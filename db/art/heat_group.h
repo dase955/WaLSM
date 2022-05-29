@@ -75,7 +75,7 @@ struct HeatGroup {
 
   void UpdateSize(int32_t size);
 
-  void ResetSize();
+  void UpdateSqueezedSize(int32_t size);
 
   void UpdateHeat();
 

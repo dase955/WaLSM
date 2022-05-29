@@ -27,7 +27,7 @@ InnerNode::InnerNode()
 
       nvm_node_(nullptr), backup_nvm_node_(nullptr),
       support_node_(nullptr), next_node_(nullptr),
-      vptr_(0), estimated_size_(0),
+      vptr_(0), estimated_size_(0), squeezed_size_(0),
       status_(0), oldest_key_time_(0) {
   memset(hll_, 0, 64);
   memset(buffer_, 0, 256);
@@ -480,7 +480,8 @@ void GlobalMemtable::SqueezeNode(InnerNode* leaf) {
   assert(fpos * 2 == count);
 
   leaf->estimated_size_ = cur_size;
-  leaf->heat_group_->UpdateSize(cur_size - prev_size);
+  leaf->squeezed_size_ += (prev_size - cur_size);
+  leaf->heat_group_->UpdateSqueezedSize(prev_size - cur_size);
 
   int flush_size = ALIGN_UP(fpos, 16);
   int flush_rows = SIZE_TO_ROWS(flush_size);

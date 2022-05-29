@@ -106,6 +106,8 @@ int64_t GetMemTotalSize();
 
 void UpdateTotalSize(int32_t update_size);
 
+void UpdateTotalSqueezedSize(int64_t update_size);
+
 // record number of read in backup nvm node
 void IncrementBackupRead();
 

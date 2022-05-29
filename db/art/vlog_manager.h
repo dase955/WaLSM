@@ -123,12 +123,8 @@ class VLogManager {
 
   char* segment_for_gc_;
 
-  // Mutex and condvar for gc thread
-  port::Mutex gc_mu_;
-  port::CondVar gc_cv_;
   bool thread_stop_;
   std::thread gc_thread_;
-  bool gc_ = false;
 
   // Parameters
   const uint64_t vlog_file_size_;
