@@ -19,7 +19,7 @@ const uint64_t INVALID_STATUS = 0xFFFFFFFFL;
 
 struct QValue {
   double q_k, q_m;
-  QValue(double q_k, double q_m) : q_k(q_k), q_m(q_m) {}
+  QValue(double q_keep, double q_merge) : q_k(q_keep), q_m(q_merge) {}
 };
 
 struct QState {

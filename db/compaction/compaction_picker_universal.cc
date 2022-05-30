@@ -96,11 +96,9 @@ class UniversalCompactionBuilder {
   Compaction* PickCompactionToOldest(size_t start_index,
                                      CompactionReason compaction_reason);
 
-  // Try to pick periodic compaction. The caller should only call it
-  // if there is at least one file marked for periodic compaction.
-  // null will be returned if no such a compaction can be formed
-  // because some files are being compacted.
-  Compaction* PickPeriodicCompaction();
+  Compaction* PickCompactionForL0();
+
+  Compaction* PickCompactionSortedRunsTrigger(size_t max_runs);
 
   // Used in universal compaction when the enabled_trivial_move
   // option is set. Checks whether there are any overlapping files
@@ -268,9 +266,6 @@ bool UniversalCompactionPicker::NeedsCompaction(
   if (vstorage->GetL0CompactionScore() >= 1.0) {
     return true;
   }
-  if (!vstorage->FilesMarkedForPeriodicCompaction().empty()) {
-    return true;
-  }
   if (!vstorage->FilesMarkedForCompaction().empty()) {
     return true;
   }
@@ -392,13 +387,11 @@ UniversalCompactionBuilder::CalculateSortedRuns(
 // Universal style of compaction. Pick files that are contiguous in
 // time-range to compact.
 Compaction* UniversalCompactionBuilder::PickCompaction() {
-  // TODO: update universal compaction
   score_ = vstorage_->GetL0CompactionScore();
   sorted_runs_ = CalculateSortedRuns(*vstorage_);
 
-  if (sorted_runs_.size() == 0 ||
-      (vstorage_->FilesMarkedForPeriodicCompaction().empty() &&
-       vstorage_->FilesMarkedForCompaction().empty() &&
+  if (sorted_runs_.empty() ||
+      (vstorage_->FilesMarkedForCompaction().empty() &&
        sorted_runs_.size() < (unsigned int)mutable_cf_options_
                                  .level0_file_num_compaction_trigger)) {
     ROCKS_LOG_BUFFER(log_buffer_, "[%s] Universal: nothing to do\n",
@@ -407,85 +400,24 @@ Compaction* UniversalCompactionBuilder::PickCompaction() {
         "UniversalCompactionBuilder::PickCompaction:Return", nullptr);
     return nullptr;
   }
+
   VersionStorageInfo::LevelSummaryStorage tmp;
   ROCKS_LOG_BUFFER_MAX_SZ(
       log_buffer_, 3072,
       "[%s] Universal: sorted runs: %" ROCKSDB_PRIszt " files: %s\n",
       cf_name_.c_str(), sorted_runs_.size(), vstorage_->LevelSummary(&tmp));
 
+  for (auto& run : sorted_runs_) {
+    ROCKS_LOG_BUFFER_MAX_SZ(
+        log_buffer_, 3072,
+        "RUNS level:%d size:%llu\n", run.level, run.size);
+  }
+
   Compaction* c = nullptr;
-  // Periodic compaction has higher priority than other type of compaction
-  // because it's a hard requirement.
-  if (!vstorage_->FilesMarkedForPeriodicCompaction().empty()) {
-    // Always need to do a full compaction for periodic compaction.
-    c = PickPeriodicCompaction();
-  }
 
-  // Check for size amplification.
-  if (c == nullptr &&
-      sorted_runs_.size() >=
-          static_cast<size_t>(
-              mutable_cf_options_.level0_file_num_compaction_trigger)) {
-    if ((c = PickCompactionToReduceSizeAmp()) != nullptr) {
-      ROCKS_LOG_BUFFER(log_buffer_, "[%s] Universal: compacting for size amp\n",
-                       cf_name_.c_str());
-    } else {
-      // Size amplification is within limits. Try reducing read
-      // amplification while maintaining file size ratios.
-      unsigned int ratio =
-          mutable_cf_options_.compaction_options_universal.size_ratio;
-
-      if ((c = PickCompactionToReduceSortedRuns(ratio, UINT_MAX)) != nullptr) {
-        ROCKS_LOG_BUFFER(log_buffer_,
-                         "[%s] Universal: compacting for size ratio\n",
-                         cf_name_.c_str());
-      } else {
-        // Size amplification and file size ratios are within configured limits.
-        // If max read amplification is exceeding configured limits, then force
-        // compaction without looking at filesize ratios and try to reduce
-        // the number of files to fewer than level0_file_num_compaction_trigger.
-        // This is guaranteed by NeedsCompaction()
-        assert(sorted_runs_.size() >=
-               static_cast<size_t>(
-                   mutable_cf_options_.level0_file_num_compaction_trigger));
-        // Get the total number of sorted runs that are not being compacted
-        int num_sr_not_compacted = 0;
-        for (size_t i = 0; i < sorted_runs_.size(); i++) {
-          if (!sorted_runs_[i].being_compacted) {
-            num_sr_not_compacted++;
-          }
-        }
-
-        // The number of sorted runs that are not being compacted is greater
-        // than the maximum allowed number of sorted runs
-        if (num_sr_not_compacted >
-            mutable_cf_options_.level0_file_num_compaction_trigger) {
-          unsigned int num_files =
-              num_sr_not_compacted -
-              mutable_cf_options_.level0_file_num_compaction_trigger + 1;
-          if ((c = PickCompactionToReduceSortedRuns(UINT_MAX, num_files)) !=
-              nullptr) {
-            ROCKS_LOG_BUFFER(log_buffer_,
-                             "[%s] Universal: compacting for file num -- %u\n",
-                             cf_name_.c_str(), num_files);
-          }
-        }
-      }
-    }
-  }
-
-  if (c == nullptr) {
-    if ((c = PickDeleteTriggeredCompaction()) != nullptr) {
-      ROCKS_LOG_BUFFER(log_buffer_,
-                       "[%s] Universal: delete triggered compaction\n",
-                       cf_name_.c_str());
-    }
-  }
-
-  if (c == nullptr) {
-    TEST_SYNC_POINT_CALLBACK(
-        "UniversalCompactionBuilder::PickCompaction:Return", nullptr);
-    return nullptr;
+  if (sorted_runs_.size() >=
+      static_cast<size_t>(mutable_cf_options_.level0_file_num_compaction_trigger)) {
+    c = PickCompactionForL0();
   }
 
   if (mutable_cf_options_.compaction_options_universal.allow_trivial_move ==
@@ -1074,71 +1006,73 @@ Compaction* UniversalCompactionBuilder::PickCompactionToOldest(
       score_, false /* deletion_compaction */, compaction_reason);
 }
 
-Compaction* UniversalCompactionBuilder::PickPeriodicCompaction() {
-  ROCKS_LOG_BUFFER(log_buffer_, "[%s] Universal: Periodic Compaction",
-                   cf_name_.c_str());
+// For L0 sorted runs number compaction trigger
+Compaction* UniversalCompactionBuilder::PickCompactionForL0() {
+  assert(!sorted_runs_.empty());
 
-  // In universal compaction, sorted runs contain older data are almost always
-  // generated earlier too. To simplify the problem, we just try to trigger
-  // a full compaction. We start from the oldest sorted run and include
-  // all sorted runs, until we hit a sorted already being compacted.
-  // Since usually the largest (which is usually the oldest) sorted run is
-  // included anyway, doing a full compaction won't increase write
-  // amplification much.
-
-  // Get some information from marked files to check whether a file is
-  // included in the compaction.
-
-  size_t start_index = sorted_runs_.size();
-  while (start_index > 0 && !sorted_runs_[start_index - 1].being_compacted) {
-    start_index--;
-  }
-  if (start_index == sorted_runs_.size()) {
-    return nullptr;
+  int num_sr_not_compacted = 0;
+  for (size_t i = 0; i < sorted_runs_.size(); i++) {
+    if (sorted_runs_[i].level == 0 && !sorted_runs_[i].being_compacted) {
+      num_sr_not_compacted++;
+    }
   }
 
-  // There is a rare corner case where we can't pick up all the files
-  // because some files are being compacted and we end up with picking files
-  // but none of them need periodic compaction. Unless we simply recompact
-  // the last sorted run (either the last level or last L0 file), we would just
-  // execute the compaction, in order to simplify  the logic.
-  if (start_index == sorted_runs_.size() - 1) {
-    bool included_file_marked = false;
-    int start_level = sorted_runs_[start_index].level;
-    FileMetaData* start_file = sorted_runs_[start_index].file;
-    for (const std::pair<int, FileMetaData*>& level_file_pair :
-         vstorage_->FilesMarkedForPeriodicCompaction()) {
-      if (start_level != 0) {
-        // Last sorted run is a level
-        if (start_level == level_file_pair.first) {
-          included_file_marked = true;
-          break;
-        }
+  if (num_sr_not_compacted >=
+      mutable_cf_options_.level0_file_num_compaction_trigger) {
+    uint64_t estimated_total_size = 0;
+    const int output_level = vstorage_->num_levels() - 1,
+              start_level = 0;
+
+    // initialize inputs levels
+    std::vector<CompactionInputFiles> inputs(vstorage_->num_levels());
+    for (size_t i = 0; i < inputs.size(); ++i) {
+      inputs[i].level = start_level + static_cast<int>(i);
+    }
+
+    for (size_t i = 0; i < sorted_runs_.size(); i++) {
+      auto& picking_sr = sorted_runs_[i];
+      FileMetaData* picking_file = picking_sr.file;
+      if (sorted_runs_[i].level == 0
+          && !sorted_runs_[i].being_compacted) {
+        estimated_total_size += sorted_runs_[i].size;
+        inputs[0].files.push_back(picking_file);
       } else {
-        // Last sorted run is a L0 file.
-        if (start_file == level_file_pair.second) {
-          included_file_marked = true;
-          break;
-        }
+//        auto& files = inputs[picking_sr.level - start_level].files;
+//        for (auto* f : vstorage_->LevelFiles(sorted_runs_[i].level)) {
+//          files.push_back(f);
+//        }
       }
+      char file_num_buf[256];
+      picking_sr.DumpSizeInfo(file_num_buf, sizeof(file_num_buf), i);
+      ROCKS_LOG_BUFFER(log_buffer_, "[%s] Universal: Picking %s",
+                       cf_name_.c_str(), file_num_buf);
     }
-    if (!included_file_marked) {
-      ROCKS_LOG_BUFFER(log_buffer_,
-                       "[%s] Universal: Cannot form a compaction covering file "
-                       "marked for periodic compaction",
-                       cf_name_.c_str());
-      return nullptr;
-    }
+
+    uint32_t path_id =
+        GetPathId(ioptions_, mutable_cf_options_, estimated_total_size);
+    return new Compaction(
+        vstorage_, ioptions_, mutable_cf_options_, mutable_db_options_,
+        std::move(inputs), output_level,
+        MaxFileSizeForLevel(mutable_cf_options_, output_level,
+                            kCompactionStyleUniversal),
+        LLONG_MAX, path_id,
+        GetCompressionType(ioptions_, vstorage_, mutable_cf_options_,
+                           output_level, 1, true /* enable_compression */),
+        GetCompressionOptions(mutable_cf_options_, vstorage_, output_level,
+                              true /* enable_compression */),
+        /* max_subcompactions */ 0, /* grandparents */ {}, /* is manual */ false,
+        score_, false /* deletion_compaction */, CompactionReason::kUniversalSortedRunNum
+        );
   }
 
-  Compaction* c = PickCompactionToOldest(start_index,
-                                         CompactionReason::kPeriodicCompaction);
-
-  TEST_SYNC_POINT_CALLBACK(
-      "UniversalCompactionPicker::PickPeriodicCompaction:Return", c);
-
-  return c;
+  return nullptr;
 }
+
+Compaction* UniversalCompactionBuilder::
+    PickCompactionSortedRunsTrigger(size_t max_runs) {
+  return nullptr;
+}
+
 }  // namespace ROCKSDB_NAMESPACE
 
 #endif  // !ROCKSDB_LITE

@@ -339,13 +339,13 @@ class VersionBuilder::Rep {
           }
 
           // Make sure there is no overlap in levels > 0
-          if (vstorage->InternalComparator()->Compare(f1->largest,
-                                                      f2->smallest) >= 0) {
-            return Status::Corruption(
-                "L" + NumberToString(level) + " have overlapping ranges " +
-                (f1->largest).DebugString(true) + " vs. " +
-                (f2->smallest).DebugString(true));
-          }
+//          if (vstorage->InternalComparator()->Compare(f1->largest,
+//                                                      f2->smallest) >= 0) {
+//            return Status::Corruption(
+//                "L" + NumberToString(level) + " have overlapping ranges " +
+//                (f1->largest).DebugString(true) + " vs. " +
+//                (f2->smallest).DebugString(true));
+//          }
         }
       }
     }

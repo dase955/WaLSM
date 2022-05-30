@@ -215,10 +215,6 @@ class VersionStorageInfo {
   // only work for level and fifo
   double CompactionScore(int) const { return 0.0; }
 
-  double UniversalCompactionScore(int, int) const {
-    return 0.0;
-  }
-
   double GetL0CompactionScore() const { return l0_compaction_score; }
 
   void SetL0CompactionScore(double val) { l0_compaction_score = val; }
@@ -365,9 +361,6 @@ class VersionStorageInfo {
         data_size_ += f->fd.table_reader->ApproximateSize(largest_, smallest_,
                                                           kUncategorized);
       }
-      std::cout << "partition " << smallest_.ToString()
-                << "size " << data_size_ << std::endl
-              << " this file size " << f->fd.file_size << std::endl;
     }
 
     FilePartition* Split() {
@@ -544,7 +537,7 @@ class VersionStorageInfo {
     assert(finalized_);
     return files_marked_for_periodic_compaction_;
   }
-
+//
   void TEST_AddFileMarkedForPeriodicCompaction(int level, FileMetaData* f) {
     files_marked_for_periodic_compaction_.emplace_back(level, f);
   }
