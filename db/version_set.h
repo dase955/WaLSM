@@ -421,8 +421,6 @@ class VersionStorageInfo {
       if (kv.second->Oversize(threshold)) {
         FilePartition* next = kv.second->Split();
         if (next != nullptr) {
-          std::cout << "Add new partition: " << next->smallest_.ToString()
-                                                << std::endl;
           toAdd.push_back(next);
         }
       }
