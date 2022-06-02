@@ -648,7 +648,7 @@ struct AdvancedColumnFamilyOptions {
   // Default: true
   //
   // Dynamically changeable through SetOptions() API
-  bool check_flush_compaction_key_order = true;
+  bool check_flush_compaction_key_order = false;
 
   // After writing every SST file, reopen it and read all the keys.
   // Checks the hash of all of the keys and values written versus the

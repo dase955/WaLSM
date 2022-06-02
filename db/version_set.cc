@@ -151,23 +151,23 @@ class FilePicker {
   FdWithKeyRange* GetNextFile() {
     if (curr_file_level_ == nullptr) {
       curr_file_level_ = &(*level_files_brief_)[curr_level_];
+      curr_index_in_curr_level_ = 0;
     }
 
     if (curr_index_in_curr_level_ >= curr_file_level_->num_files) {
-      curr_level_++;
+      pickNextLevel();
       curr_index_in_curr_level_ = 0;
-      while ((*level_files_brief_)[curr_level_].num_files == 0 &&
-             curr_level_ < num_levels_ - 1) {
-        curr_level_++;
+      while (curr_level_ != UINT_MAX &&
+             (*level_files_brief_)[curr_level_].num_files == 0) {
+        pickNextLevel();
       }
     }
-    if (curr_level_ >= num_levels_) {
+    if (curr_level_ == UINT_MAX) {
       return nullptr;
     }
 
     curr_file_level_ = &(*level_files_brief_)[curr_level_];
-    hit_file_level_ = curr_level_;
-    returned_file_level_ = curr_level_;
+    hit_file_level_ = returned_file_level_ = curr_level_;
     FdWithKeyRange* ret = &curr_file_level_->files[curr_index_in_curr_level_];
     is_hit_file_last_in_level_ =
         curr_index_in_curr_level_ == curr_file_level_->num_files - 1;
@@ -207,6 +207,16 @@ class FilePicker {
 #ifndef NDEBUG
   FdWithKeyRange* prev_file_;
 #endif
+
+  void pickNextLevel() {
+    if (curr_level_ == 0) {
+      curr_level_ = num_levels_ - 1;
+    } else if (curr_level_ == 1) {
+      curr_level_ = UINT_MAX;
+    } else if (curr_level_ != UINT_MAX) {
+      curr_level_--;
+    }
+  }
 };
 
 class FilePickerMultiGet {
@@ -2293,30 +2303,6 @@ void VersionStorageInfo::EstimateCompactionBytesNeeded(
   }
 }
 
-//namespace {
-//uint32_t GetExpiredTtlFilesCount(const ImmutableCFOptions& ioptions,
-//                                 const MutableCFOptions& mutable_cf_options,
-//                                 const std::vector<FileMetaData*>& files) {
-//  uint32_t ttl_expired_files_count = 0;
-//
-//  int64_t _current_time;
-//  auto status = ioptions.env->GetCurrentTime(&_current_time);
-//  if (status.ok()) {
-//    const uint64_t current_time = static_cast<uint64_t>(_current_time);
-//    for (FileMetaData* f : files) {
-//      if (!f->being_compacted) {
-//        uint64_t oldest_ancester_time = f->TryGetOldestAncesterTime();
-//        if (oldest_ancester_time != 0 &&
-//            oldest_ancester_time < (current_time - mutable_cf_options.ttl)) {
-//          ttl_expired_files_count++;
-//        }
-//      }
-//    }
-//  }
-//  return ttl_expired_files_count;
-//}
-//}  // anonymous namespace
-
 void VersionStorageInfo::ComputeCompactionScore(
     const ImmutableCFOptions& immutable_cf_options,
     const MutableCFOptions& mutable_cf_options) {
@@ -2331,75 +2317,36 @@ void VersionStorageInfo::ComputeCompactionScore(
   l0_compaction_score = static_cast<double>(num_sorted_runs) /
                         mutable_cf_options.level0_file_num_compaction_trigger;
 
-  for (auto& kv : partitions_map_) {
-    FilePartition* p = kv.second;
-    for (int level = 1; level <= MaxInputLevel(); level++) {
-      double score = 0.0;
-      // Compute the ratio of current size to size limit.
-      uint64_t level_bytes_no_compacting = 0;
-      for (auto f : files_[level]) {
-        if (!f->being_compacted) {
-          level_bytes_no_compacting += f->compensated_file_size;
-        }
-      }
-      score = static_cast<double>(level_bytes_no_compacting) /
-              MaxBytesForLevel(level);
-      p->compaction_level_[level] = level;
-      p->compaction_score_[level] = score;
-    }
-  }
-
-  // sort all the levels based on their score. Higher scores get listed
-  // first. Use bubble sort because the number of entries are small.
-  for (auto& kv : partitions_map_) {
-    auto* p = kv.second;
-    auto& compaction_score_ = p->compaction_score_;
-    auto& compaction_level_ = p->compaction_level_;
-    for (int i = 0; i < num_levels() - 2; i++) {
-      for (int j = i + 1; j < num_levels() - 1; j++) {
-        if (compaction_score_[i] < compaction_score_[j]) {
-          double score = compaction_score_[i];
-          int level = compaction_level_[i];
-          compaction_score_[i] = compaction_score_[j];
-          compaction_level_[i] = compaction_level_[j];
-          compaction_score_[j] = score;
-          compaction_level_[j] = level;
-        }
-      }
-    }
-  }
   ComputeFilesMarkedForCompaction();
-  ComputeBottommostFilesMarkedForCompaction();
-  if (mutable_cf_options.ttl > 0) {
-    ComputeExpiredTtlFiles(immutable_cf_options, mutable_cf_options.ttl);
-  }
-  if (mutable_cf_options.periodic_compaction_seconds > 0) {
-    ComputeFilesMarkedForPeriodicCompaction(
-        immutable_cf_options, mutable_cf_options.periodic_compaction_seconds);
-  }
   EstimateCompactionBytesNeeded(mutable_cf_options);
 }
 
 void VersionStorageInfo::ComputeFilesMarkedForCompaction() {
   files_marked_for_compaction_.clear();
-  int last_qualify_level = 0;
 
-  // Do not include files from the last level with data
-  // If table properties collector suggests a file on the last level,
-  // we should not move it to a new level.
-  for (int level = num_levels() - 1; level >= 1; level--) {
-    if (!files_[level].empty()) {
-      last_qualify_level = level - 1;
-      break;
+  for (auto& kv : partitions_map_) {
+    FilePartition* partition = kv.second;
+    uint64_t base_size = 96 * 1024 * 1024L;
+    for (int level = num_levels() - 1; level >= 2; level--) {
+      if (!partition->files_[level].empty() &&
+          partition->files_[level][0]->being_compacted) {
+        base_size *= 4;
+        continue;
+      }
+      if (partition->level_size[level] > base_size) {
+        for (unsigned int i = 0; i < partition->files_[level].size(); ++i) {
+          files_marked_for_compaction_.emplace_back(
+              level, partition->files_[level][i]);
+        }
+        break;
+      }
+      base_size *= 4;
     }
   }
 
-  for (int level = 0; level <= last_qualify_level; level++) {
-    for (auto* f : files_[level]) {
-      if (!f->being_compacted && f->marked_for_compaction) {
-        files_marked_for_compaction_.emplace_back(level, f);
-      }
-    }
+  if (!files_marked_for_compaction_.empty() &&
+      files_marked_for_compaction_[0].second->being_compacted) {
+    files_marked_for_compaction_.clear();
   }
 }
 
@@ -2423,63 +2370,6 @@ void VersionStorageInfo::ComputeExpiredTtlFiles(
         if (oldest_ancester_time > 0 &&
             oldest_ancester_time < (current_time - ttl)) {
           expired_ttl_files_.emplace_back(level, f);
-        }
-      }
-    }
-  }
-}
-
-void VersionStorageInfo::ComputeFilesMarkedForPeriodicCompaction(
-    const ImmutableCFOptions& ioptions,
-    const uint64_t periodic_compaction_seconds) {
-  assert(periodic_compaction_seconds > 0);
-
-  files_marked_for_periodic_compaction_.clear();
-
-  int64_t temp_current_time;
-  auto status = ioptions.env->GetCurrentTime(&temp_current_time);
-  if (!status.ok()) {
-    return;
-  }
-  const uint64_t current_time = static_cast<uint64_t>(temp_current_time);
-
-  // If periodic_compaction_seconds is larger than current time, periodic
-  // compaction can't possibly be triggered.
-  if (periodic_compaction_seconds > current_time) {
-    return;
-  }
-
-  const uint64_t allowed_time_limit =
-      current_time - periodic_compaction_seconds;
-
-  for (int level = 0; level < num_levels(); level++) {
-    for (auto f : files_[level]) {
-      if (!f->being_compacted) {
-        // Compute a file's modification time in the following order:
-        // 1. Use file_creation_time table property if it is > 0.
-        // 2. Use creation_time table property if it is > 0.
-        // 3. Use file's mtime metadata if the above two table properties are 0.
-        // Don't consider the file at all if the modification time cannot be
-        // correctly determined based on the above conditions.
-        uint64_t file_modification_time = f->TryGetFileCreationTime();
-        if (file_modification_time == kUnknownFileCreationTime) {
-          file_modification_time = f->TryGetOldestAncesterTime();
-        }
-        if (file_modification_time == kUnknownOldestAncesterTime) {
-          auto file_path = TableFileName(ioptions.cf_paths, f->fd.GetNumber(),
-                                         f->fd.GetPathId());
-          status = ioptions.env->GetFileModificationTime(
-              file_path, &file_modification_time);
-          if (!status.ok()) {
-            ROCKS_LOG_WARN(ioptions.info_log,
-                           "Can't get file modification time: %s: %s",
-                           file_path.c_str(), status.ToString().c_str());
-            continue;
-          }
-        }
-        if (file_modification_time > 0 &&
-            file_modification_time < allowed_time_limit) {
-          files_marked_for_periodic_compaction_.emplace_back(level, f);
         }
       }
     }

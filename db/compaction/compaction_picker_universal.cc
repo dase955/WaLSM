@@ -82,7 +82,7 @@ class UniversalCompactionBuilder {
 
   Compaction* PickCompactionForL0();
 
-  Compaction* PickCompactionSortedRunsTrigger(size_t max_runs);
+  Compaction* PickCompactionForSizeMarked();
 
   // Used in universal compaction when the enabled_trivial_move
   // option is set. Checks whether there are any overlapping files
@@ -391,17 +391,15 @@ Compaction* UniversalCompactionBuilder::PickCompaction() {
       "[%s] Universal: sorted runs: %" ROCKSDB_PRIszt " files: %s\n",
       cf_name_.c_str(), sorted_runs_.size(), vstorage_->LevelSummary(&tmp));
 
-  for (auto& run : sorted_runs_) {
-    ROCKS_LOG_BUFFER_MAX_SZ(
-        log_buffer_, 3072,
-        "RUNS level:%d size:%llu\n", run.level, run.size);
-  }
-
   Compaction* c = nullptr;
 
   if (sorted_runs_.size() >=
       static_cast<size_t>(mutable_cf_options_.level0_file_num_compaction_trigger)) {
     c = PickCompactionForL0();
+  }
+
+  if (c == nullptr) {
+    c = PickCompactionForSizeMarked();
   }
 
   if (mutable_cf_options_.compaction_options_universal.allow_trivial_move ==
@@ -541,8 +539,42 @@ Compaction* UniversalCompactionBuilder::PickCompactionForL0() {
 }
 
 Compaction* UniversalCompactionBuilder::
-    PickCompactionSortedRunsTrigger(size_t max_runs) {
-  return nullptr;
+    PickCompactionForSizeMarked() {
+  auto& files = vstorage_->FilesMarkedForCompaction();
+  if (files.empty()) {
+    return nullptr;
+  }
+
+  for (auto& p : files) {
+    if (p.second->being_compacted) return nullptr;
+  }
+
+  const int input_level = files[0].first;
+  const int output_level = input_level - 1;
+  uint64_t estimated_total_size = 0;
+  std::vector<CompactionInputFiles> inputs(vstorage_->num_levels());
+  for (int i = 0; i < vstorage_->num_levels(); i++) {
+    inputs[i].level = i;
+  }
+  for (unsigned int i = 0; i < files.size(); i++) {
+    inputs[input_level].files.push_back(files[i].second);
+    estimated_total_size += files[i].second->fd.GetFileSize();
+  }
+
+  uint32_t path_id =
+      GetPathId(ioptions_, mutable_cf_options_, estimated_total_size);
+  return new Compaction(
+      vstorage_, ioptions_, mutable_cf_options_, mutable_db_options_,
+      std::move(inputs), output_level,
+      LLONG_MAX,
+      LLONG_MAX, path_id,
+      GetCompressionType(ioptions_, vstorage_, mutable_cf_options_,
+                         output_level, 1, true /* enable_compression */),
+      GetCompressionOptions(mutable_cf_options_, vstorage_, output_level,
+                            true /* enable_compression */),
+      /* max_subcompactions */ 0, /* grandparents */ {}, /* is manual */ false,
+      score_, false /* deletion_compaction */, CompactionReason::kUniversalSortedRunNum
+  );
 }
 
 }  // namespace ROCKSDB_NAMESPACE

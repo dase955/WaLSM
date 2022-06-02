@@ -164,12 +164,6 @@ class VersionStorageInfo {
   void ComputeExpiredTtlFiles(const ImmutableCFOptions& ioptions,
                               const uint64_t ttl);
 
-  // This computes files_marked_for_periodic_compaction_ and is called by
-  // ComputeCompactionScore()
-  void ComputeFilesMarkedForPeriodicCompaction(
-      const ImmutableCFOptions& ioptions,
-      const uint64_t periodic_compaction_seconds);
-
   // This computes bottommost_files_marked_for_compaction_ and is called by
   // ComputeCompactionScore() or UpdateOldestSnapshot().
   //
@@ -310,8 +304,7 @@ class VersionStorageInfo {
     // are initialized by Finalize().
     // The most critical level to be compacted is listed first
     // These are used to pick the best compaction level
-    std::vector<double> compaction_score_;
-    std::vector<int> compaction_level_;
+    std::vector<uint64_t> level_size;
 
     Slice smallest_;
     Slice largest_;
@@ -324,8 +317,7 @@ class VersionStorageInfo {
 
     FilePartition(int level, Slice smallest)
         : level_(level),
-          compaction_score_(level),
-          compaction_level_(level),
+          level_size(level, 0),
           smallest_(smallest),
           largest_(""),
           files_(new std::vector<FileMetaData*>[level]),
@@ -334,8 +326,7 @@ class VersionStorageInfo {
 
     FilePartition(const FilePartition* another)
         : level_(another->level_),
-          compaction_score_(another->level_),
-          compaction_level_(another->level_),
+          level_size(another->level_, 0),
           smallest_(another->smallest_),
           largest_(another->largest_),
           files_(new std::vector<FileMetaData*>[another->level_]),
@@ -357,9 +348,12 @@ class VersionStorageInfo {
       if (f->smallest.user_key().compare(smallest_) >= 0 &&
           f->largest.user_key().compare(largest_) <= 0) {
         data_size_ += f->fd.file_size;
+        level_size[level] += f->fd.file_size;
       } else if (f->fd.table_reader != nullptr) {
-        data_size_ += f->fd.table_reader->ApproximateSize(largest_, smallest_,
+        uint64_t append_size = f->fd.table_reader->ApproximateSize(largest_, smallest_,
                                                           kUncategorized);
+        data_size_ += append_size;
+        level_size[level] += append_size;
       }
     }
 
