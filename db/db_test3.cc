@@ -208,13 +208,7 @@ class CustomZipfianGenerator {
     }
   }
 
-  std::string HighFreqKey(int i, int f) {
-    auto ret = gen[i + 1]->highestFreqValue(f);
-    std::string s = std::to_string(ret);
-    return prefix + std::string(8 - s.length(), '0') + s;
-  }
-
-  std::string NextKey() {
+  long NextKey() {
     int r = dist(rng);
     long ret = 0;
     if (r <= 10) {
@@ -228,12 +222,10 @@ class CustomZipfianGenerator {
     } else {
       ret = gen[4]->nextValue();
     }
-    std::string s = std::to_string(ret);
-    return prefix + std::string(8 - s.length(), '0') + s;
+    return ret;
   }
 
  private:
-  std::string prefix = "user";
   std::uniform_int_distribution<int> dist;
   std::default_random_engine rng;
   ScrambledZipfianGenerator* gen[5];
@@ -274,6 +266,7 @@ unsigned long fnvhash64(int64_t val) {
     val = val >> 8;
 
     hashval = hashval ^ octet;
+    std::cout << octet << " " << val << " " << hashval << std::endl;
     hashval = hashval * FNV_PRIME_64;
     //hashval = hashval ^ octet;
   }
@@ -282,13 +275,9 @@ unsigned long fnvhash64(int64_t val) {
 
 std::atomic<int64_t> counter{0};
 
-std::string next_key(int64_t c) {
-  auto keynum = fnvhash64(c);
-  std::string key = std::to_string(keynum);
-  return "user" + key;
-}
+std::vector<int> final_samples;
 
-void PutThread(DB *db) {
+void Test1Thread(DB *db) {
   for (int i = 0; i < count_per_thread; ++i) {
     auto keynum = fnvhash64(counter++);
     std::string key = "user" + std::to_string(keynum);
@@ -297,39 +286,69 @@ void PutThread(DB *db) {
   }
 }
 
-void UpdateThread(DB* db) {
+void Test3Thread(DB* db, std::unordered_set<long>& map) {
   CustomZipfianGenerator zipf(100000000);
+  std::string prefix = "user";
   for (int i = 0; i < count_per_thread; ++i) {
-    std::string key = zipf.NextKey();
+    long ret = zipf.NextKey();
+    std::string s = std::to_string(ret);
+    std::string key = prefix + std::string(8 - s.length(), '0') + s;
+    std::string value = repeat(key);
+    db->Put(WriteOptions(), key, value);
+    if (i % 16 == 0) {
+      map.emplace(ret);
+    }
+  }
+}
+
+void Test3(DB* db) {
+  std::thread threads[thread_num];
+  std::unordered_set<long> maps[thread_num];
+  for (int i = 0; i < thread_num; ++i) {
+    threads[i] = std::thread(Test3Thread, db, std::ref(maps[i]));
+  }
+
+  for (auto& thread : threads) {
+    thread.join();
+  }
+
+  std::cout << "Start testing" << std::endl;
+  for (auto& map : maps) {
+    std::string prefix = "user";
+    std::cout << "Test num: " << map.size() << std::endl;
+    for (auto& num : map) {
+      std::string s = std::to_string(num);
+      std::string key = prefix + std::string(8 - s.length(), '0') + s;
+      std::string res;
+      std::string expected = repeat(key);
+      auto status = db->Get(ReadOptions(), key, &res);
+      ASSERT_TRUE(!status.ok() || res == expected);
+      if (!status.ok()) {
+        std::cout << key << " Error!" << std::endl;
+      }
+    }
+  }
+}
+
+void Test4Thread(DB* db) {
+  std::string prefix = "user";
+  for (int i = 0; i < count_per_thread; ++i) {
+    int val = final_samples[counter++];
+    std::string s = std::to_string(val);
+    std::string key = prefix + std::string(9 - s.length(), '0') + s;
     std::string value = repeat(key);
     db->Put(WriteOptions(), key, value);
   }
 }
 
-void GetThread(DB *db) {
-  while (true) {
-    int cur_counter = counter.load(std::memory_order_relaxed);
-    if (cur_counter > total_count - 10000) {
-      break;
-    }
+void Test4(DB* db) {
+  std::thread threads[thread_num];
+  for (int i = 0; i < thread_num; ++i) {
+    threads[i] = std::thread(Test4Thread, db);
+  }
 
-    if (cur_counter <= 50000) {
-      continue;
-    }
-
-    std::uniform_int_distribution<long> dist {1, cur_counter - 50000};
-    std::random_device rd;
-    std::default_random_engine rng {rd()};
-
-    auto c = dist(rng);
-    std::string key = next_key(c);
-    std::string res;
-    std::string expected = repeat(key);
-    auto status = db->Get(ReadOptions(), key, &res);
-    ASSERT_TRUE(!status.ok() || res == expected);
-    if (!status.ok()) {
-      std::cout << key << " Error!" << std::endl;
-    }
+  for (auto& thread : threads) {
+    thread.join();
   }
 }
 
@@ -339,35 +358,44 @@ TEST_F(DBTest3, MockEnvTest) {
   options.enable_pipelined_write = true;
   options.OptimizeLevelStyleCompaction();
 
+  int sample_size = 160000000;
+
+  final_samples.reserve(sample_size);
+  std::uniform_int_distribution<int> dist(0, 1000000000 - 1);
+  std::random_device rd;
+  std::default_random_engine rng = std::default_random_engine{rd()};
+
+  {
+    ZipfianGenerator gen(0, 1000000000L, 0.99, 26.46902820178302);
+    std::unordered_map<int, int> freqs;
+    int left[2] = {400000000, 800000000};
+
+    for (int i = 0; i < sample_size; ++i) {
+      long value = gen.nextValue();
+      assert(value <= 1000000000L);
+      freqs[value]++;
+      final_samples[i] = (int)value;
+    }
+
+    for (auto& value : final_samples) {
+      value = freqs[value] == 1
+                  ? dist(rng) :
+                  (int)(fnvhash64(value) % 50000000) + left[value % 2];
+    }
+  }
+
   DB* db;
 
   ASSERT_OK(DB::Open(options, "/tmp/db_test", &db));
 
-  std::thread threads[thread_num];
-  for (auto& thread : threads) {
-    thread = std::thread(UpdateThread, db);
-  }
-
-  for (auto& thread : threads) {
-    thread.join();
-  }
-
-  CustomZipfianGenerator zipf(100000000);
-  for (int i = 0; i < 4; ++i) {
-    for (int j = 0; j < 3; ++j) {
-      std::string key = zipf.HighFreqKey(i, j);
-      std::string expected = repeat(key);
-      std::string res;
-      auto status = db->Get(ReadOptions(), key, &res);
-    }
-  }
-
+  Test4(db);
 
   db->Close();
 
   delete db;
 }
 
+/*
 TEST_F(DBTest3, MockEnvTest2) {
   Options options;
   options.create_if_missing = true;
@@ -444,6 +472,7 @@ TEST_F(DBTest3, MockEnvTest3) {
 
   delete db;
 }
+*/
 
 }  // namespace ROCKSDB_NAMESPACE
 

@@ -58,7 +58,7 @@ struct InnerNode {
   uint64_t   vptr_;
   uint64_t   hash_;
 
-  std::shared_mutex share_mutex_; // Used for flush and split operation
+  SharedMutex       share_mutex_; // Used for flush and split operation
   RWSpinLock        art_rw_lock_;  // Protect art pointer
   RWSpinLock        link_lock_;   // Protect last child node
   RWSpinLock        vptr_lock_;
@@ -98,6 +98,8 @@ class GlobalMemtable {
                                 bool& stored_in_nvm);
 
  private:
+  void PutRecover(uint64_t vptr);
+
   void Put(Slice& key, KVStruct& kv_info);
 
   bool FindKeyInInnerNode(InnerNode* leaf, size_t level,

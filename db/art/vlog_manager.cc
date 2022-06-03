@@ -354,7 +354,7 @@ void VLogManager::BGWorkGarbageCollection() {
       }
 
       if (!stored_in_nvm) {
-        std::lock_guard vptr_lk(inner_node->vptr_lock_);
+        std::lock_guard<RWSpinLock> vptr_lk(inner_node->vptr_lock_);
 
         // If inner node is leaf node after holding vptr_lock,
         // this record has been stored into node buffer.
@@ -379,7 +379,7 @@ void VLogManager::BGWorkGarbageCollection() {
       }
 
       {
-        std::lock_guard write_lk(inner_node->share_mutex_);
+        std::lock_guard<SharedMutex> write_lk(inner_node->share_mutex_);
 
         // node is split or compacted
         if (unlikely(!IS_LEAF(inner_node->status_))) {
@@ -486,7 +486,7 @@ void VLogManager::UpdateBitmap(
     auto header = (VLogSegmentHeader*)(
         pmemptr_ + vlog_segment_size_ * segment_id);
 
-    std::lock_guard status_lk(header->lock.mutex_);
+    std::lock_guard<SpinMutex> status_lk(header->lock.mutex_);
     if (header->status_ != kSegmentWritten &&
         header->status_ != kSegmentWriting) {
       continue;
@@ -509,7 +509,7 @@ void VLogManager::UpdateBitmap(autovector<RecordIndex>* all_indexes) {
     auto& indexes = all_indexes[i];
     auto header = (VLogSegmentHeader*)(pmemptr_ + vlog_segment_size_ * i);
 
-    std::lock_guard status_lk(header->lock.mutex_);
+    std::lock_guard<SpinMutex> status_lk(header->lock.mutex_);
     if (header->status_ != kSegmentWritten &&
         header->status_ != kSegmentWriting) {
       indexes.clear();

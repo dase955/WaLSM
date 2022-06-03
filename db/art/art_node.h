@@ -79,7 +79,7 @@ void InsertToArtNode(
     InnerNode* current, InnerNode* leaf,
     unsigned char c, bool insert_to_group);
 
-void DeleteInnerNode(InnerNode* inner_node);
+void DeleteInnerNode(InnerNode* inner_node, uint64_t* inode_vptrs, int count);
 
 void DeleteArtNode(ArtNode* art);
 

@@ -6,6 +6,8 @@
 
 #include <cassert>
 #include <unordered_map>
+#include <fcntl.h>
+#include <unistd.h>
 
 #include <db/write_batch_internal.h>
 
@@ -88,7 +90,13 @@ GlobalMemtable::GlobalMemtable(
 }
 
 GlobalMemtable::~GlobalMemtable() {
-  DeleteInnerNode(root_);
+  uint64_t inode_vptrs[262144] = {0};
+  int count = 0;
+  DeleteInnerNode(root_, inode_vptrs, count);
+
+  int fd = open("inode_vptrs", O_CREAT | O_RDWR | O_DIRECT);
+  write(fd, inode_vptrs, 2097152);
+  close(fd);
 }
 
 void CheckHeatGroup(HeatGroup* group) {
@@ -194,8 +202,18 @@ void GlobalMemtable::Recovery() {
   }
   assert(cur == tail);
   assert((char*)(tail->nvm_node_) - (char*)(root_->nvm_node_) == PAGE_SIZE);
-
 #endif
+
+  // Recover vptr in leaf nodes
+  uint64_t inode_vptrs[262144] = {0};
+  int fd = open("inode_vptrs", O_CREAT | O_RDWR | O_DIRECT);
+  read(fd, inode_vptrs, 2097152);
+  close(fd);
+
+  int count = 0;
+  while (count < 262144 && inode_vptrs[count]) {
+    PutRecover(inode_vptrs[count++]);
+  }
 
 }
 
@@ -287,6 +305,25 @@ void GlobalMemtable::InitFirstLevel() {
   NVM_BARRIER;
 }
 
+void GlobalMemtable::PutRecover(uint64_t vptr) {
+  std::string key, value;
+  auto type = vlog_manager_->GetKeyValue(vptr, key, value);
+
+  size_t level = 0;
+  size_t max_level = key.size();
+  InnerNode* current = root_;
+
+  while (true) {
+    current = FindChild(current, key[++level]);
+    if (level == max_level) {
+      uint64_t hash = HashAndPrefix(key.c_str(), key.length(), level);
+      current->hash_ = hash;
+      current->vptr_ = vptr;
+      return;
+    }
+  }
+}
+
 void GlobalMemtable::Put(Slice& slice, uint64_t base_vptr, size_t count) {
   uint64_t vptr = base_vptr;
   uint32_t val_len = 0;
@@ -342,7 +379,7 @@ LocalRestart:
     }
 
     if (level == max_level) {
-      std::lock_guard vptr_lk(current->vptr_lock_);
+      std::lock_guard<RWSpinLock> vptr_lk(current->vptr_lock_);
       if (unlikely(IS_LEAF(current->status_))) {
         goto LocalRestart;
       }
@@ -367,7 +404,7 @@ LocalRestart:
       Rehash(key.data(), key.size(), kv_info.hash_, level + 1);
       InnerNode* leaf = AllocateLeafNode(level + 1, key[level], nullptr);
 
-      std::lock_guard leaf_lk(leaf->opt_lock_);
+      std::lock_guard<OptLock> leaf_lk(leaf->opt_lock_);
 
       ++leaf->status_;
       leaf->buffer_[0] = kv_info.hash_;
@@ -401,7 +438,7 @@ bool GlobalMemtable::Get(std::string& key, std::string& value, Status* s) {
     if (IS_LEAF(current->status_)) {
       found = FindKeyInInnerNode(current, level, key, value, s);
     } else if (level == max_level) {
-      std::shared_lock read_lk(current->vptr_lock_);
+      shared_lock<RWSpinLock> read_lk(current->vptr_lock_);
 
       // This mean children of current node is waiting to be reclaimed,
       // so this node becomes a leaf node again.
@@ -685,7 +722,9 @@ void GlobalMemtable::SplitLeaf(InnerNode* leaf, size_t level,
   InsertNodesToGroup(leaf, new_leaves);
 
   {
-    std::scoped_lock scoped_lk(leaf->art_rw_lock_, leaf->vptr_lock_);
+    std::lock_guard<RWSpinLock> art_lk(leaf->art_rw_lock_);
+    std::lock_guard<RWSpinLock> vptr_lk(leaf->vptr_lock_);
+
     leaf->art = art;
     leaf->vptr_ = leaf_vptr;
     leaf->hash_ = leaf_hash;
@@ -720,7 +759,7 @@ void GlobalMemtable::InsertIntoLeaf(InnerNode* leaf, KVStruct& kv_info,
   {
     // If we use read lock here, we can do concurrent read but block write,
     // if we use write lock here, we block read but allow concurrent write.
-    std::shared_lock<std::shared_mutex> read_lk(leaf->share_mutex_);
+    shared_lock<SharedMutex> read_lk(leaf->share_mutex_);
 
     env_->GetCurrentTime(&leaf->oldest_key_time_);
 
@@ -823,7 +862,7 @@ bool GlobalMemtable::ReadInNVMNode(NVMNode* nvm_node, uint64_t hash,
 bool GlobalMemtable::FindKeyInInnerNode(InnerNode* leaf, size_t level,
                                         std::string& key, std::string& value,
                                         Status* s) {
-  std::shared_lock read_lk(leaf->share_mutex_);
+  shared_lock<SharedMutex> read_lk(leaf->share_mutex_);
 
   std::string found_key;
   ValueType type;

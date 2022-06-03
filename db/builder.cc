@@ -368,7 +368,7 @@ struct CompactionRec {
   }
 };
 
-void ReadAndBuild(SingleCompactionJob* job,
+int64_t ReadAndBuild(SingleCompactionJob* job,
                   TableBuilder* builder,
                   FileMetaData* meta) {
   const size_t kReportFlushIOStatsEvery = 1048576;
@@ -378,6 +378,8 @@ void ReadAndBuild(SingleCompactionJob* job,
   RecordIndex record_index = 0;
   std::vector<std::string>& keys = job->keys_in_node;
   std::vector<CompactionRec> kvs(240);
+
+  int64_t out_kv_size = 0;
 
   for (auto& pair : job->nvm_nodes_and_sizes) {
     auto nvm_node = pair.first;
@@ -409,6 +411,7 @@ void ReadAndBuild(SingleCompactionJob* job,
       builder->Add(*key, it->value);
       meta->UpdateBoundaries(
           *key, it->value, it->seq_num_, kTypeValue);
+      out_kv_size += (it->value.size() + it->key->size() + 16);
     }
 
     // TODO(noetzli): Update stats after flush, too.
@@ -417,6 +420,8 @@ void ReadAndBuild(SingleCompactionJob* job,
           ThreadStatus::FLUSH_BYTES_WRITTEN, IOSTATS(bytes_written));
     }
   }
+
+  return out_kv_size;
 }
 
 Status BuildTableFromArt(
@@ -496,7 +501,7 @@ Status BuildTableFromArt(
         0 /*target_file_size*/, file_creation_time, db_id, db_session_id);
   }
 
-  ReadAndBuild(job, builder, meta);
+  auto out_kv_size = ReadAndBuild(job, builder, meta);
 
   TEST_SYNC_POINT("BuildTable:BeforeFinishBuildTable");
   s = builder->Finish();
@@ -504,7 +509,7 @@ Status BuildTableFromArt(
   if (s.ok()) {
     uint64_t file_size = builder->FileSize();
     meta->fd.file_size = file_size;
-    job->out_file_size = file_size;
+    job->out_file_size = out_kv_size;
     meta->marked_for_compaction = builder->NeedCompact();
     assert(meta->fd.GetFileSize() > 0);
     tp = builder->GetTableProperties(); // refresh now that builder is finished

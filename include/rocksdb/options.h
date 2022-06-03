@@ -1171,7 +1171,7 @@ struct DBOptions {
 
   // Amount of data in global memtable before trigger compaction.
   // Default: 512M
-  int64_t compaction_threshold = 3072LL << 20;
+  int64_t compaction_threshold = 4608LL << 20;
 
   // A threshold for the max size of a group,
   // larger size will trigger group split.

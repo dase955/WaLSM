@@ -7,6 +7,7 @@
 #include <string>
 #include <cstdint>
 #include <iostream>
+#include <fstream>
 
 #include "rocksdb/db.h"
 #include "rocksdb/slice.h"
@@ -115,7 +116,6 @@ class ScrambledZipfianGenerator {
     return min + fnvhash64(f) % itemcount;
   }
 
-
  private:
   static long fnvhash64(long val) {
     //from http://en.wikipedia.org/wiki/Fowler_Noll_Vo_hash
@@ -140,65 +140,17 @@ class ScrambledZipfianGenerator {
 
 };
 
-class CustomZipfianGenerator {
- public:
-  CustomZipfianGenerator(long count) {
-    gen[0] = new ScrambledZipfianGenerator(0, count - 1);
-    gen[1] = new ScrambledZipfianGenerator(1 * count / 10, 2 * count / 10 - 1);
-    gen[2] = new ScrambledZipfianGenerator(2 * count / 10, 3 * count / 10 - 1);
-    gen[3] = new ScrambledZipfianGenerator(4 * count / 10, 5 * count / 10 - 1);
-    gen[4] = new ScrambledZipfianGenerator(8 * count / 10, 9 * count / 10 - 1);
-
-    std::random_device rd;
-    dist = std::uniform_int_distribution<int>{1, 100};
-    rng = std::default_random_engine{rd()};
-  }
-
-  ~CustomZipfianGenerator() {
-    for (auto& g : gen) {
-      delete g;
-    }
-  }
-
-  std::string HighFreqKey(int i, int f) {
-    auto ret = gen[i + 1]->highestFreqValue(f);
-    std::string s = std::to_string(ret);
-    return prefix + std::string(8 - s.length(), '0') + s;
-  }
-
-  std::string NextKey() {
-    int r = dist(rng);
-    long ret = 0;
-    if (r <= 10) {
-      ret = gen[0]->nextValue();
-    } else if (r <= 32) {
-      ret = gen[1]->nextValue();
-    } else if (r <= 54) {
-      ret = gen[2]->nextValue();
-    } else if (r <= 77) {
-      ret = gen[3]->nextValue();
-    } else {
-      ret = gen[4]->nextValue();
-    }
-    std::string s = std::to_string(ret);
-    return prefix + std::string(8 - s.length(), '0') + s;
-  }
-
- private:
-  std::string prefix = "user";
-  std::uniform_int_distribution<int> dist;
-  std::default_random_engine rng;
-  ScrambledZipfianGenerator* gen[5];
-};
-
 ///////////////////////////////////////////////////////////////////////////////
 
-int     thread_num = 32;
-int     total_count = 134217728;
-int     count_per_thread = total_count / thread_num;
+int      thread_num = 32;
+int      total_count = 160000000;
+int      sample_range = 1000000000;
+int      count_per_thread = total_count / thread_num;
 int64_t* completed_count = new int64_t[thread_num * 8];
+std::vector<int> final_samples;
+std::atomic<int64_t> counter{0};
 
-std::string repeat(std::string& str) {
+std::string GenerateValue(std::string& str) {
   int repeat_times = 1024UL / str.length();
   size_t len = str.length() * repeat_times;
   std::string ret;
@@ -228,29 +180,66 @@ unsigned long fnvhash64(int64_t val) {
   return hashval > 0 ? hashval : -hashval;
 }
 
-void PutThread(DB* db, int thread_id) {
+void Test1Thread(DB* db, int thread_id) {
   static std::atomic<int64_t> counter{0};
   thread_id *= 8;
   for (int i = 0; i < count_per_thread; ++i) {
-    std::string key = "user" + std::to_string(fnvhash64(counter++));
-    std::string value = repeat(key);
-    db->Put(WriteOptions(), key, value);
+    auto keynum = fnvhash64(counter++);
+    std::string key = "user" + std::to_string(keynum);
+    std::string value = GenerateValue(key);
+    assert(db->Put(WriteOptions(), key, value).ok());
     ++completed_count[thread_id];
   }
 }
 
-void UpdateThread(DB* db, int thread_id) {
-  CustomZipfianGenerator zipf(100000000);
+// Default YCSB zipfian workload
+void Test2Thread(DB* db, int thread_id) {
+  ScrambledZipfianGenerator zipf(0, total_count);
   thread_id *= 8;
   for (int i = 0; i < count_per_thread; ++i) {
-    std::string key = zipf.NextKey();
-    std::string value = repeat(key);
+    long ret = zipf.nextValue();
+    std::string key = "user" + std::to_string(fnvhash64(ret));
+    std::string value = GenerateValue(key);
     db->Put(WriteOptions(), key, value);
     ++completed_count[thread_id];
   }
 }
 
-void StatisticsThread() {
+void Test3Thread(DB* db, int thread_id) {
+  thread_id *= 8;
+  std::string prefix = "user";
+  for (int i = 0; i < count_per_thread; ++i) {
+    int val = final_samples[counter++];
+    std::string s = std::to_string(val);
+    std::string key = prefix + std::string(9 - s.length(), '0') + s;
+    std::string value = GenerateValue(key);
+    db->Put(WriteOptions(), key, value);
+    ++completed_count[thread_id];
+  }
+}
+
+void UniformThread(DB* db, int thread_id) {
+  std::uniform_int_distribution<int> dist(0, sample_range - 1);
+  std::random_device rd;
+  std::default_random_engine rng = std::default_random_engine{rd()};
+
+  thread_id *= 8;
+  std::string prefix = "user";
+
+  for (int i = 0; i < count_per_thread; ++i) {
+    int val = dist(rng);
+    std::string s = std::to_string(val);
+    std::string key = prefix + std::string(9 - s.length(), '0') + s;
+    std::string value = GenerateValue(key);
+    db->Put(WriteOptions(), key, value);
+    ++completed_count[thread_id];
+  }
+}
+
+void StatisticsThread(std::string file_name) {
+  std::ofstream ofs;
+  ofs.open(file_name, std::ios::out);
+
   int finished = 0;
   int seconds = 0;
   while (finished < total_count - thread_num) {
@@ -259,40 +248,80 @@ void StatisticsThread() {
       new_finished += completed_count[i * 8];
     }
 
-    int delta = (new_finished - finished) / 5;
+    int ops = (new_finished - finished) / 5;
     printf("[%d sec] %d operations; %d current ops/sec\n",
-           seconds, new_finished, delta);
+           seconds, new_finished, ops);
+
+    ofs << seconds << " " << ops << std::endl;
 
     finished = new_finished;
     std::this_thread::sleep_for(std::chrono::seconds(5));
     seconds += 5;
   }
-  memset(completed_count, 0, thread_num * 64);
+
+  ofs.close();
 }
 
-int main() {
-  Options options;
-  options.create_if_missing = true;
-  options.enable_pipelined_write = true;
-  options.OptimizeLevelStyleCompaction();
+typedef void(* TestFunction)(DB*, int);
 
+void DoTest(DB* db, TestFunction test_func, std::string file_name) {
   memset(completed_count, 0, thread_num * 64);
-
-  DB* db;
-  DB::Open(options, "/tmp/db_test", &db);
 
   std::thread threads[thread_num];
   for (int i = 0; i < thread_num; ++i) {
-    threads[i] = std::thread(UpdateThread, db, i);
+    threads[i] = std::thread(test_func, db, i);
   }
 
-  std::thread statistic_thread = std::thread(StatisticsThread);
+  std::thread statistic_thread = std::thread(StatisticsThread, file_name);
 
   for (auto& thread : threads) {
     thread.join();
   }
 
   statistic_thread.join();
+}
+
+TestFunction Functions[3] = {Test1Thread, Test2Thread, Test3Thread};
+
+int main(int argc, char* argv[]) {
+  auto func = Functions[argc == 1 ? 2 : std::atoi(argv[1]) - 1];
+
+  Options options;
+  options.create_if_missing = true;
+  options.enable_pipelined_write = true;
+  options.OptimizeLevelStyleCompaction();
+
+  DB* db;
+  DB::Open(options, "/tmp/db_test", &db);
+
+  // Step 1: uniform
+  DoTest(db, UniformThread, "/tmp/load_ops.txt");
+
+  // Step2: zipfian
+  final_samples.reserve(total_count);
+  std::uniform_int_distribution<int> dist(0, sample_range - 1);
+  std::random_device rd;
+  std::default_random_engine rng = std::default_random_engine{rd()};
+
+  {
+    ZipfianGenerator gen(0, sample_range, 0.99, 26.46902820178302);
+    std::unordered_map<int, int> freqs;
+    int left[2] = {400000000, 800000000};
+
+    for (int i = 0; i < total_count; ++i) {
+      long value = gen.nextValue();
+      freqs[value]++;
+      final_samples[i] = (int)value;
+    }
+
+    for (auto& value : final_samples) {
+      value = freqs[value] == 1
+                  ? dist(rng) :
+                  (int)(fnvhash64(value) % 50000000) + left[value % 2];
+    }
+  }
+
+  DoTest(db, Test3Thread, "/tmp/run_ops.txt");
 
   db->Close();
 

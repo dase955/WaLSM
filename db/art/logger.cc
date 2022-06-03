@@ -24,7 +24,7 @@ void InitLogFile() {
 std::mutex m;
 
 void WriteLog(const char* format, ...) {
-  std::lock_guard write_lk(m);
+  std::lock_guard<std::mutex> write_lk(m);
 
   va_list ap;
   va_start(ap, format);

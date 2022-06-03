@@ -290,7 +290,7 @@ InnerNode* FindChildInNode256(ArtNode* art, unsigned char c) {
 }
 
 InnerNode* FindChild(InnerNode* node, unsigned char c) {
-  std::shared_lock read_lk(node->art_rw_lock_);
+  shared_lock<RWSpinLock> read_lk(node->art_rw_lock_);
 
   if (!node->art) {
     return nullptr;
@@ -328,7 +328,7 @@ InnerNode* FindChild(ArtNode* backup, unsigned char c) {
 
 InnerNode* FindChild(InnerNode* node, std::string& key, size_t level,
                      InnerNode** backup, size_t& backup_level) {
-  std::shared_lock read_lk(node->art_rw_lock_);
+  shared_lock<RWSpinLock> read_lk(node->art_rw_lock_);
 
   if (node->backup_art) {
     assert(backup_level == 0);
@@ -470,7 +470,7 @@ void InsertToArtNode(InnerNode* current, InnerNode* leaf,
   ArtNode* art = nullptr;
 
   {
-    std::lock_guard write_lk(current->art_rw_lock_);
+    std::lock_guard<RWSpinLock> write_lk(current->art_rw_lock_);
 
     if (IS_ART_FULL(current->status_)) {
       ReallocateArtNode(&current->art);
@@ -555,14 +555,14 @@ void DeleteArtNode(ArtNode* art) {
   delete art;
 }
 
-void DeleteInnerNode(InnerNode* inner_node) {
+void DeleteInnerNode(InnerNode* inner_node, uint64_t* inode_vptrs, int count) {
   if (!inner_node) {
     return;
   }
 
   if (IS_LEAF(inner_node->status_)) {
     inner_node->opt_lock_.lock();
-    std::lock_guard write_lk(inner_node->share_mutex_);
+    std::lock_guard<SharedMutex> write_lk(inner_node->share_mutex_);
 
     auto nvm_node = inner_node->nvm_node_;
     MEMCPY(nvm_node->temp_buffer, inner_node->buffer_,
@@ -578,26 +578,30 @@ void DeleteInnerNode(InnerNode* inner_node) {
   inner_node->nvm_node_->meta.node_info = inner_node->vptr_;
   FLUSH(inner_node, CACHE_LINE_SIZE);
 
+  if (inner_node->vptr_) {
+    inode_vptrs[count++] = inner_node->vptr_;
+  }
+
   auto art = inner_node->art;
   if (art->art_type_ == kNode4) {
     auto art4 = (ArtNode4*)art;
     for (int i = 0; i < art->num_children_; ++i) {
-      DeleteInnerNode(art4->children_[i]);
+      DeleteInnerNode(art4->children_[i], inode_vptrs, count);
     }
   } else if (art->art_type_ == kNode16) {
     auto art16 = (ArtNode16*)art;
     for (int i = 0; i < art->num_children_; ++i) {
-      DeleteInnerNode(art16->children_[i]);
+      DeleteInnerNode(art16->children_[i], inode_vptrs, count);
     }
   } else if (art->art_type_ == kNode48) {
     auto art48 = (ArtNode48*)art;
     for (auto& child : art48->children_) {
-      DeleteInnerNode(child);
+      DeleteInnerNode(child, inode_vptrs, count);
     }
   } else {
     auto art256 = (ArtNode256*)art;
     for (auto& child : art256->children_) {
-      DeleteInnerNode(child);
+      DeleteInnerNode(child, inode_vptrs, count);
     }
   }
 

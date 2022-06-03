@@ -7,6 +7,7 @@
 
 #pragma once
 #include <atomic>
+#include <pthread.h>
 #include <rocksdb/rocksdb_namespace.h>
 
 namespace ROCKSDB_NAMESPACE {
@@ -32,12 +33,44 @@ struct OptLock {
 
   bool CheckOrRestart(uint32_t start_read) const;
 
-  // Function for read
-  uint32_t AwaitNodeReadable();
-
   uint32_t GetCurrentVersion() {
     return type_version_lock_.load(std::memory_order_relaxed);
   }
+};
+
+// It is just a copy of RWLatch, but function names are changed.
+class SharedMutex {
+ public:
+  SharedMutex();
+  // No copying allowed
+  SharedMutex(const SharedMutex&) = delete;
+  void operator=(const SharedMutex&) = delete;
+
+  ~SharedMutex();
+
+  void lock_shared();
+  void unlock_shared();
+  void lock();
+  void unlock();
+
+ private:
+  pthread_rwlock_t mu_; // the underlying platform mutex
+};
+
+template<typename T>
+class shared_lock {
+ public:
+  shared_lock(T& mutex)
+      : mutex_(mutex) {
+    mutex_.lock_shared();
+  };
+
+  ~shared_lock() {
+    mutex_.unlock_shared();
+  }
+
+ private:
+  T& mutex_;
 };
 
 }  // namespace ROCKSDB_NAMESPACE

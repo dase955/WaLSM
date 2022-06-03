@@ -84,7 +84,7 @@ else()
 endif()
 
 if( NOT DEFINED CMAKE_CXX_STANDARD )
-  set(CMAKE_CXX_STANDARD 17)
+  set(CMAKE_CXX_STANDARD 11)
 endif()
 
 include(CMakeDependentOption)

@@ -129,7 +129,7 @@ InnerNode* RecoverInnerNode(NVMNode* nvm_node) {
 }
 
 void InsertInnerNode(InnerNode* node, InnerNode* inserted) {
-  std::lock_guard link_lk(node->link_lock_);
+  std::lock_guard<RWSpinLock> link_lk(node->link_lock_);
 
   auto prev_node = node->support_node_;
   inserted->next_node_ = prev_node->next_node_;
@@ -157,7 +157,7 @@ void InsertInnerNode(InnerNode* node, InnerNode* inserted) {
 void InsertSplitInnerNode(InnerNode* node, InnerNode* first_inserted,
                           InnerNode* last_inserted,
                           [[maybe_unused]] size_t prefix_length) {
-  std::lock_guard link_lk(node->link_lock_);
+  std::lock_guard<RWSpinLock> link_lk(node->link_lock_);
 
   auto prev_node = node->support_node_;
   auto prev_nvm_node = prev_node->nvm_node_;
@@ -203,7 +203,7 @@ void InsertNewNVMNode(InnerNode* node, NVMNode* inserted) {
   SET_SIZE(inserted_hdr, 0);
 
   {
-    std::lock_guard link_lk(node->link_lock_);
+    std::lock_guard<RWSpinLock> link_lk(node->link_lock_);
 
     // Add memory barrier to prevent false reading,
     // otherwise we may only read an empty nvm node(inserted)

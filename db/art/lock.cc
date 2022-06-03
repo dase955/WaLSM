@@ -61,18 +61,28 @@ uint32_t OptLock::AwaitUnlocked() {
   }
 }
 
-uint32_t OptLock::AwaitNodeReadable() {
-  uint32_t version;
-  for (size_t tries = 0;; ++tries) {
-    if (((version = type_version_lock_.load(std::memory_order_acquire))
-         & 1) != 1) {
-      return version;
-    }
-    port::AsmVolatilePause();
-    if (tries > 100) {
-      std::this_thread::yield();
-    }
-  }
+SharedMutex::SharedMutex() {
+  pthread_rwlock_init(&mu_, nullptr);
+}
+
+SharedMutex::~SharedMutex() {
+  pthread_rwlock_destroy(&mu_);
+}
+
+void SharedMutex::lock_shared() {
+  pthread_rwlock_rdlock(&mu_);
+}
+
+void SharedMutex::lock() {
+  pthread_rwlock_wrlock(&mu_);
+}
+
+void SharedMutex::unlock_shared() {
+  pthread_rwlock_unlock(&mu_);
+}
+
+void SharedMutex::unlock() {
+  pthread_rwlock_unlock(&mu_);
 }
 
 }  // namespace ROCKSDB_NAMESPACE

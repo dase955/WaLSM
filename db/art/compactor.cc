@@ -61,7 +61,8 @@ void RemoveChildren(InnerNode* parent, InnerNode* child) {
 
   {
     auto heat_group = parent->heat_group_;
-    std::scoped_lock scoped_lock(parent->link_lock_, heat_group->lock);
+    std::lock_guard<RWSpinLock> link_lk(parent->link_lock_);
+    std::lock_guard<std::mutex> heat_lk(heat_group->lock);
 
     InnerNode* next_node = support_node->next_node_;
 
@@ -72,7 +73,7 @@ void RemoveChildren(InnerNode* parent, InnerNode* child) {
       next_node = child->next_node_;
 
       auto after = support_node->next_node_;
-      std::lock_guard next_link_lk(after->link_lock_);
+      std::lock_guard<RWSpinLock> next_link_lk(after->link_lock_);
 
       next_node->next_node_ = after;
       auto next_nvm_node = GetNodeAllocator()->relative(
@@ -89,7 +90,7 @@ void RemoveChildren(InnerNode* parent, InnerNode* child) {
     }
 
     {
-      std::lock_guard next_link_lk(next_node->link_lock_);
+      std::lock_guard<RWSpinLock> next_link_lk(next_node->link_lock_);
       parent->next_node_ = next_node;
       auto next_nvm_node =
           GetNodeAllocator()->relative(next_node->backup_nvm_node_
@@ -115,7 +116,8 @@ void RemoveChildren(InnerNode* parent, InnerNode* child) {
   }
 
   {
-    std::scoped_lock scoped_lock(parent->art_rw_lock_, parent->vptr_lock_);
+    std::lock_guard<RWSpinLock> art_lk(parent->art_rw_lock_);
+    std::lock_guard<RWSpinLock> vptr_lk(parent->vptr_lock_);
 
     parent->backup_art = parent->art;
     parent->art = nullptr;
@@ -137,8 +139,8 @@ void RemoveChildren(InnerNode* parent, InnerNode* child) {
 
 void ProcessNodes(InnerNode* parent, std::vector<InnerNode*>& children,
                   SingleCompactionJob* job) {
-  std::lock_guard opt_lk(parent->opt_lock_);
-  std::lock_guard write_lk(parent->share_mutex_);
+  std::lock_guard<OptLock> opt_lk(parent->opt_lock_);
+  std::lock_guard<SharedMutex> write_lk(parent->share_mutex_);
 
   if (children.size() == parent->art->num_children_) {
     RemoveChildren(parent, children.back());
@@ -391,7 +393,7 @@ void Compactor::CompactionPostprocess(SingleCompactionJob* job) {
   auto candidate = candidates.front();
   candidates.pop_front();
   while (candidate && cur_node != node_after_end) {
-    std::lock_guard link_lk(cur_node->link_lock_);
+    std::lock_guard<RWSpinLock> link_lk(cur_node->link_lock_);
     if (cur_node->next_node_ == candidate) {
       RemoveOldNVMNode(cur_node);
       candidate = candidates.front();
@@ -409,7 +411,7 @@ void Compactor::CompactionPostprocess(SingleCompactionJob* job) {
 
   for (auto parent : job->candidate_parents) {
     assert(parent->backup_art);
-    std::lock_guard art_lk(parent->art_rw_lock_);
+    std::lock_guard<RWSpinLock> art_lk(parent->art_rw_lock_);
     job->removed_arts.push_back(parent->backup_art);
     parent->backup_art = nullptr;
   }
