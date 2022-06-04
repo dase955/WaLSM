@@ -2317,37 +2317,7 @@ void VersionStorageInfo::ComputeCompactionScore(
   l0_compaction_score = static_cast<double>(num_sorted_runs) /
                         mutable_cf_options.level0_file_num_compaction_trigger;
 
-  ComputeFilesMarkedForCompaction();
   EstimateCompactionBytesNeeded(mutable_cf_options);
-}
-
-void VersionStorageInfo::ComputeFilesMarkedForCompaction() {
-  files_marked_for_compaction_.clear();
-
-  for (auto& kv : partitions_map_) {
-    FilePartition* partition = kv.second;
-    uint64_t base_size = 96 * 1024 * 1024L;
-    for (int level = num_levels() - 1; level >= 2; level--) {
-      if (!partition->files_[level].empty() &&
-          partition->files_[level][0]->being_compacted) {
-        base_size *= 4;
-        continue;
-      }
-      if (partition->level_size[level] > base_size) {
-        for (unsigned int i = 0; i < partition->files_[level].size(); ++i) {
-          files_marked_for_compaction_.emplace_back(
-              level, partition->files_[level][i]);
-        }
-        break;
-      }
-      base_size *= 4;
-    }
-  }
-
-  if (!files_marked_for_compaction_.empty() &&
-      files_marked_for_compaction_[0].second->being_compacted) {
-    files_marked_for_compaction_.clear();
-  }
 }
 
 void VersionStorageInfo::ComputeExpiredTtlFiles(

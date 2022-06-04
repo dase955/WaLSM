@@ -155,10 +155,6 @@ class VersionStorageInfo {
   void EstimateCompactionBytesNeeded(
       const MutableCFOptions& mutable_cf_options);
 
-  // This computes files_marked_for_compaction_ and is called by
-  // ComputeCompactionScore()
-  void ComputeFilesMarkedForCompaction();
-
   // This computes ttl_expired_files_ and is called by
   // ComputeCompactionScore()
   void ComputeExpiredTtlFiles(const ImmutableCFOptions& ioptions,
