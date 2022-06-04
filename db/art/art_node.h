@@ -20,7 +20,6 @@ enum ArtNodeType : uint8_t {
 };
 
 struct ArtNode{
-  // backup is used for reallocate
   ArtNodeType art_type_ = kNode4;
   uint16_t    num_children_ = 0;
 };

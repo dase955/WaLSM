@@ -13,6 +13,10 @@
 #include "rocksdb/slice.h"
 #include "rocksdb/options.h"
 
+#include <time.h>
+#include <sys/time.h>
+
+#include <unordered_set>
 #include <algorithm>
 #include <mutex>
 #include <random>
@@ -22,133 +26,89 @@
 
 using namespace rocksdb;
 
-class ZipfianGenerator {
- public:
-  ZipfianGenerator(long min, long max, double zipfianconstant_, double zetan_) {
-    items = max - min + 1;
-    base = min;
-    this->zipfianconstant = zipfianconstant_;
-
-    theta = this->zipfianconstant;
-
-    zeta2theta = zeta(2, theta);
-
-    alpha = 1.0 / (1.0 - theta);
-    this->zetan = zetan_;
-    eta = (1 - std::pow(2.0 / items, 1 - theta)) / (1 - zeta2theta / this->zetan);
-
-    std::random_device rd;
-    rng = std::default_random_engine{rd()};
-
-    nextValue();
-  }
-
-  double zeta(long n, double thetaVal) {
-    return zetastatic(n, thetaVal);
-  }
-
-  static double zetastatic(long n, double theta) {
-    return zetastatic(0, n, theta, 0);
-  }
-
-  static double zetastatic(long st, long n, double theta, double initialsum) {
-    double sum = initialsum;
-    for (long i = st; i < n; i++) {
-
-      sum += 1 / (std::pow(i + 1, theta));
-    }
-
-    return sum;
-  }
-
-  long nextLong(long itemcount) {
-    double u = rand_double(rng);
-    double uz = u * zetan;
-
-    if (uz < 1.0) {
-      return base;
-    }
-
-    if (uz < 1.0 + std::pow(0.5, theta)) {
-      return base + 1;
-    }
-
-    return base + (long) ((itemcount) * std::pow(eta * u - eta + 1, alpha));
-  }
-
-  long nextValue() {
-    return nextLong(items);
-  }
-
- private:
-  long items;
-
-  long base;
-
-  double zipfianconstant;
-
-  double alpha, zetan, eta, theta, zeta2theta;
-
-  std::uniform_real_distribution<> rand_double{0.0, 1.0};
-
-  std::default_random_engine rng;
-};
-
-class ScrambledZipfianGenerator {
- public:
-  ScrambledZipfianGenerator(long min_, long max_) {
-    this->min = min_;
-    this->max = max_;
-    itemcount = this->max - this->min + 1;
-    gen = new ZipfianGenerator(0, ITEM_COUNT, 0.99, ZETAN);
-  }
-
-  ~ScrambledZipfianGenerator() {
-    delete gen;
-  }
-
-  long nextValue() {
-    long ret = gen->nextValue();
-    return min + fnvhash64(ret) % itemcount;
-  }
-
-  long highestFreqValue(int f) {
-    return min + fnvhash64(f) % itemcount;
-  }
-
- private:
-  static long fnvhash64(long val) {
-    //from http://en.wikipedia.org/wiki/Fowler_Noll_Vo_hash
-    long hashval = 0xCBF29CE484222325L;
-
-    for (int i = 0; i < 8; i++) {
-      long octet = val & 0x00ff;
-      val = val >> 8;
-
-      hashval = hashval ^ octet;
-      hashval = hashval * 1099511628211L;
-      //hashval = hashval ^ octet;
-    }
-    return std::fabs(hashval);
-  }
-
-  double ZETAN = 26.46902820178302;
-  long ITEM_COUNT = 10000000000L;
-
-  ZipfianGenerator* gen;
-  long min, max, itemcount;
-
-};
-
-///////////////////////////////////////////////////////////////////////////////
-
 int      thread_num = 32;
-int      total_count = 160000000;
+int      total_count = 320000000;
 int      sample_range = 1000000000;
 int      count_per_thread = total_count / thread_num;
 int64_t* completed_count = new int64_t[thread_num * 8];
 std::vector<int> final_samples;
 std::atomic<int64_t> counter{0};
+
+class ZipfianGenerator {
+ public:
+  ZipfianGenerator(double alpha) : alpha_(alpha) {
+    InitProbs();
+  }
+
+  ~ZipfianGenerator() {
+    delete[] sum_probs_;
+  }
+
+  long nextValue() {
+    long res = 0;
+    double z;
+    do {
+      z = rand_val(rng);
+    } while ((z == 0) || (z == 1));
+
+    int low = 1;
+    int high = sample_range;
+    int mid;
+    do {
+      mid = (low + high) / 2;
+      if (sum_probs_[mid] >= z && sum_probs_[mid - 1] < z) {
+        res = mid;
+        break;
+      } else if (sum_probs_[mid] >= z) {
+        high = mid - 1;
+      } else {
+        low = mid + 1;
+      }
+    } while (low <= high);
+
+    return res;
+  }
+
+ private:
+  void InitProbs() {
+    printf("Start InitProbs\n");
+
+    double c = 0.0;
+    for (int i = 1; i <= sample_range; i++) {
+      c = c + (1.0 / pow((double)i, alpha_));
+    }
+    c = 1.0 / c;
+
+    sum_probs_ = new double[sample_range + 1];
+    sum_probs_[0] = 0;
+    for (int i = 1; i <= sample_range; ++i) {
+      sum_probs_[i] = sum_probs_[i - 1] + c / pow((double)i, alpha_);
+    }
+
+    printf("Final value: %f\n", (float)sum_probs_[sample_range]);
+  }
+
+  double* sum_probs_;
+
+  double alpha_;
+
+  std::random_device rd;
+  std::default_random_engine rng = std::default_random_engine{rd()};
+  std::uniform_real_distribution<> rand_val{0.0, 1.0};
+};
+
+inline uint64_t GetMicros() {
+  struct timeval tv;
+  gettimeofday(&tv, NULL);
+  return (tv.tv_sec) * 1000000 + tv.tv_usec;
+}
+
+inline uint64_t GetTime() {
+  static uint64_t start_time = GetMicros();
+  return GetMicros() - start_time;
+}
+
+///////////////////////////////////////////////////////////////////////////////
 
 std::string GenerateValue(std::string& str) {
   int repeat_times = 1024UL / str.length();
@@ -180,7 +140,7 @@ unsigned long fnvhash64(int64_t val) {
   return hashval > 0 ? hashval : -hashval;
 }
 
-void Test1Thread(DB* db, int thread_id) {
+void YCSBLoadThread(DB* db, int thread_id) {
   static std::atomic<int64_t> counter{0};
   thread_id *= 8;
   for (int i = 0; i < count_per_thread; ++i) {
@@ -192,20 +152,7 @@ void Test1Thread(DB* db, int thread_id) {
   }
 }
 
-// Default YCSB zipfian workload
-void Test2Thread(DB* db, int thread_id) {
-  ScrambledZipfianGenerator zipf(0, total_count);
-  thread_id *= 8;
-  for (int i = 0; i < count_per_thread; ++i) {
-    long ret = zipf.nextValue();
-    std::string key = "user" + std::to_string(fnvhash64(ret));
-    std::string value = GenerateValue(key);
-    db->Put(WriteOptions(), key, value);
-    ++completed_count[thread_id];
-  }
-}
-
-void Test3Thread(DB* db, int thread_id) {
+void CustomWorkloadThread(DB* db, int thread_id) {
   thread_id *= 8;
   std::string prefix = "user";
   for (int i = 0; i < count_per_thread; ++i) {
@@ -262,7 +209,87 @@ void StatisticsThread(std::string file_name) {
   ofs.close();
 }
 
-typedef void(* TestFunction)(DB*, int);
+void ShuffleSamples(std::unordered_map<int, int>& freqs,
+                    std::unordered_map<int, int>& modified) {
+  std::random_device rd;
+  std::default_random_engine rng = std::default_random_engine{rd()};
+  std::uniform_int_distribution<int> dist(0, sample_range - 1);
+
+  int left[2] = {400000000, 800000000};
+  int interval = 50000000;
+  int mod = interval * 2;
+
+  std::random_device shuffle_rd;
+  std::vector<int> shuffled(mod);
+  std::iota(std::begin(shuffled), std::end(shuffled), 0);
+  std::shuffle(shuffled.begin(), shuffled.end(), shuffle_rd);
+
+  auto check_func = [&](int val) {
+    for (auto l : left) {
+      if (val >= l && val <= l + interval) {
+        return false;
+      }
+    }
+    return true;
+  };
+
+  int cur = 0;
+  for (auto& pair : freqs) {
+    int old_value = pair.first;
+    if (pair.second == 1) {
+      int new_value = dist(rng);
+      while (!check_func(new_value)) {
+        new_value = dist(rng);
+      }
+      modified[old_value] = new_value;
+    } else {
+      int new_value = shuffled[cur++];
+      modified[old_value] = left[new_value / interval] + (new_value % interval);
+    }
+  }
+}
+
+void CheckFreq() {
+  std::unordered_map<int, int> freqs;
+  for (auto& value : final_samples) {
+    ++freqs[value];
+  }
+
+  int cold_count = 0;
+  for (auto& pair : freqs) {
+    cold_count += (pair.second == 1);
+  }
+
+  int hot_count = freqs.size() - cold_count;
+  float hot_freq = (total_count - cold_count) / (float)total_count * 100.f;
+  printf("Sample generated. hot count = %d(%.2f), cold count = %d\n",
+         hot_count, hot_freq, cold_count);
+}
+
+void GenerateSamples() {
+  final_samples.resize(total_count);
+
+  ZipfianGenerator gen(0.98);
+  std::unordered_map<int, int> freqs;
+
+  for (int i = 0; i < total_count; ++i) {
+    int value = gen.nextValue();
+    final_samples[i] = value;
+    freqs[value]++;
+  }
+
+  CheckFreq();
+
+  std::unordered_map<int, int> modified;
+  ShuffleSamples(freqs, modified);
+  for (auto& value : final_samples) {
+    value = modified[value];
+  }
+
+  CheckFreq();
+}
+
+typedef void(*TestFunction)(DB*, int);
 
 void DoTest(DB* db, TestFunction test_func, std::string file_name) {
   memset(completed_count, 0, thread_num * 64);
@@ -281,47 +308,34 @@ void DoTest(DB* db, TestFunction test_func, std::string file_name) {
   statistic_thread.join();
 }
 
-TestFunction Functions[3] = {Test1Thread, Test2Thread, Test3Thread};
-
 int main(int argc, char* argv[]) {
-  auto func = Functions[argc == 1 ? 2 : std::atoi(argv[1]) - 1];
+  std::string test_name = "art";
+  if (argc == 2) {
+    test_name = argv[1];
+  } else if (argc == 3) {
+    total_count = atoi(argv[2]);
+  }
 
   Options options;
   options.create_if_missing = true;
   options.enable_pipelined_write = true;
   options.OptimizeLevelStyleCompaction();
 
+  std::string db_path = "/tmp/db_test_" + test_name;
+  std::string ops_path =  "/tmp/run_ops_" + test_name;
+
   DB* db;
-  DB::Open(options, "/tmp/db_test", &db);
+  DB::Open(options, db_path, &db);
 
   // Step 1: uniform
-  DoTest(db, UniformThread, "/tmp/load_ops.txt");
+  // auto start_time1 = GetTime();
+  // DoTest(db, UniformThread, "/tmp/load_ops.txt");
+  // printf("Load phase: %.3f, %.3f\n", start_time1 * 1e-6, GetTime() * 1e-6);
 
-  // Step2: zipfian
-  final_samples.reserve(total_count);
-  std::uniform_int_distribution<int> dist(0, sample_range - 1);
-  std::random_device rd;
-  std::default_random_engine rng = std::default_random_engine{rd()};
-
-  {
-    ZipfianGenerator gen(0, sample_range, 0.99, 26.46902820178302);
-    std::unordered_map<int, int> freqs;
-    int left[2] = {400000000, 800000000};
-
-    for (int i = 0; i < total_count; ++i) {
-      long value = gen.nextValue();
-      freqs[value]++;
-      final_samples[i] = (int)value;
-    }
-
-    for (auto& value : final_samples) {
-      value = freqs[value] == 1
-                  ? dist(rng) :
-                  (int)(fnvhash64(value) % 50000000) + left[value % 2];
-    }
-  }
-
-  DoTest(db, Test3Thread, "/tmp/run_ops.txt");
+  GenerateSamples();
+  auto start_time2 = GetTime();
+  DoTest(db, CustomWorkloadThread, ops_path);
+  printf("Run phase:  %.3f, %.3f\n", start_time2 * 1e-6, GetTime() * 1e-6);
 
   db->Close();
 

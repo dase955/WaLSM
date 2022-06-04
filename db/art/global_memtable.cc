@@ -306,8 +306,8 @@ void GlobalMemtable::InitFirstLevel() {
 }
 
 void GlobalMemtable::PutRecover(uint64_t vptr) {
-  std::string key, value;
-  auto type = vlog_manager_->GetKeyValue(vptr, key, value);
+  Slice key;
+  vlog_manager_->GetKey(vptr, key);
 
   size_t level = 0;
   size_t max_level = key.size();
@@ -316,7 +316,7 @@ void GlobalMemtable::PutRecover(uint64_t vptr) {
   while (true) {
     current = FindChild(current, key[++level]);
     if (level == max_level) {
-      uint64_t hash = HashAndPrefix(key.c_str(), key.length(), level);
+      uint64_t hash = HashAndPrefix(key.data(), key.size(), level);
       current->hash_ = hash;
       current->vptr_ = vptr;
       return;
@@ -436,6 +436,8 @@ bool GlobalMemtable::Get(std::string& key, std::string& value, Status* s) {
   bool found = false;
   while (current && !found) {
     if (IS_LEAF(current->status_)) {
+      printf("squeezed size in this node = %d\n", current->squeezed_size_);
+
       found = FindKeyInInnerNode(current, level, key, value, s);
     } else if (level == max_level) {
       shared_lock<RWSpinLock> read_lk(current->vptr_lock_);

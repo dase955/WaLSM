@@ -1170,17 +1170,17 @@ struct DBOptions {
   // Options below are used for art.
 
   // Amount of data in global memtable before trigger compaction.
-  // Default: 512M
-  int64_t compaction_threshold = 4608LL << 20;
+  // Default: 5G
+  int64_t compaction_threshold = 5120LL << 20;
 
   // A threshold for the max size of a group,
   // larger size will trigger group split.
-  // Default: 10M
+  // Default: 5M
   int group_split_threshold = 10 << 20;
 
   // A threshold for the size of a group that can chosen to do compaction.
-  // Default: 6M
-  int group_min_size = 6 << 20;
+  // Default: 2M
+  int group_min_size = 4 << 20;
 
   // Size of vlog file.
   // Default: 7G
@@ -1203,10 +1203,10 @@ struct DBOptions {
 
   // When global timestamp exceed waterline, we need to do heat decay.
   // default: 1024
-  int timestamp_waterline = 1024;
+  int timestamp_waterline = 512;
 
   // default: 100
-  int layer_ts_interval = 100;
+  int layer_ts_interval = 50;
 
   // default: 1G
   int64_t node_memory_size = 1LL << 30;

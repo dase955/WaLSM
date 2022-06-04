@@ -292,8 +292,7 @@ void Compactor::BGWorkDoCompaction() {
                 (end_time - start_time) * 1e-6, start_time * 1e-6,
                 0);
 
-#ifndef NDEBUG
-    printf("free pages: "
+    RECORD_DEBUG("free pages: "
         "%zu, %zu(%.2f), size: %zu, %zu, %zu; squeezed in groups %zu\n",
         GetNodeAllocator()->GetNumFreePages(),
         vlog_manager_->free_segments_.size(), vlog_manager_->Estimate(),
@@ -301,7 +300,6 @@ void Compactor::BGWorkDoCompaction() {
         CompactedSize.load(std::memory_order_relaxed),
         SqueezedSize.load(std::memory_order_relaxed),
         SqueezedSizeInCompaction.load(std::memory_order_relaxed));
-#endif
 
     SqueezedSizeInCompaction.store(0);
 

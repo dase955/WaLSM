@@ -242,8 +242,8 @@ struct MutableCFOptions {
   size_t memtable_huge_page_size;
   size_t max_successive_merges;
   size_t inplace_update_num_locks;
-  int64_t total_memory_slowdown_trigger = 5120LL << 20;
-  int64_t total_memory_stop_trigger = 5632LL << 20;
+  int64_t total_memory_slowdown_trigger = 5632LL << 20;
+  int64_t total_memory_stop_trigger = 6144LL << 20;
   std::shared_ptr<const SliceTransform> prefix_extractor;
 
   // Compaction related options

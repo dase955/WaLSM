@@ -266,7 +266,6 @@ unsigned long fnvhash64(int64_t val) {
     val = val >> 8;
 
     hashval = hashval ^ octet;
-    std::cout << octet << " " << val << " " << hashval << std::endl;
     hashval = hashval * FNV_PRIME_64;
     //hashval = hashval ^ octet;
   }
@@ -352,7 +351,49 @@ void Test4(DB* db) {
   }
 }
 
+int      sample_range = 1000000000;
+
+void GenerateSamples() {
+  final_samples.resize(total_count);
+  std::uniform_int_distribution<int> dist(0, sample_range - 1);
+  std::random_device rd;
+  std::default_random_engine rng = std::default_random_engine{rd()};
+
+  int cold_count = 0;
+  int hot_count;
+
+  {
+    ZipfianGenerator gen(0, sample_range, 0.99, 26.46902820178302);
+    std::unordered_map<int, int> freqs;
+    int left[2] = {400000000, 800000000};
+
+    for (int i = 0; i < total_count; ++i) {
+      long value = gen.nextValue();
+      freqs[value]++;
+      final_samples[i] = (int)value;
+    }
+
+    for (auto& value : final_samples) {
+      cold_count += (freqs[value] == 1);
+      value = freqs[value] == 1
+                  ? dist(rng) :
+                  (int)(fnvhash64(value) % 50000000) + left[value % 2];
+    }
+
+    hot_count = freqs.size() - cold_count;
+  }
+
+  float hot_freq = (total_count - cold_count) / (float)total_count * 100.f;
+  printf("Sample generated. hot count = %d(%.2f), cold count = %d\n",
+         hot_count, hot_freq, cold_count);
+}
+
 TEST_F(DBTest3, MockEnvTest) {
+
+  GenerateSamples();
+
+  return;
+
   Options options;
   options.create_if_missing = true;
   options.enable_pipelined_write = true;

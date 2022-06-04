@@ -63,7 +63,7 @@ ArtNodeType ChooseArtNodeType(size_t size) {
 ArtNode* AllocateArt4AndInsertNodes(
     const std::vector<InnerNode*>& inner_nodes,
     const std::vector<unsigned char>& c) {
-  auto node4 = new ArtNode4();
+  auto node4 = new ArtNode4;
   for (size_t i = 0; i < c.size(); ++i) {
     node4->children_[i] = inner_nodes[i];
     node4->keys_[i] = c[i];
@@ -78,7 +78,7 @@ ArtNode* AllocateArt4AndInsertNodes(
 ArtNode* AllocateArt16AndInsertNodes(
     const std::vector<InnerNode*>& inner_nodes,
     const std::vector<unsigned char>& c) {
-  auto node16 = new ArtNode16();
+  auto node16 = new ArtNode16;
   for (size_t i = 0; i < c.size(); ++i) {
     node16->keys_[i] = c[i];
     node16->children_[i] = inner_nodes[i];
@@ -93,7 +93,7 @@ ArtNode* AllocateArt16AndInsertNodes(
 ArtNode* AllocateArt48AndInsertNodes(
     const std::vector<InnerNode*>& inner_nodes,
     const std::vector<unsigned char>& c) {
-  auto node48 = new ArtNode48();
+  auto node48 = new ArtNode48;
   for (size_t i = 0; i < c.size(); ++i) {
     node48->keys_[c[i]] = i + 1;
     node48->children_[i] = inner_nodes[i];
@@ -142,16 +142,16 @@ ArtNode* AllocateArtNode(ArtNodeType node_type) {
   ArtNode* node = nullptr;
   switch (node_type) {
     case kNode4:
-      node = (ArtNode*)(new ArtNode4());
+      node = (ArtNode*)(new ArtNode4);
       break;
     case kNode16:
-      node = (ArtNode*)(new ArtNode16());
+      node = (ArtNode*)(new ArtNode16);
       break;
     case kNode48:
-      node = (ArtNode*)(new ArtNode48());
+      node = (ArtNode*)(new ArtNode48);
       break;
     case kNode256:
-      node = (ArtNode*)(new ArtNode256());
+      node = (ArtNode*)(new ArtNode256);
       break;
     default:
       assert(false);

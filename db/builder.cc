@@ -411,7 +411,7 @@ int64_t ReadAndBuild(SingleCompactionJob* job,
       builder->Add(*key, it->value);
       meta->UpdateBoundaries(
           *key, it->value, it->seq_num_, kTypeValue);
-      out_kv_size += (it->value.size() + it->key->size() + 16);
+      out_kv_size += (it->value.size() + key->size());
     }
 
     // TODO(noetzli): Update stats after flush, too.
