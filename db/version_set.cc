@@ -123,42 +123,41 @@ class FilePicker {
         hit_file_level_(static_cast<unsigned int>(-1)),
         search_left_bound_(0),
         search_right_bound_(FileIndexer::kLevelMaxIndex),
-#ifndef NDEBUG
         files_(files),
-#endif
         level_files_brief_(file_levels),
         is_hit_file_last_in_level_(false),
-        curr_file_level_(nullptr),
+        curr_file_level_(files[0]),
+        curr_index_in_curr_level_(0),
         user_key_(user_key),
         ikey_(ikey),
         file_indexer_(file_indexer),
         user_comparator_(user_comparator),
         internal_comparator_(internal_comparator) {
-#ifdef NDEBUG
-    (void)files;
-#endif
     // Prefetch Level 0 table data to avoid cache miss if possible.
-    for (unsigned int i = 0; i < (*level_files_brief_)[0].num_files; ++i) {
-      auto* r = (*level_files_brief_)[0].files[i].fd.table_reader;
+    for (unsigned int i = 0; i < files_[0].size(); ++i) {
+      auto* r = files_[0][i]->fd.table_reader;
       if (r) {
         r->Prepare(ikey);
+      }
+    }
+    for (unsigned int i = 0; i < num_levels; i++) {
+      if (!files[i].empty()) {
+        sort(files[i].begin(), files[i].end(),
+             [&](FileMetaData* f1, FileMetaData* f2) {
+               return f1->fd.GetNumber() > f2->fd.GetNumber();
+             });
       }
     }
   }
 
   int GetCurrentLevel() const { return curr_level_; }
 
-  FdWithKeyRange* GetNextFile() {
-    if (curr_file_level_ == nullptr) {
-      curr_file_level_ = &(*level_files_brief_)[curr_level_];
-      curr_index_in_curr_level_ = 0;
-    }
-
-    if (curr_index_in_curr_level_ >= curr_file_level_->num_files) {
+  FileMetaData* GetNextFile() {
+    if (curr_index_in_curr_level_ >= curr_file_level_.size()) {
       pickNextLevel();
       curr_index_in_curr_level_ = 0;
       while (curr_level_ != UINT_MAX &&
-             (*level_files_brief_)[curr_level_].num_files == 0) {
+             files_[curr_level_].size() == 0) {
         pickNextLevel();
       }
     }
@@ -166,11 +165,11 @@ class FilePicker {
       return nullptr;
     }
 
-    curr_file_level_ = &(*level_files_brief_)[curr_level_];
+    curr_file_level_ = files_[curr_level_];
     hit_file_level_ = returned_file_level_ = curr_level_;
-    FdWithKeyRange* ret = &curr_file_level_->files[curr_index_in_curr_level_];
+    FileMetaData* ret = curr_file_level_[curr_index_in_curr_level_];
     is_hit_file_last_in_level_ =
-        curr_index_in_curr_level_ == curr_file_level_->num_files - 1;
+        curr_index_in_curr_level_ == curr_file_level_.size()-1;
     curr_index_in_curr_level_++;
     return ret;
   }
@@ -190,13 +189,11 @@ class FilePicker {
   unsigned int hit_file_level_;
   int32_t search_left_bound_;
   int32_t search_right_bound_;
-#ifndef NDEBUG
   std::vector<FileMetaData*>* files_;
-#endif
   autovector<LevelFilesBrief>* level_files_brief_;
   bool search_ended_;
   bool is_hit_file_last_in_level_;
-  LevelFilesBrief* curr_file_level_;
+  std::vector<FileMetaData*> curr_file_level_;
   unsigned int curr_index_in_curr_level_;
   unsigned int start_index_in_curr_level_;
   Slice user_key_;
@@ -209,12 +206,10 @@ class FilePicker {
 #endif
 
   void pickNextLevel() {
-    if (curr_level_ == 0) {
-      curr_level_ = num_levels_ - 1;
-    } else if (curr_level_ == 1) {
+    if (curr_level_ >= num_levels_ - 1) {
       curr_level_ = UINT_MAX;
-    } else if (curr_level_ != UINT_MAX) {
-      curr_level_--;
+    } else {
+      curr_level_++;
     }
   }
 };
@@ -868,7 +863,7 @@ class LevelIterator final : public InternalIterator {
 
     const InternalKey* smallest_compaction_key = nullptr;
     const InternalKey* largest_compaction_key = nullptr;
-    if (compaction_boundaries_ != nullptr) {
+    if (compaction_boundaries_ != nullptr && !compaction_boundaries_->empty()) {
       smallest_compaction_key = (*compaction_boundaries_)[file_index_].smallest;
       largest_compaction_key = (*compaction_boundaries_)[file_index_].largest;
     }
@@ -1699,14 +1694,16 @@ void Version::Get(const ReadOptions& read_options, const LookupKey& k,
   }
 
   std::vector<FileMetaData*> hit_files[storage_info_.num_levels_];
-  for (int i = 0; i < storage_info_.num_levels_; i++) {
+  hit_files[0] = storage_info_.files_[0];
+  for (int i = 1; i < storage_info_.num_levels_; i++) {
     hit_files[i] = hit_partition->files_[i];
   }
   FilePicker fp(
       hit_files, user_key, ikey, &storage_info_.level_files_brief_,
-      storage_info_.num_non_empty_levels_, &storage_info_.file_indexer_,
+      static_cast<unsigned int>(storage_info_.num_levels_),
+      &storage_info_.file_indexer_,
       user_comparator(), internal_comparator());
-  FdWithKeyRange* f = fp.GetNextFile();
+  FileMetaData* f = fp.GetNextFile();
 
   while (f != nullptr) {
     if (*max_covering_tombstone_seq > 0) {
@@ -1715,7 +1712,7 @@ void Version::Get(const ReadOptions& read_options, const LookupKey& k,
       break;
     }
     if (get_context.sample()) {
-      sample_file_read_inc(f->file_metadata);
+      sample_file_read_inc(f);
     }
 
     bool timer_enabled =
@@ -1723,7 +1720,7 @@ void Version::Get(const ReadOptions& read_options, const LookupKey& k,
         get_perf_context()->per_level_perf_context_enabled;
     StopWatchNano timer(env_, timer_enabled /* auto_start */);
     *status = table_cache_->Get(
-        read_options, *internal_comparator(), *f->file_metadata, ikey,
+        read_options, *internal_comparator(), *f, ikey,
         &get_context, mutable_cf_options_.prefix_extractor.get(),
         cfd_->internal_stats()->GetFileReadHist(fp.GetHitFileLevel()),
         IsFilterSkipped(static_cast<int>(fp.GetHitFileLevel()),
@@ -2377,7 +2374,6 @@ void VersionStorageInfo::AddFile(int level, FileMetaData* f) {
     auto hit_partition = partitions_map_.find(it->ToString());
     assert(hit_partition != partitions_map_.end());
     hit_partition->second->AddFile(level, f);
-    // remove split here
   }
 
   const uint64_t file_number = f->fd.GetNumber();
@@ -5424,35 +5420,35 @@ InternalIterator* VersionSet::MakeInputIterator(
   size_t num = 0;
   for (size_t which = 0; which < c->num_input_levels(); which++) {
     if (c->input_levels(which)->num_files != 0) {
-      if (c->level(which) == 0) {
-        const LevelFilesBrief* flevel = c->input_levels(which);
-        for (size_t i = 0; i < flevel->num_files; i++) {
-          list[num++] = cfd->table_cache()->NewIterator(
-              read_options, file_options_compactions,
-              cfd->internal_comparator(), *flevel->files[i].file_metadata,
-              range_del_agg, c->mutable_cf_options()->prefix_extractor.get(),
-              /*table_reader_ptr=*/nullptr,
-              /*file_read_hist=*/nullptr, TableReaderCaller::kCompaction,
-              /*arena=*/nullptr,
-              /*skip_filters=*/false,
-              /*level=*/static_cast<int>(c->level(which)),
-              MaxFileSizeForL0MetaPin(*c->mutable_cf_options()),
-              /*smallest_compaction_key=*/nullptr,
-              /*largest_compaction_key=*/nullptr,
-              /*allow_unprepared_value=*/false);
-        }
-      } else {
-        // Create concatenating iterator for the files from this level
-        list[num++] = new LevelIterator(
-            cfd->table_cache(), read_options, file_options_compactions,
-            cfd->internal_comparator(), c->input_levels(which),
-            c->mutable_cf_options()->prefix_extractor.get(),
-            /*should_sample=*/false,
-            /*no per level latency histogram=*/nullptr,
-            TableReaderCaller::kCompaction, /*skip_filters=*/false,
-            /*level=*/static_cast<int>(c->level(which)), range_del_agg,
-            c->boundaries(which));
+//      if (c->level(which) == 0) {
+      const LevelFilesBrief* flevel = c->input_levels(which);
+      for (size_t i = 0; i < flevel->num_files; i++) {
+        list[num++] = cfd->table_cache()->NewIterator(
+            read_options, file_options_compactions, cfd->internal_comparator(),
+            *flevel->files[i].file_metadata, range_del_agg,
+          c->mutable_cf_options()->prefix_extractor.get(),
+            /*table_reader_ptr=*/nullptr,
+            /*file_read_hist=*/nullptr, TableReaderCaller::kCompaction,
+            /*arena=*/nullptr,
+            /*skip_filters=*/false,
+            /*level=*/static_cast<int>(c->level(which)),
+          MaxFileSizeForL0MetaPin(*c->mutable_cf_options()),
+            /*smallest_compaction_key=*/nullptr,
+            /*largest_compaction_key=*/nullptr,
+            /*allow_unprepared_value=*/false);
       }
+//      } else {
+//        // Create concatenating iterator for the files from this level
+//        list[num++] = new LevelIterator(
+//            cfd->table_cache(), read_options, file_options_compactions,
+//            cfd->internal_comparator(), c->input_levels(which),
+//            c->mutable_cf_options()->prefix_extractor.get(),
+//            /*should_sample=*/false,
+//            /*no per level latency histogram=*/nullptr,
+//            TableReaderCaller::kCompaction, /*skip_filters=*/false,
+//            /*level=*/static_cast<int>(c->level(which)), range_del_agg,
+//            c->boundaries(which));
+//      }
     }
   }
   assert(num <= space);

@@ -84,7 +84,7 @@ void Compaction::GetBoundaryKeys(
     if (inputs[i].files.empty()) {
       continue;
     }
-    if (inputs[i].level == 0) {
+    if (inputs[i].level >= 0) {
       // we need to consider all files on level 0
       for (const auto* f : inputs[i].files) {
         const Slice& start_user_key = f->smallest.user_key();
@@ -99,18 +99,6 @@ void Compaction::GetBoundaryKeys(
         }
         initialized = true;
       }
-    } else {
-      // we only need to consider the first and last file
-      const Slice& start_user_key = inputs[i].files[0]->smallest.user_key();
-      if (!initialized ||
-          ucmp->Compare(start_user_key, *smallest_user_key) < 0) {
-        *smallest_user_key = start_user_key;
-      }
-      const Slice& end_user_key = inputs[i].files.back()->largest.user_key();
-      if (!initialized || ucmp->Compare(end_user_key, *largest_user_key) > 0) {
-        *largest_user_key = end_user_key;
-      }
-      initialized = true;
     }
   }
 }
@@ -119,7 +107,7 @@ std::vector<CompactionInputFiles> Compaction::PopulateWithAtomicBoundaries(
     VersionStorageInfo* vstorage, std::vector<CompactionInputFiles> inputs) {
   const Comparator* ucmp = vstorage->InternalComparator()->user_comparator();
   for (size_t i = 0; i < inputs.size(); i++) {
-    if (inputs[i].level == 0 || inputs[i].files.empty()) {
+    if (inputs[i].level >= 0 || inputs[i].files.empty()) {
       continue;
     }
     inputs[i].atomic_compaction_unit_boundaries.reserve(inputs[i].files.size());

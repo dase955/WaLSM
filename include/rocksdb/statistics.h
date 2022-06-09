@@ -104,6 +104,8 @@ enum Tickers : uint32_t {
   GET_HIT_L1,
   // # of Get() queries served by L2 and up
   GET_HIT_L2_AND_UP,
+  // unknown hit
+  GET_HIT_UNKNOWN,
 
   /**
    * COMPACTION_KEY_DROP_* count the reasons for key drop during compaction

@@ -15,6 +15,7 @@
 #include <queue>
 #include <string>
 #include <utility>
+
 #include "db/column_family.h"
 #include "file/filename.h"
 #include "logging/log_buffer.h"
@@ -250,21 +251,25 @@ bool UniversalCompactionPicker::NeedsCompaction(
   if (vstorage->GetL0CompactionScore() >= 1.0) {
     return true;
   }
-  for (auto& kv : vstorage->partitions_map_) {
-    auto partition = kv.second;
-    uint64_t base_size = 256 * 1024 * 1024L;
-    for (int i = partition->GetLevel()-1; i >= 1; i--) {
-      if (partition->level_size[i] >= base_size) {
-        return true;
-      }
-      base_size *= 4;
+  //  for (auto& kv : vstorage->partitions_map_) {
+  //    auto partition = kv.second;
+  //    uint64_t base_size = 256 * 1024 * 1024L;
+  //    for (int i = partition->GetLevel()-1; i >= 1; i--) {
+  //      if (partition->level_size[i] >= base_size) {
+  //        return true;
+  //      }
+  //      base_size *= 4;
+  //    }
+  //  }
+  for (int i = 1; i < vstorage->num_levels() - 1; i++) {
+    if (vstorage->LevelFiles(i).size() >= 4) {
+      return true;
     }
   }
   return false;
 }
 
-bool UniversalCompactionPicker::NeedsMerge(
-    const VersionStorageInfo*) const {
+bool UniversalCompactionPicker::NeedsMerge(const VersionStorageInfo*) const {
   return true;
 }
 
@@ -286,9 +291,10 @@ void UniversalCompactionBuilder::SortedRun::Dump(char* out_buf,
     if (file->fd.GetPathId() == 0 || !print_path) {
       snprintf(out_buf, out_buf_size, "file %" PRIu64, file->fd.GetNumber());
     } else {
-      snprintf(out_buf, out_buf_size, "file %" PRIu64
-                                      "(path "
-                                      "%" PRIu32 ")",
+      snprintf(out_buf, out_buf_size,
+               "file %" PRIu64
+               "(path "
+               "%" PRIu32 ")",
                file->fd.GetNumber(), file->fd.GetPathId());
     }
   } else {
@@ -401,7 +407,8 @@ Compaction* UniversalCompactionBuilder::PickCompaction() {
   Compaction* c = nullptr;
 
   if (sorted_runs_.size() >=
-      static_cast<size_t>(mutable_cf_options_.level0_file_num_compaction_trigger)) {
+      static_cast<size_t>(
+          mutable_cf_options_.level0_file_num_compaction_trigger)) {
     c = PickCompactionForL0();
   }
 
@@ -415,35 +422,11 @@ Compaction* UniversalCompactionBuilder::PickCompaction() {
     c->set_is_trivial_move(false);
   }
 
-// validate that all the chosen files of L0 are non overlapping in time
-#ifndef NDEBUG
-  bool is_first = true;
-
-  size_t level_index = 0U;
-  if (c->start_level() == 0) {
-    for (auto f : *c->inputs(0)) {
-      assert(f->fd.smallest_seqno <= f->fd.largest_seqno);
-      if (is_first) {
-        is_first = false;
-      }
-    }
-    level_index = 1U;
-  }
-  for (; level_index < c->num_input_levels(); level_index++) {
-    if (c->num_input_files(level_index) != 0) {
-      SequenceNumber smallest_seqno = 0U;
-      SequenceNumber largest_seqno = 0U;
-      GetSmallestLargestSeqno(*(c->inputs(level_index)), &smallest_seqno,
-                              &largest_seqno);
-      if (is_first) {
-        is_first = false;
-      }
-    }
-  }
-#endif
   // update statistics
-  RecordInHistogram(ioptions_.statistics, NUM_FILES_IN_SINGLE_COMPACTION,
-                    c->inputs(0)->size());
+  if (c != nullptr) {
+    RecordInHistogram(ioptions_.statistics, NUM_FILES_IN_SINGLE_COMPACTION,
+                      c->inputs(0)->size());
+  }
 
   picker_->RegisterCompaction(c);
   vstorage_->ComputeCompactionScore(ioptions_, mutable_cf_options_);
@@ -487,7 +470,6 @@ uint32_t UniversalCompactionBuilder::GetPathId(
   return p;
 }
 
-
 // For L0 sorted runs number compaction trigger
 Compaction* UniversalCompactionBuilder::PickCompactionForL0() {
   assert(!sorted_runs_.empty());
@@ -502,8 +484,7 @@ Compaction* UniversalCompactionBuilder::PickCompactionForL0() {
   if (num_sr_not_compacted >=
       mutable_cf_options_.level0_file_num_compaction_trigger) {
     uint64_t estimated_total_size = 0;
-    const int output_level = vstorage_->num_levels() - 1,
-              start_level = 0;
+    const int output_level = 1, start_level = 0;
 
     // initialize inputs levels
     std::vector<CompactionInputFiles> inputs(vstorage_->num_levels());
@@ -514,8 +495,7 @@ Compaction* UniversalCompactionBuilder::PickCompactionForL0() {
     for (size_t i = 0; i < sorted_runs_.size(); i++) {
       auto& picking_sr = sorted_runs_[i];
       FileMetaData* picking_file = picking_sr.file;
-      if (sorted_runs_[i].level == 0
-          && !sorted_runs_[i].being_compacted) {
+      if (sorted_runs_[i].level == 0 && !sorted_runs_[i].being_compacted) {
         estimated_total_size += sorted_runs_[i].size;
         inputs[0].files.push_back(picking_file);
       }
@@ -529,39 +509,36 @@ Compaction* UniversalCompactionBuilder::PickCompactionForL0() {
         GetPathId(ioptions_, mutable_cf_options_, estimated_total_size);
     return new Compaction(
         vstorage_, ioptions_, mutable_cf_options_, mutable_db_options_,
-        std::move(inputs), output_level,
-        MaxFileSizeForLevel(mutable_cf_options_, output_level,
-                            kCompactionStyleUniversal),
-        LLONG_MAX, path_id,
+        std::move(inputs), output_level, LLONG_MAX, LLONG_MAX, path_id,
         GetCompressionType(ioptions_, vstorage_, mutable_cf_options_,
                            output_level, 1, true /* enable_compression */),
         GetCompressionOptions(mutable_cf_options_, vstorage_, output_level,
                               true /* enable_compression */),
-        /* max_subcompactions */ 0, /* grandparents */ {}, /* is manual */ false,
-        score_, false /* deletion_compaction */, CompactionReason::kUniversalSortedRunNum
-        );
+        /* max_subcompactions */ 0, /* grandparents */ {},
+        /* is manual */ false, score_, false /* deletion_compaction */,
+        CompactionReason::kUniversalSortedRunNum);
   }
 
   return nullptr;
 }
 
-Compaction* UniversalCompactionBuilder::
-    PickCompactionForSizeMarked() {
+Compaction* UniversalCompactionBuilder::PickCompactionForSizeMarked() {
   for (auto& kv : vstorage_->partitions_map_) {
     uint64_t base_size = 256 * 1024 * 1024L;
     auto partition = kv.second;
     int target_level = -1;
-    for (int level = vstorage_->num_levels()-1; level > 1; level--) {
+    for (int level = 1; level < vstorage_->num_levels() - 1; level++) {
       if (partition->level_size[level] >= base_size) {
         target_level = level;
       }
+      base_size *= 4;
     }
 
     if (target_level != -1) {
-      const int output_level = target_level - 1;
+      const int output_level = target_level + 1;
       std::vector<CompactionInputFiles> inputs(vstorage_->num_levels());
       for (int i = 0; i < vstorage_->num_levels(); i++) {
-        inputs[i].level = i;
+        inputs[i].level = target_level + i;
       }
 
       auto& fs = partition->files_[target_level];
@@ -570,7 +547,7 @@ Compaction* UniversalCompactionBuilder::
         if (fs[i]->being_compacted) {
           return nullptr;
         }
-        inputs[target_level].files.push_back(fs[i]);
+        inputs[0].files.push_back(fs[i]);
       }
 
       uint32_t path_id =
@@ -583,11 +560,10 @@ Compaction* UniversalCompactionBuilder::
           GetCompressionOptions(mutable_cf_options_, vstorage_, output_level,
                                 true /* enable_compression */),
           /* max_subcompactions */ 0, /* grandparents */ {},
-          /* is manual */ false, score_, false /* deletion_compaction */,
-          CompactionReason::kUniversalSortedRunNum);
+          /* is manual */ false, 0.99, false /* deletion_compaction */,
+          CompactionReason::kUniversalSizeRatio);
     }
   }
-
   return nullptr;
 }
 
