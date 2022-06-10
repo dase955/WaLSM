@@ -773,7 +773,7 @@ Status CompactionJob::Install(const MutableCFOptions& mutable_cf_options) {
   uint64_t read_all = stats.bytes_read_non_output_levels +
                       stats.bytes_read_output_level;
   RECORD_INFO("%ld, %.2fMB, %.2fMB, %.5fs, %.3fs, %ld\n",
-              compaction_num++,
+              ++compaction_num,
               read_all / 1048576.0,
               stats.bytes_written / 1048576.0,
               stats.micros * 1e-6,

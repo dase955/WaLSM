@@ -245,7 +245,7 @@ Status DBImpl::FlushMemTableToOutputFile(
 
   auto end_time = GetStartTime();
 
-  auto out_size = file_meta.fd.GetFileSize();
+  auto out_size = file_meta.raw_key_size + file_meta.raw_value_size;
   RECORD_INFO("%ld, %.2fMB, %.2fMB, %.5fs, %.3fs, %ld\n",
               0, out_size / 1048576.0,
               out_size / 1048576.0,

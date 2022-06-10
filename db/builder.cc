@@ -248,6 +248,10 @@ Status BuildTable(
       if (table_properties) {
         *table_properties = tp;
       }
+
+      meta->raw_key_size = tp.raw_key_size;
+      meta->raw_value_size = tp.raw_value_size;
+      meta->num_entries = tp.num_entries;
     }
     delete builder;
 
