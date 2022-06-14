@@ -336,9 +336,17 @@ class VersionStorageInfo {
     int GetLevel() const { return level_; }
 
     void AddFile(int level, FileMetaData* f) {
-      if (largest_.empty() || f->largest.user_key().compare(largest_) > 0) {
+
+      if (largest_.empty()) {
         largest_ = Slice(f->largest.user_key());
       }
+
+      // check if file in range
+      if (f->largest.user_key().compare(smallest_) < 0 ||
+          f->smallest.user_key().compare(largest_) > 0) {
+        return;
+      }
+
       auto& level_files = this->files_[level];
       level_files.push_back(f);
       if (f->smallest.user_key().compare(smallest_) >= 0 &&
@@ -346,7 +354,9 @@ class VersionStorageInfo {
         data_size_ += f->fd.file_size;
         level_size[level] += f->fd.file_size;
       } else if (f->fd.table_reader != nullptr) {
-        uint64_t append_size = f->fd.table_reader->ApproximateSize(largest_, smallest_,
+        InternalKey ismallest(smallest_, kMaxSequenceNumber, kTypeValue),
+            ilargest(largest_, kMaxSequenceNumber, kTypeValue);
+        uint64_t append_size = f->fd.table_reader->ApproximateSize(ismallest.Encode(), ilargest.Encode(),
                                                           kUncategorized);
         data_size_ += append_size;
         level_size[level] += append_size;
@@ -357,11 +367,14 @@ class VersionStorageInfo {
       // TODO: improve split
       // not sure if we should lock partition when split
       std::string middleKey;
+      InternalKey ismallest(smallest_, kMaxSequenceNumber, kTypeValue),
+          ilargest(largest_, kMaxSequenceNumber, kTypeValue);
+      const Slice ssmallest = ismallest.Encode(), slargest = ilargest.Encode();
       for (int i = level_-1; i >= 0; i--) {
         for (FileMetaData* f : files_[i]) {
           if (f->fd.table_reader != nullptr) {
             middleKey =
-                f->fd.table_reader->ApproximateMiddleKey(smallest_, largest_);
+                f->fd.table_reader->ApproximateMiddleKey(ssmallest, slargest);
             if (!middleKey.empty()) {
               break;
             }
@@ -383,13 +396,15 @@ class VersionStorageInfo {
       // add files
       for (int i = 1; i < level_; i++) {
         for (FileMetaData* f : files_[i]) {
-          if (f->largest.user_key().compare(middleKey) >= 0 &&
-              largest_.compare(f->smallest.user_key()) >= 0) {
             fp->AddFile(i, f);
             fp->largest_ = std::max(fp->largest_, f->largest.user_key());
-          }
         }
       }
+      this->data_size_ /= 2;
+      for (unsigned int i = 0; i < level_size.size(); i++) {
+        level_size[i] /= 2;
+      }
+      this->largest_ = Slice(newMidKey->data(), newMidKey->size());
       return fp;
     }
 

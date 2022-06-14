@@ -2371,9 +2371,9 @@ void VersionStorageInfo::AddFile(int level, FileMetaData* f) {
     assert(it != partitions_keys_set_.begin());
     it--;
 
-    auto hit_partition = partitions_map_.find(it->ToString());
-    assert(hit_partition != partitions_map_.end());
-    hit_partition->second->AddFile(level, f);
+    for (auto& kv : partitions_map_) {
+      kv.second->AddFile(level, f);
+    }
   }
 
   const uint64_t file_number = f->fd.GetNumber();
