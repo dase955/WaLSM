@@ -2240,7 +2240,7 @@ Status BlockBasedTable::Get(const ReadOptions& read_options, const Slice& key,
                             GetContext* get_context,
                             const SliceTransform* prefix_extractor,
                             bool skip_filters) {
-  assert(key.size() >= 8);  // key must be internal key
+  assert(key.size() >= kNumInternalBytes);  // key must be internal key
   assert(get_context != nullptr);
   Status s;
   const bool no_io = read_options.read_tier == kBlockCacheTier;
@@ -3197,28 +3197,35 @@ std::string BlockBasedTable::ApproximateMiddleKey(const Slice& start,
 
   // guess middle_offset = (end_offset + start_offset) / 2
   uint64_t middle_offset = (end_offset + start_offset) / 2;
+  index_iter->SeekToFirst();
 
   while (index_iter->Valid()
          && index_iter->value().handle.offset() < middle_offset) {
     index_iter->Next();
   }
-  Slice prefix = index_iter->user_key();
+  std::string prefix = index_iter->user_key().ToString();
+  return prefix;
 
-  DataBlockIter biter;
-  NewDataBlockIterator<DataBlockIter>(
-      ro, index_iter->value().handle, &biter, BlockType::kData, nullptr,
-      &context,
-      /*s=*/Status(), /*prefetch_buffer*/ nullptr);
-  biter.SeekToFirst();
-  while (biter.Valid() && !biter.user_key().starts_with(prefix)) {
-    biter.Next();
-  }
-
-//  if (!biter.Valid()) {
-//    return "";
+//  DataBlockIter biter;
+//  NewDataBlockIterator<DataBlockIter>(
+//      ro, index_iter->value().handle, &biter, BlockType::kData, nullptr,
+//      &context,
+//      /*s=*/Status(), /*prefetch_buffer*/ nullptr);
+//  biter.SeekToFirst();
+//  ParsedInternalKey ikey;
+//  while (biter.Valid()) {
+//    ParseInternalKey(biter.key(), &ikey);
+//    if (ikey.user_key.starts_with(prefix)) {
+//      return ikey.user_key.ToString();
+//    }
+//    biter.Next();
 //  }
-
-  return biter.user_key().ToString();
+//
+////  if (!biter.Valid()) {
+////    return "";
+////  }
+//
+//  return "";
 }
 
 bool BlockBasedTable::TEST_FilterBlockInCache() const {

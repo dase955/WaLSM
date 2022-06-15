@@ -816,12 +816,17 @@ Status CompactionJob::Install(const MutableCFOptions& mutable_cf_options) {
            << compaction_job_stats_->file_prepare_write_nanos;
   }
 
-  stream << "lsm_state";
-  stream.StartArray();
-  for (int level = 0; level < vstorage->num_levels(); ++level) {
-    stream << vstorage->NumLevelFiles(level);
+  stream << "L0_files" << vstorage->NumLevelFiles(0);
+
+  for (auto& kv : vstorage->partitions_map_) {
+    auto* partition = kv.second;
+    stream << partition->smallest_.ToString();
+    stream.StartArray();
+    for (int i = 1; i < partition->level_; i++) {
+      stream << partition->files_[i].size();
+    }
+    stream.EndArray();
   }
-  stream.EndArray();
 
   CleanupCompaction();
   return status;
