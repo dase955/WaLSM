@@ -594,7 +594,7 @@ bool InternalStats::HandleCFMapStats(
 }
 
 bool InternalStats::HandleCFStats(std::string* value, Slice /*suffix*/) {
-  DumpCFStats(value);
+//  DumpCFStats(value);
   return true;
 }
 

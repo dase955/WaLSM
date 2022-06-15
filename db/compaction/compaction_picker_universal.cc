@@ -538,7 +538,7 @@ Compaction* UniversalCompactionBuilder::PickCompactionForSizeMarked() {
       const int output_level = target_level + 1;
       std::vector<CompactionInputFiles> inputs(vstorage_->num_levels());
       for (int i = 0; i < vstorage_->num_levels(); i++) {
-        inputs[i].level = target_level + i;
+        inputs[i].level = i;
       }
 
       auto& fs = partition->files_[target_level];
@@ -547,7 +547,7 @@ Compaction* UniversalCompactionBuilder::PickCompactionForSizeMarked() {
         if (fs[i]->being_compacted) {
           return nullptr;
         }
-        inputs[0].files.push_back(fs[i]);
+        inputs[target_level].files.push_back(fs[i]);
       }
 
       uint32_t path_id =
@@ -560,7 +560,7 @@ Compaction* UniversalCompactionBuilder::PickCompactionForSizeMarked() {
           GetCompressionOptions(mutable_cf_options_, vstorage_, output_level,
                                 true /* enable_compression */),
           /* max_subcompactions */ 0, /* grandparents */ {},
-          /* is manual */ false, 0.99, false /* deletion_compaction */,
+          /* is manual */ false, 1.0, false /* deletion_compaction */,
           CompactionReason::kUniversalSizeRatio);
     }
   }

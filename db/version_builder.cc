@@ -338,6 +338,7 @@ class VersionBuilder::Rep {
                                       " files are not sorted properly");
           }
 
+          // NOW: overlap is acceptable!!!
           // Make sure there is no overlap in levels > 0
 //          if (vstorage->InternalComparator()->Compare(f1->largest,
 //                                                      f2->smallest) >= 0) {
@@ -1013,6 +1014,11 @@ class VersionBuilder::Rep {
       if (add_it != add_files.end() && add_it->second != f) {
         vstorage->RemoveCurrentStats(f);
       } else {
+        // check if table_reader is opened
+        if (f->fd.table_reader == nullptr) {
+          table_cache_->InitFileTableReader(ReadOptions(),
+                                            *vstorage->GetComparator(), *f);
+        }
         vstorage->AddFile(level, f);
       }
     }

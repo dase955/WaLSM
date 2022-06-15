@@ -1655,6 +1655,13 @@ Version::Version(ColumnFamilyData* column_family_data, VersionSet* vset,
       version_number_(version_number),
       io_tracer_(io_tracer) {}
 
+Status Version::InitTableReader(FileMetaData& f) {
+  Status s = table_cache_->InitFileTableReader(ReadOptions(),
+                                               *internal_comparator(),
+                                               f);
+  return s;
+}
+
 void Version::Get(const ReadOptions& read_options, const LookupKey& k,
                   PinnableSlice* value, std::string* timestamp, Status* status,
                   MergeContext* merge_context,
@@ -5413,9 +5420,10 @@ InternalIterator* VersionSet::MakeInputIterator(
   // Level-0 files have to be merged together.  For other levels,
   // we will make a concatenating iterator per level.
   // TODO(opt): use concatenating iterator for level-0 if there is no overlap
-  const size_t space = (c->level() == 0 ? c->input_levels(0)->num_files +
-                                              c->num_input_levels() - 1
-                                        : c->num_input_levels());
+  size_t space = 1;
+  for (size_t i = 0; i < c->num_input_levels(); i++) {
+    space = std::max(space, 1+c->num_input_files(i));
+  }
   InternalIterator** list = new InternalIterator* [space];
   size_t num = 0;
   for (size_t which = 0; which < c->num_input_levels(); which++) {

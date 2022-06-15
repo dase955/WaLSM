@@ -392,19 +392,18 @@ class VersionStorageInfo {
       std::string* newMidKey = new std::string(middleKey);
       auto* fp = new FilePartition(level_, Slice(newMidKey->data(),
                                                  newMidKey->size()));
-      fp->largest_ = Slice("");
+      fp->largest_ = this->largest_;
+      this->largest_ = Slice(newMidKey->data(), newMidKey->size());
       // add files
       for (int i = 1; i < level_; i++) {
         for (FileMetaData* f : files_[i]) {
             fp->AddFile(i, f);
-            fp->largest_ = std::max(fp->largest_, f->largest.user_key());
         }
       }
       this->data_size_ /= 2;
       for (unsigned int i = 0; i < level_size.size(); i++) {
         level_size[i] /= 2;
       }
-      this->largest_ = Slice(newMidKey->data(), newMidKey->size());
       return fp;
     }
 
@@ -661,6 +660,10 @@ class VersionStorageInfo {
                                      const Slice& largest_user_key,
                                      int last_level, int last_l0_idx);
 
+  const InternalKeyComparator* GetComparator() {
+    return internal_comparator_;
+  }
+
   // List of file partitions
   // and custom comparatives
   std::set<Slice> partitions_keys_set_;
@@ -822,6 +825,8 @@ class Version {
                                   const Slice& largest_user_key,
                                   int level, bool* overlap);
 
+  Status InitTableReader(FileMetaData& f);
+
   // Lookup the value for key or get all merge operands for key.
   // If do_merge = true (default) then lookup value for key.
   // Behavior if do_merge = true:
@@ -857,6 +862,7 @@ class Version {
   // to be called before applying the version to the version set.
   void PrepareApply(const MutableCFOptions& mutable_cf_options,
                     bool update_stats);
+
 
   // Reference count management (so Versions do not disappear out from
   // under live iterators)

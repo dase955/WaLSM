@@ -96,6 +96,10 @@ class TableCache {
              HistogramImpl* file_read_hist = nullptr, bool skip_filters = false,
              int level = -1, size_t max_file_size_for_l0_meta_pin = 0);
 
+  Status InitFileTableReader(const ReadOptions& options,
+                             const InternalKeyComparator& internal_comparator,
+                             FileMetaData& file_meta);
+
   // Return the range delete tombstone iterator of the file specified by
   // `file_meta`.
   Status GetRangeTombstoneIterator(
@@ -127,6 +131,7 @@ class TableCache {
   // Clean table handle and erase it from the table cache
   // Used in DB close, or the file is not live anymore.
   void EraseHandle(const FileDescriptor& fd, Cache::Handle* handle);
+
 
   // Find table reader
   // @param skip_filters Disables loading/accessing the filter block

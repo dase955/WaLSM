@@ -470,6 +470,26 @@ Status TableCache::Get(const ReadOptions& options,
   return s;
 }
 
+Status TableCache::InitFileTableReader(const ReadOptions& options,
+                                       const InternalKeyComparator& internal_comparator,
+                                       FileMetaData& file_meta) {
+  Status s;
+  TableReader* t = file_meta.fd.table_reader;
+  Cache::Handle* handle = nullptr;
+  if (t != nullptr) {
+    return Status::OK();
+  }
+
+  s = FindTable(options, file_options_, internal_comparator, file_meta.fd, &handle);
+  if (s.ok()) {
+    file_meta.fd.table_reader = GetTableReaderFromHandle(handle);
+  }
+  if (handle != nullptr) {
+    ReleaseHandle(handle);
+  }
+  return s;
+}
+
 // Batched version of TableCache::MultiGet.
 Status TableCache::MultiGet(const ReadOptions& options,
                             const InternalKeyComparator& internal_comparator,
