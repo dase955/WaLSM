@@ -7,7 +7,7 @@
 #include <string>
 #include <random>
 #include <vector>
-#include <set>
+#include <unordered_set>
 #include <algorithm>
 #include <iostream>
 
@@ -45,25 +45,13 @@ int main() {
   // create the DB if it's not already present
   options.create_if_missing = true;
 //  options.target_file_size_base = 4 * 1048576;
-  options.write_buffer_size = 4 * 1048576;
+  options.write_buffer_size = 4 << 20;
   options.level0_file_num_compaction_trigger = 4;
   options.use_direct_io_for_flush_and_compaction = true;
   options.use_direct_reads = true;
 
 
-  std::vector<Slice> partition_keys(10, "");
-  std::vector<std::string> values(10);
-  for (int i = 1; i <= 9; i++) {
-    values[i] = randomString(64);
-    partition_keys[i] = Slice(values[i]);
-  }
-  std::sort(partition_keys.begin(), partition_keys.end());
 
-  for (auto& s : partition_keys) {
-    std::cout << "partition " << s.ToString(false) << std::endl;
-  }
-
-  options.partition_keys = partition_keys;
   // open DB
   Status s = DB::Open(options, kDBPath, &db);
   assert(s.ok());
@@ -77,10 +65,20 @@ int main() {
 //  assert(s.ok());
   std::string value;
   // get value
-  s = db->Get(ReadOptions(), "key1", &value);
+//  s = db->Get(ReadOptions(), "key1", &value);
 
-  for (int i = 0; i < 100000; i++) {
-    db->Put(WriteOptions(), randomString(64), randomString(128));
+  std::unordered_map<std::string, std::string> kvs;
+  std::unordered_set<std::string> repeat_keys;
+  for (int i = 0; i < 10000000; i++) {
+    std::string my_key = randomString(128);
+    std::string my_value = randomString(200);
+    if (kvs.find(my_key) != kvs.end()) {
+      repeat_keys.insert(my_key);
+      kvs[my_key] = my_value;
+    } else if (i % 30 == 1) {
+      kvs[my_key] = my_value;
+    }
+    db->Put(WriteOptions(), my_key, my_value);
   }
 
   s = db->Get(ReadOptions(), "key1", &value);
@@ -89,10 +87,30 @@ int main() {
 
   std::cout << " insert finished." << std::endl;
 
-  for (int i = 0; i < 10000; i++) {
+  for (int i = 0; i < 100; i++) {
     // test random get
     db->Get(ReadOptions(), randomString(64), &value);
   }
+
+  // check data
+  int no_hit = 0, repeat = 0, bad_value = 0;
+  for (auto& kv : kvs) {
+    s = db->Get(ReadOptions(), kv.first, &value);
+    if (s.IsNotFound()) {
+      no_hit++;
+    }
+    else if (value != kv.second) {
+      if (repeat_keys.find(kv.first) != repeat_keys.end()) {
+        std::cout << "REPEAT KEY ERROR!" << "$";
+        repeat++;
+      }
+      std::cout << "key: " << kv.first << " expect: " << kv.second
+      << " got: " << value << std::endl;
+      bad_value++;
+    }
+  }
+  printf("%d/%d not_found. %d/%d repeat/bad values. total repeat data size %d", no_hit, (int) kvs.size(),
+         repeat, bad_value, (int)repeat_keys.size());
 
   // atomically apply a set of updates
   {

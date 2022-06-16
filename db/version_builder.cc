@@ -841,8 +841,6 @@ class VersionBuilder::Rep {
       return s;
     }
 
-    // TODO: fix version migration for partitions
-    base_vstorage_->TrySplit(file_options_.split_threshold);
     vstorage->CopyPartitionInfos(base_vstorage_);
     for (int level = 0; level < num_levels_; level++) {
       const auto& cmp = (level == 0) ? level_zero_cmp_ : level_nonzero_cmp_;
@@ -887,6 +885,8 @@ class VersionBuilder::Rep {
     }
 
     SaveBlobFilesTo(vstorage);
+
+    vstorage->TrySplit(file_options_.split_threshold);
 
     s = CheckConsistency(vstorage);
     return s;
