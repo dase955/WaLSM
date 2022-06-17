@@ -309,15 +309,20 @@ class VersionStorageInfo {
     // approximate partition size
     uint64_t data_size_;
 
+    // is this partition the last partition?
+    bool is_last;
+
     Statistics* partition_statistics_;
 
-    FilePartition(int level, Slice smallest)
+
+    FilePartition(int level, Slice smallest, bool is_last)
         : level_(level),
           level_size(level, 0),
           smallest_(smallest),
           largest_(""),
           files_(new std::vector<FileMetaData*>[level]),
           data_size_(0),
+          is_last(is_last),
           partition_statistics_(new StatisticsImpl(nullptr)) { };
 
     FilePartition(const FilePartition* another)
@@ -327,6 +332,7 @@ class VersionStorageInfo {
           largest_(another->largest_),
           files_(new std::vector<FileMetaData*>[another->level_]),
           data_size_(0),
+          is_last(another->is_last),
           partition_statistics_(another->partition_statistics_) { };
 
     ~FilePartition() {
@@ -336,9 +342,12 @@ class VersionStorageInfo {
     int GetLevel() const { return level_; }
 
     void AddFile(int level, FileMetaData* f) {
+      assert(smallest_.compare(largest_) <= 0);
 
-      if (largest_.empty()) {
-        largest_ = Slice(f->largest.user_key());
+      // largest key for last partition
+      if (is_last && f->largest.user_key().compare(largest_) > 0) {
+        std::string* largest_string = new std::string(f->largest.user_key().ToString());
+        largest_ = Slice(largest_string->data(), largest_string->size());
       }
 
       // check if file in range
@@ -391,7 +400,7 @@ class VersionStorageInfo {
 
       std::string* newMidKey = new std::string(middleKey);
       auto* fp = new FilePartition(level_, Slice(newMidKey->data(),
-                                                 newMidKey->size()));
+                                                 newMidKey->size()), this->is_last);
       fp->largest_ = this->largest_;
       this->largest_ = Slice(newMidKey->data(), newMidKey->size());
       // add files
@@ -401,6 +410,7 @@ class VersionStorageInfo {
         }
       }
       this->data_size_ /= 2;
+      this->is_last = false;
       for (unsigned int i = 0; i < level_size.size(); i++) {
         level_size[i] /= 2;
       }

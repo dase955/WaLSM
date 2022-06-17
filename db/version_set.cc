@@ -1614,10 +1614,9 @@ VersionStorageInfo::VersionStorageInfo(
     oldest_snapshot_seqnum_ = ref_vstorage->oldest_snapshot_seqnum_;
   }
   // initialize partition
-  for (const Slice& s : partition_keys) {
-    partitions_keys_set_.insert(s);
-    partitions_map_[s.ToString()] = new FilePartition(levels, s);
-  }
+  partitions_keys_set_.insert("");
+  partitions_map_[""] = new FilePartition(levels, Slice(), true);
+
 }
 
 Version::Version(ColumnFamilyData* column_family_data, VersionSet* vset,
@@ -2373,11 +2372,6 @@ void VersionStorageInfo::AddFile(int level, FileMetaData* f) {
   f->refs++;
 
   if (level > 0) {
-    // Add non level-0 files to file partitions
-    auto it = partitions_keys_set_.upper_bound(f->smallest.user_key());
-    assert(it != partitions_keys_set_.begin());
-    it--;
-
     for (auto& kv : partitions_map_) {
       kv.second->AddFile(level, f);
     }
