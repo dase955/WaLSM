@@ -251,16 +251,16 @@ bool UniversalCompactionPicker::NeedsCompaction(
   if (vstorage->GetL0CompactionScore() >= 1.0) {
     return true;
   }
-  //  for (auto& kv : vstorage->partitions_map_) {
-  //    auto partition = kv.second;
-  //    uint64_t base_size = 256 * 1024 * 1024L;
-  //    for (int i = partition->GetLevel()-1; i >= 1; i--) {
-  //      if (partition->level_size[i] >= base_size) {
-  //        return true;
-  //      }
-  //      base_size *= 4;
-  //    }
-  //  }
+  for (auto& kv : vstorage->partitions_map_) {
+    auto partition = kv.second;
+    uint64_t base_size = 256 * 1024 * 1024L;
+    for (int i = 1; i < vstorage->num_levels() - 1; i++) {
+      if (partition->level_size[i] >= base_size) {
+        return true;
+      }
+      base_size *= 4;
+    }
+  }
   for (int i = 1; i < vstorage->num_levels() - 1; i++) {
     if (vstorage->LevelFiles(i).size() >= 4) {
       return true;
