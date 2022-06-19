@@ -34,7 +34,7 @@ namespace ROCKSDB_NAMESPACE {
       return;
     }
 
-//    double r = exp((double) read_amp);
+    // double r = exp((double) read_amp);
     if (m_cur_status == m_last_status) {
       // last action is keep
       m_QTable[m_last_status].q_k += discount_rate * read_amp;

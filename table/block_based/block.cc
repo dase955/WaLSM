@@ -398,9 +398,9 @@ void IndexBlockIter::SeekImpl(const Slice& target) {
     // search simply lands at the right place.
     skip_linear_scan = true;
   } else if (value_delta_encoded_) {
-    ok = BinarySeek<DecodeKeyV4>(seek_key, &index, &skip_linear_scan);
+    ok = BinarySeek<DecodeKeyV4>(seek_key, &index, &skip_linear_scan, partition_statistics_);
   } else {
-    ok = BinarySeek<DecodeKey>(seek_key, &index, &skip_linear_scan);
+    ok = BinarySeek<DecodeKey>(seek_key, &index, &skip_linear_scan, partition_statistics_);
   }
 
   if (!ok) {
