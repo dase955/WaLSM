@@ -98,6 +98,8 @@ class GlobalMemtable {
                                 bool& stored_in_nvm);
 
  private:
+  friend class Compactor;
+
   void PutRecover(uint64_t vptr);
 
   void Put(Slice& key, KVStruct& kv_info);
@@ -110,7 +112,7 @@ class GlobalMemtable {
 
   void InsertIntoLeaf(InnerNode* leaf, KVStruct& kv_info, size_t level);
 
-  void SqueezeNode(InnerNode* leaf);
+  bool SqueezeNode(InnerNode* leaf);
 
   // Split leaf node and store node that still need split
   void SplitLeaf(InnerNode* leaf, size_t level,

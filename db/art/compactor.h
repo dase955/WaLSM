@@ -24,6 +24,7 @@ struct InnerNode;
 struct NVMNode;
 class DBImpl;
 struct ArtNode;
+class GlobalMemtable;
 
 struct SingleCompactionJob {
   static ThreadPool* thread_pool;
@@ -37,12 +38,14 @@ struct SingleCompactionJob {
   std::vector<InnerNode*>  candidates_removed;
   std::vector<InnerNode*>  candidate_parents;
   std::vector<ArtNode*>    removed_arts;
+  std::vector<uint64_t>    hot_data;
 
   std::vector<std::string> keys_in_node;
   autovector<RecordIndex>* compacted_indexes;
   std::vector<std::pair<NVMNode*, int>> nvm_nodes_and_sizes;
 
   void Reset() {
+    hot_data.clear();
     candidates.clear();
     candidates_removed.clear();
     candidate_parents.clear();
@@ -61,6 +64,8 @@ class Compactor {
   void SetGroupManager(HeatGroupManager* group_manager);
 
   void SetVLogManager(VLogManager* vlog_manager);
+
+  void SetGlobalMemtable(GlobalMemtable* global_memtable);
 
   void SetDB(DBImpl* db_impl);
 
@@ -87,11 +92,13 @@ class Compactor {
 
   bool thread_stop_;
 
-  HeatGroupManager* group_manager_;
+  GlobalMemtable* global_memtable_ = nullptr;
 
-  VLogManager* vlog_manager_;
+  HeatGroupManager* group_manager_ = nullptr;
 
-  DBImpl* db_impl_;
+  VLogManager* vlog_manager_ = nullptr;
+
+  DBImpl* db_impl_ = nullptr;
 
   int num_parallel_compaction_ = 4;
 

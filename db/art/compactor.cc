@@ -183,6 +183,10 @@ void Compactor::SetGroupManager(HeatGroupManager* group_manager) {
   group_manager_ = group_manager;
 }
 
+void Compactor::SetGlobalMemtable(GlobalMemtable* global_memtable) {
+  global_memtable_ = global_memtable;
+}
+
 void Compactor::SetVLogManager(VLogManager* vlog_manager) {
   vlog_manager_ = vlog_manager;
   for (int i = 0; i < num_parallel_compaction_; ++i) {
@@ -215,6 +219,8 @@ void Compactor::StopCompactionThread() {
   compactor_thread_.join();
 }
 
+int flush_times[4];
+
 void Compactor::BGWorkDoCompaction() {
   static int64_t choose_threshold = compaction_threshold_ +
                                     num_parallel_compaction_ *
@@ -226,6 +232,42 @@ void Compactor::BGWorkDoCompaction() {
     }
 
     std::this_thread::sleep_for(std::chrono::milliseconds(5));
+
+    for (auto job : chosen_jobs_) {
+        for (auto vptr : job->hot_data) {
+          int i = vptr >> 20;
+          auto header = (VLogSegmentHeader*)(
+              vlog_manager_->pmemptr_ + vlog_manager_->vlog_segment_size_ * i);
+
+          char* record_start = vlog_manager_->pmemptr_ + vptr;
+          Slice slice(record_start, 1 << 20);
+          ValueType type = *((ValueType*)record_start);
+          slice.remove_prefix(WriteBatchInternal::kRecordPrefixSize);
+
+          uint32_t key_length;
+          GetVarint32(&slice, &key_length);
+          Slice key(slice.data(), key_length);
+          slice.remove_prefix(key_length);
+
+          if (type == kTypeValue) {
+            uint32_t value_length;
+            GetVarint32(&slice, &value_length);
+            slice.remove_prefix(value_length);
+          }
+
+          auto kv_size = slice.data() - record_start;
+          std::lock_guard<SpinMutex> status_lk(header->lock.mutex_);
+          if (unlikely(header->status_ == kSegmentGC)) {
+            std::string record(record_start, kv_size);
+            vlog_manager_->WriteToNewSegment(record, vptr);
+          }
+
+          auto hash = HashOnly(key.data(), key.size());
+          KVStruct kv_info(hash, vptr);
+          kv_info.kv_size_ = kv_size;
+          global_memtable_->Put(key, kv_info);
+        }
+    }
 
     vlog_manager_->FreeQueue();
     GetNodeAllocator()->FreeNodes();
@@ -257,6 +299,7 @@ void Compactor::BGWorkDoCompaction() {
       for (size_t i = 0; i < chosen_groups_.size(); ++i) {
         auto job = compaction_jobs_[i];
         job->group_ = chosen_groups_[i];
+        job->group_->flush_times_++;
         chosen_jobs_.push_back(job);
       }
     }
@@ -292,14 +335,27 @@ void Compactor::BGWorkDoCompaction() {
                 (end_time - start_time) * 1e-6, start_time * 1e-6,
                 0);
 
+    for (int& flush_time : flush_times) {
+      flush_time = -1;
+    }
+    for (size_t i = 0; i < chosen_groups_.size(); ++i) {
+      flush_times[i] = chosen_groups_[i]->flush_times_;
+    }
+
+    int rewrite_count = 0;
+    for (auto job : chosen_jobs_) {
+      rewrite_count += job->hot_data.size();
+    }
+
     RECORD_DEBUG("free pages: "
-        "%zu, %zu(%.2f), size: %zu, %zu, %zu; squeezed in groups %zu\n",
+        "%zu, %zu(%.2f), size: %zu, %zu, %zu; squeezed in groups %zu. rewrite %d. flush times: %d %d %d %d\n",
         GetNodeAllocator()->GetNumFreePages(),
         vlog_manager_->free_segments_.size(), vlog_manager_->Estimate(),
         MemTotalSize.load(std::memory_order_relaxed),
         CompactedSize.load(std::memory_order_relaxed),
         SqueezedSize.load(std::memory_order_relaxed),
-        SqueezedSizeInCompaction.load(std::memory_order_relaxed));
+        SqueezedSizeInCompaction.load(std::memory_order_relaxed), rewrite_count,
+        flush_times[0], flush_times[1], flush_times[2], flush_times[3]);
 
     SqueezedSizeInCompaction.store(0);
 
@@ -351,8 +407,9 @@ void Compactor::CompactionPreprocess(SingleCompactionJob* job) {
     auto new_nvm_node = GetNodeAllocator()->AllocateNode();
     InsertNewNVMNode(cur_node, new_nvm_node);
     compacted_size += cur_node->estimated_size_;
-    cur_node->estimated_size_ = 0;
     squeezed_size += cur_node->squeezed_size_;
+
+    cur_node->estimated_size_ = 0;
     cur_node->squeezed_size_ = 0;
     memset(cur_node->hll_, 0, 64);
 

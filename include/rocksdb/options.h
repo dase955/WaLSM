@@ -1175,12 +1175,13 @@ struct DBOptions {
 
   // A threshold for the max size of a group,
   // larger size will trigger group split.
-  // Default: 5M
-  int group_split_threshold = 10 << 20;
+  // Default: 12M
+  int group_split_threshold = 12 << 20;
 
-  // A threshold for the size of a group that can chosen to do compaction.
-  // Default: 2M
-  int group_min_size = 4 << 20;
+  // A threshold for the min size of a group,
+  // Groups whose size smaller than this will not be chosen to do compaction.
+  // Default: 3M
+  int group_min_size = 3 << 20;
 
   // Size of vlog file.
   // Default: 7G
@@ -1208,8 +1209,9 @@ struct DBOptions {
   // default: 100
   int layer_ts_interval = 50;
 
+  // Space for allocating nvm nodes.
   // default: 1G
-  int64_t node_memory_size = 1LL << 30;
+  int64_t node_memory_size = 1024LL << 20;
 };
 
 // Options to control the behavior of a database (passed to DB::Open)

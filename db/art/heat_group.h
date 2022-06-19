@@ -57,7 +57,7 @@ struct HeatGroup {
   HeatGroupManager*        group_manager_;
   HeatGroup*               next;
   HeatGroup*               prev;
-  char padding2[8];
+  int                      flush_times_ = 0;
 
   static int group_min_size_;
 

@@ -97,6 +97,78 @@ class ZipfianGenerator {
   std::uniform_real_distribution<> rand_val{0.0, 1.0};
 };
 
+class ZipfianGeneratorYCSB {
+ public:
+  ZipfianGeneratorYCSB(long min, long max, double zipfianconstant_, double zetan_) {
+    items = max - min + 1;
+    base = min;
+    this->zipfianconstant = zipfianconstant_;
+
+    theta = this->zipfianconstant;
+
+    zeta2theta = zeta(2, theta);
+
+    alpha = 1.0 / (1.0 - theta);
+    this->zetan = zetan_;
+    eta = (1 - std::pow(2.0 / items, 1 - theta)) / (1 - zeta2theta / this->zetan);
+
+    std::random_device rd;
+    rng = std::default_random_engine{rd()};
+
+    nextValue();
+  }
+
+  double zeta(long n, double thetaVal) {
+    return zetastatic(n, thetaVal);
+  }
+
+  static double zetastatic(long n, double theta) {
+    return zetastatic(0, n, theta, 0);
+  }
+
+  static double zetastatic(long st, long n, double theta, double initialsum) {
+    double sum = initialsum;
+    for (long i = st; i < n; i++) {
+
+      sum += 1 / (std::pow(i + 1, theta));
+    }
+
+    return sum;
+  }
+
+  long nextLong(long itemcount) {
+    double u = rand_double(rng);
+    double uz = u * zetan;
+
+    if (uz < 1.0) {
+      return base;
+    }
+
+    if (uz < 1.0 + std::pow(0.5, theta)) {
+      return base + 1;
+    }
+
+    return base + (long) ((itemcount) * std::pow(eta * u - eta + 1, alpha));
+  }
+
+  long nextValue() {
+    return nextLong(items);
+  }
+
+ private:
+  long items;
+
+  long base;
+
+  double zipfianconstant;
+
+  double alpha, zetan, eta, theta, zeta2theta;
+
+  std::uniform_real_distribution<> rand_double{0.0, 1.0};
+
+  std::default_random_engine rng;
+};
+
 inline uint64_t GetMicros() {
   struct timeval tv;
   gettimeofday(&tv, NULL);
@@ -287,6 +359,46 @@ void GenerateSamples() {
   }
 
   CheckFreq();
+}
+
+void GenerateSamplesYCSB() {
+  final_samples.resize(total_count);
+  std::uniform_int_distribution<int> dist(0, 1000000000 - 1);
+  std::random_device rd;
+  std::default_random_engine rng = std::default_random_engine{rd()};
+
+  {
+    ZipfianGeneratorYCSB gen(0, 1000000000L, 0.99, 26.46902820178302);
+    std::unordered_map<int, int> freqs;
+    std::unordered_map<int, int> modified;
+    int left[2] = {400000000, 800000000};
+    int interval = 50000000;
+    int mod = interval * 2;
+
+    for (int i = 0; i < total_count; ++i) {
+      long value = gen.nextValue();
+      freqs[value]++;
+      final_samples[i] = (int)value;
+    }
+
+    CheckFreq();
+
+    for (auto& pair : freqs) {
+      int old_value = pair.first;
+      if (pair.second == 1) {
+        modified[old_value] = dist(rng);
+      } else {
+        int new_val = fnvhash64(old_value) % mod;
+        modified[old_value] = left[new_val / interval] + (new_val % interval);
+      }
+    }
+
+    for (auto& value : final_samples) {
+      value = modified[value];
+    }
+
+    CheckFreq();
+  }
 }
 
 typedef void(*TestFunction)(DB*, int);

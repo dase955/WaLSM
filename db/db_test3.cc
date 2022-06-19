@@ -388,20 +388,32 @@ void GenerateSamples() {
          hot_count, hot_freq, cold_count);
 }
 
+void CheckFreq() {
+  std::unordered_map<int, int> freqs;
+  for (auto& value : final_samples) {
+    ++freqs[value];
+  }
+
+  int cold_count = 0;
+  for (auto& pair : freqs) {
+    cold_count += (pair.second == 1);
+  }
+
+  int hot_count = freqs.size() - cold_count;
+  float hot_freq = (total_count - cold_count) / (float)total_count * 100.f;
+  printf("Sample generated. hot count = %d(%.2f), cold count = %d\n",
+         hot_count, hot_freq, cold_count);
+}
+
 TEST_F(DBTest3, MockEnvTest) {
-
-  GenerateSamples();
-
-  return;
-
   Options options;
   options.create_if_missing = true;
-  options.enable_pipelined_write = true;
+  options.enable_pipelined_write = false;
   options.OptimizeLevelStyleCompaction();
 
-  int sample_size = 160000000;
+  int sample_count = 320000000;
 
-  final_samples.reserve(sample_size);
+  final_samples.resize(sample_count);
   std::uniform_int_distribution<int> dist(0, 1000000000 - 1);
   std::random_device rd;
   std::default_random_engine rng = std::default_random_engine{rd()};
@@ -409,20 +421,34 @@ TEST_F(DBTest3, MockEnvTest) {
   {
     ZipfianGenerator gen(0, 1000000000L, 0.99, 26.46902820178302);
     std::unordered_map<int, int> freqs;
+    std::unordered_map<int, int> modified;
     int left[2] = {400000000, 800000000};
+    int interval = 50000000;
+    int mod = interval * 2;
 
-    for (int i = 0; i < sample_size; ++i) {
-      long value = gen.nextValue();
-      assert(value <= 1000000000L);
+    for (int i = 0; i < sample_count; ++i) {
+      int value = gen.nextValue();
+      final_samples[i] = value;
       freqs[value]++;
-      final_samples[i] = (int)value;
+    }
+
+    CheckFreq();
+
+    for (auto& pair : freqs) {
+      int old_value = pair.first;
+      if (pair.second == 1) {
+        modified[old_value] = dist(rng);
+      } else {
+        int new_val = fnvhash64(old_value) % (unsigned long)mod;
+        modified[old_value] = left[new_val / interval] + (new_val % interval);
+      }
     }
 
     for (auto& value : final_samples) {
-      value = freqs[value] == 1
-                  ? dist(rng) :
-                  (int)(fnvhash64(value) % 50000000) + left[value % 2];
+      value = modified[value];
     }
+
+    CheckFreq();
   }
 
   DB* db;

@@ -61,7 +61,7 @@ int SearchVptr(
 auto RecordPrefixSize = WriteBatchInternal::kRecordPrefixSize;
 
 void VLogManager::PopFreeSegment() {
-  while (free_segments_.size() < 8) {
+  while (free_segments_.size() < 36) {
     std::this_thread::sleep_for(std::chrono::milliseconds(1));
   }
 
@@ -303,7 +303,7 @@ void VLogManager::BGWorkGarbageCollection() {
   std::vector<char*> segments;
 
   while (!thread_stop_) {
-    if (free_segments_.size() > force_gc_ratio_) {
+    if (free_segments_.size() > force_gc_ratio_ || free_segments_.size() < 32) {
       std::this_thread::sleep_for(std::chrono::milliseconds(5));
       continue;
     }
@@ -450,6 +450,10 @@ char* VLogManager::ChooseSegmentToGC() {
 }
 
 void VLogManager::WriteToNewSegment(std::string& record, uint64_t& new_vptr) {
+  static RWSpinLock rw_spinLock;
+
+  std::lock_guard<RWSpinLock> write_lk(rw_spinLock);
+
   uint32_t left = record.size();
   auto header = (VLogSegmentHeader*)segment_for_gc_;
   auto offset = header->offset_;

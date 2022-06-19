@@ -105,7 +105,9 @@ namespace ROCKSDB_NAMESPACE {
 // TEMP_LAYER is for groups doing compaction.
 #define TEMP_LAYER (-2)
 
-#define HOT_THRESHOLD 8
+#define HOT_THRESHOLD 4
+
+#define MAX_REWRITE_COUNT 100
 
 /////////////////////////////////////////////////////
 // PMem

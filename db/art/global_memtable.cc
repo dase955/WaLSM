@@ -22,11 +22,10 @@
 
 namespace ROCKSDB_NAMESPACE {
 
-#define SQUEEZE_THRESHOLD 104
+#define SQUEEZE_THRESHOLD 120
 
 InnerNode::InnerNode()
     : heat_group_(nullptr), art(nullptr), backup_art(nullptr),
-
       nvm_node_(nullptr), backup_nvm_node_(nullptr),
       support_node_(nullptr), next_node_(nullptr),
       vptr_(0), estimated_size_(0), squeezed_size_(0),
@@ -118,7 +117,6 @@ void CheckHeatGroup(HeatGroup* group) {
     cur = cur->next_node_;
   }
 }
-
 
 InnerNode* GlobalMemtable::RecoverNonLeaf(InnerNode* parent, int level,
                                           HeatGroup*& group) {
@@ -474,7 +472,7 @@ thread_local uint8_t temp_fingerprints[224] = {0};
 thread_local uint64_t temp_data[448] = {0};
 #endif
 
-void GlobalMemtable::SqueezeNode(InnerNode* leaf) {
+bool GlobalMemtable::SqueezeNode(InnerNode* leaf) {
   auto node = leaf->nvm_node_;
   auto data = node->data;
 
@@ -515,6 +513,10 @@ void GlobalMemtable::SqueezeNode(InnerNode* leaf) {
     cur_size += kv_info.kv_size_;
   }
 
+  if (unlikely(key_set.size() >= NVM_MAX_SIZE - 16)) {
+    return false;
+  }
+
   assert(fpos <= NVM_MAX_SIZE - 16);
   assert(fpos * 2 == count);
 
@@ -546,6 +548,8 @@ void GlobalMemtable::SqueezeNode(InnerNode* leaf) {
 
   // update vlog bitmap
   vlog_manager_->UpdateBitmap(unused_indexes);
+
+  return true;
 }
 
 // For level 1, 4, 7..., we read key and modify prefixes in hash.
@@ -775,8 +779,8 @@ void GlobalMemtable::InsertIntoLeaf(InnerNode* leaf, KVStruct& kv_info,
       return;
     }
 
-    if (EstimateDistinctCount(leaf->hll_) < SQUEEZE_THRESHOLD) {
-      SqueezeNode(leaf);
+    if (EstimateDistinctCount(leaf->hll_) < SQUEEZE_THRESHOLD &&
+        SqueezeNode(leaf)) {
       leaf->opt_lock_.unlock();
       return;
     }

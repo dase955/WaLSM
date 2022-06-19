@@ -14,8 +14,8 @@
 namespace ROCKSDB_NAMESPACE {
 
 int32_t GetTimestamp() {
-  static std::atomic<int32_t> Timestamp{128};
-  return Timestamp.fetch_add(1, std::memory_order_relaxed) >> 7;
+  static std::atomic<int32_t> Timestamp{64};
+  return Timestamp.fetch_add(1, std::memory_order_relaxed) >> 6;
 }
 
 Timestamps::Timestamps()

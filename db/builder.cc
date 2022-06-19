@@ -355,7 +355,9 @@ Status BuildTable(
 struct CompactionRec {
   std::string* key;
   Slice        value;
-  uint64_t     seq_num_;
+  uint64_t     seq_num;
+  uint64_t     vptr;
+  RecordIndex  record_index;
 
   CompactionRec() = default;
 
@@ -369,15 +371,12 @@ struct CompactionRec {
 };
 
 int64_t ReadAndBuild(SingleCompactionJob* job,
-                  TableBuilder* builder,
-                  FileMetaData* meta) {
-  const size_t kReportFlushIOStatsEvery = 1048576;
-
+                     TableBuilder* builder,
+                     FileMetaData* meta) {
   ValueType type;
   SequenceNumber seq_num;
-  RecordIndex record_index = 0;
   std::vector<std::string>& keys = job->keys_in_node;
-  std::vector<CompactionRec> kvs(240);
+  std::vector<CompactionRec> kvs(241);
 
   int64_t out_kv_size = 0;
 
@@ -386,38 +385,60 @@ int64_t ReadAndBuild(SingleCompactionJob* job,
     int data_size = pair.second;
     auto data = nvm_node->data;
 
-    int count = 0;
+    size_t count = 0;
     for (int i = -16; i < data_size; ++i) {
       auto vptr = data[i * 2 + 1];
+      GetActualVptr(vptr);
       if (!vptr) {
         continue;
       }
 
       auto& kv = kvs[count];
       type = job->vlog_manager_->GetKeyValue(
-          vptr, keys[count], kv.value, seq_num, record_index);
-      kv.seq_num_ = (seq_num << 8) | type;
+          vptr, keys[count], kv.value, seq_num, kv.record_index);
+      kv.seq_num = (seq_num << 8) | type;
       kv.key = &keys[count++];
+      kv.vptr = vptr;
+    }
 
-      GetActualVptr(vptr);
-      job->compacted_indexes[vptr >> 20].push_back(record_index);
+    if (count == 0) {
+      continue;
     }
 
     std::stable_sort(kvs.begin(), kvs.begin() + count);
-    auto end = std::unique(kvs.begin(), kvs.begin() + count);
-    for (auto it = kvs.begin(); it != end; ++it) {
-      auto& key = it->key;
-      PutFixed64(key, it->seq_num_);
-      builder->Add(*key, it->value);
-      meta->UpdateBoundaries(
-          *key, it->value, it->seq_num_, kTypeValue);
-      out_kv_size += (it->value.size() + key->size());
-    }
 
-    // TODO(noetzli): Update stats after flush, too.
-    if (IOSTATS(bytes_written) >= kReportFlushIOStatsEvery) {
-      ThreadStatusUtil::SetThreadOperationProperty(
-          ThreadStatus::FLUSH_BYTES_WRITTEN, IOSTATS(bytes_written));
+    keys[count] = "";
+    kvs[count].key = &keys[count];
+
+    int cur_count = 0;
+    auto& last_kv = kvs.front();
+
+    for (size_t i = 0; i <= count; ++i) {
+      auto& kv = kvs[i];
+
+      if (*kv.key == *last_kv.key) {
+        job->compacted_indexes[last_kv.vptr >> 20]
+            .push_back(last_kv.record_index);
+        ++cur_count;
+      } else {
+        // TODO: choose highest freq data
+        if (cur_count >= HOT_THRESHOLD &&
+            job->hot_data.size() < MAX_REWRITE_COUNT) {
+          job->hot_data.push_back(last_kv.vptr);
+        } else {
+          job->compacted_indexes[last_kv.vptr >> 20]
+              .push_back(last_kv.record_index);
+
+          auto& key = last_kv.key;
+          PutFixed64(key, last_kv.seq_num);
+          builder->Add(*key, last_kv.value);
+          meta->UpdateBoundaries(
+              *key, last_kv.value, last_kv.seq_num, kTypeValue);
+          out_kv_size += (last_kv.value.size() + key->size());
+        }
+        cur_count = 1;
+      }
+      last_kv = kvs[i];
     }
   }
 

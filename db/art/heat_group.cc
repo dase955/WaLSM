@@ -221,15 +221,6 @@ void HeatGroupManager::InitGroupQueue(float coeff) {
   }
 }
 
-/*void HeatGroupManager::StartHeatThread() {
-
-}
-
-void HeatGroupManager::StopHeatThread() {
-  AddOperation(nullptr, kOperationStop, true);
-  heat_processor_.join();
-}*/
-
 void HeatGroupManager::BGWorkProcessHeatGroup() {
   bool needStop = false;
   while (!needStop) {
