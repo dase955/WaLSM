@@ -505,6 +505,7 @@ ColumnFamilyData::ColumnFamilyData(
       name_(name),
       dummy_versions_(_dummy_versions),
       current_(nullptr),
+      global_q_table_(new MergeQTable(0.1, 0.9)),
       refs_(0),
       initialized_(false),
       dropped_(false),
@@ -607,6 +608,9 @@ ColumnFamilyData::~ColumnFamilyData() {
   auto next = next_;
   prev->next_ = next;
   next->prev_ = prev;
+
+  // delete q table
+  delete global_q_table_;
 
   if (!dropped_ && column_family_set_ != nullptr) {
     // If it's dropped, it's already removed from column family set

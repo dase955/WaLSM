@@ -1573,14 +1573,16 @@ VersionStorageInfo::VersionStorageInfo(
     const InternalKeyComparator* internal_comparator,
     const Comparator* user_comparator, int levels,
     CompactionStyle compaction_style, VersionStorageInfo* ref_vstorage,
-    bool _force_consistency_checks, const std::vector<Slice>& partition_keys)
+    bool _force_consistency_checks,
+    MergeQTable* q_table,
+    const std::vector<Slice>& partition_keys)
     : internal_comparator_(internal_comparator),
       user_comparator_(user_comparator),
       // cfd is nullptr if Version is dummy
       num_levels_(levels),
       num_non_empty_levels_(0),
       l0_compaction_score(0.0),
-      q_table_(nullptr),
+      q_table_(q_table),
       file_indexer_(user_comparator),
       compaction_style_(compaction_style),
       files_(new std::vector<FileMetaData*>[num_levels_]),
@@ -1641,8 +1643,9 @@ Version::Version(ColumnFamilyData* column_family_data, VersionSet* vset,
           (cfd_ == nullptr || cfd_->current() == nullptr)
               ? nullptr
               : cfd_->current()->storage_info(),
-          cfd_ == nullptr ? false : cfd_->ioptions()->force_consistency_checks,
-          cfd_ == nullptr ? std::vector<Slice>(1, "") : cfd_->ioptions()->partition_keys),
+          (cfd_ == nullptr) ? false : cfd_->ioptions()->force_consistency_checks,
+          (cfd_ == nullptr) ? nullptr : cfd_->GetGlobalQTable(),
+          (cfd_ == nullptr) ? std::vector<Slice>(1, "") : cfd_->ioptions()->partition_keys),
       vset_(vset),
       next_(this),
       prev_(this),
@@ -1687,7 +1690,7 @@ void Version::Get(const ReadOptions& read_options, const LookupKey& k,
   auto* hit_partition = storage_info_.GetHitPartition(user_key);
   GetContext get_context(
       user_comparator(), merge_operator_, info_log_,
-      db_statistics_, hit_partition->partition_statistics_,
+      db_statistics_, &hit_partition->search_counter,
       status->ok() ? GetContext::kNotFound : GetContext::kMerge, user_key,
       do_merge ? value : nullptr, do_merge ? timestamp : nullptr, value_found,
       merge_context, do_merge, max_covering_tombstone_seq, this->env_, seq,

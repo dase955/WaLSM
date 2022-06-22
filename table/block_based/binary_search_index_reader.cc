@@ -65,7 +65,7 @@ InternalIteratorBase<IndexValue>* BinarySearchIndexReader::NewIterator(
       rep->get_global_seqno(BlockType::kIndex), iter, kNullStats, true,
       index_has_first_key(), index_key_includes_seq(), index_value_is_full(),
       false, nullptr,
-      get_context == nullptr ? nullptr : get_context->GetPartitionStatistics());
+      get_context == nullptr ? nullptr : get_context->GetSearchCounter());
 
   assert(it != nullptr);
   index_block.TransferTo(it);

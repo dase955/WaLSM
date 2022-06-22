@@ -398,9 +398,9 @@ void IndexBlockIter::SeekImpl(const Slice& target) {
     // search simply lands at the right place.
     skip_linear_scan = true;
   } else if (value_delta_encoded_) {
-    ok = BinarySeek<DecodeKeyV4>(seek_key, &index, &skip_linear_scan, partition_statistics_);
+    ok = BinarySeek<DecodeKeyV4>(seek_key, &index, &skip_linear_scan, search_counter_);
   } else {
-    ok = BinarySeek<DecodeKey>(seek_key, &index, &skip_linear_scan, partition_statistics_);
+    ok = BinarySeek<DecodeKey>(seek_key, &index, &skip_linear_scan, search_counter_);
   }
 
   if (!ok) {
@@ -686,7 +686,7 @@ template <class TValue>
 template <typename DecodeKeyFunc>
 bool BlockIter<TValue>::BinarySeek(const Slice& target, uint32_t* index,
                                    bool* skip_linear_scan,
-                                   Statistics* partition_statistics) {
+                                   std::atomic<uint64_t>* search_counter) {
   if (restarts_ == 0) {
     // SST files dedicated to range tombstones are written with index blocks
     // that have no keys while also having `num_restarts_ == 1`. This would
@@ -746,8 +746,8 @@ bool BlockIter<TValue>::BinarySeek(const Slice& target, uint32_t* index,
     read_penalty--;
   }
 
-  if (partition_statistics != nullptr && read_penalty > 0) {
-    RecordTick(partition_statistics, BIS_READ, read_penalty);
+  if (search_counter != nullptr && read_penalty > 0) {
+    search_counter->operator+=(read_penalty);
   }
   return true;
 }
@@ -1018,7 +1018,7 @@ IndexBlockIter* Block::NewIndexIterator(
     bool total_order_seek,
     bool have_first_key, bool key_includes_seq, bool value_is_full,
     bool block_contents_pinned, BlockPrefixIndex* prefix_index,
-    Statistics* partition_statistics) {
+    std::atomic<uint64_t>* search_counter) {
   IndexBlockIter* ret_iter;
   if (iter != nullptr) {
     ret_iter = iter;
@@ -1037,7 +1037,7 @@ IndexBlockIter* Block::NewIndexIterator(
     BlockPrefixIndex* prefix_index_ptr =
         total_order_seek ? nullptr : prefix_index;
     ret_iter->Initialize(raw_ucmp, data_, restart_offset_, num_restarts_,
-                         partition_statistics,
+                         search_counter,
                          global_seqno, prefix_index_ptr, have_first_key,
                          key_includes_seq, value_is_full,
                          block_contents_pinned);

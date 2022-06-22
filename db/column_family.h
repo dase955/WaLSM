@@ -509,6 +509,8 @@ class ColumnFamilyData {
 
   ThreadLocalPtr* TEST_GetLocalSV() { return local_sv_.get(); }
 
+  MergeQTable* GetGlobalQTable() { return global_q_table_; }
+
  private:
   friend class ColumnFamilySet;
   static const uint32_t kDummyColumnFamilyDataId;

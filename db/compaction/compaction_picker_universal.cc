@@ -500,6 +500,32 @@ Compaction* UniversalCompactionBuilder::PickCompactionForL0() {
                        cf_name_.c_str(), file_num_buf);
     }
 
+    // for L1 compaction modes
+    for (auto& kv : vstorage_->partitions_map_) {
+      if (!kv.second->is_tier && !kv.second->files_[output_level].empty()) {
+        bool ok = true;
+        std::vector<FileMetaData*> to_add;
+        auto& files = kv.second->files_[output_level];
+        for (FileMetaData* next : files) {
+          if (next->being_compacted) {
+            ok = false;
+            break;
+          }
+          to_add.push_back(next);
+        }
+
+        if (ok) {
+          for (FileMetaData* next : to_add) {
+            inputs[output_level].files.push_back(next);
+          }
+          if (!kv.second->is_compaction_work) {
+            kv.second->is_compaction_work = true;
+
+          }
+        }
+      }
+    }
+
     uint32_t path_id =
         GetPathId(ioptions_, mutable_cf_options_, estimated_total_size);
     return new Compaction(

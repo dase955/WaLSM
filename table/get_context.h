@@ -97,7 +97,7 @@ class GetContext {
   // merge_context and they are never merged. The value pointer is untouched.
   GetContext(const Comparator* ucmp, const MergeOperator* merge_operator,
              Logger* logger, Statistics* statistics,
-             Statistics* partition_statistics,
+             std::atomic<uint64_t>* search_counter,
              GetState init_state,
              const Slice& user_key, PinnableSlice* value,
              bool* value_found, MergeContext* merge_context, bool do_merge,
@@ -108,7 +108,7 @@ class GetContext {
              uint64_t tracing_get_id = 0);
   GetContext(const Comparator* ucmp, const MergeOperator* merge_operator,
              Logger* logger, Statistics* statistics,
-             Statistics* partition_statistics,
+             std::atomic<uint64_t>* search_counter,
              GetState init_state,
              const Slice& user_key, PinnableSlice* value,
              std::string* timestamp, bool* value_found,
@@ -165,8 +165,8 @@ class GetContext {
     return true;
   }
 
-  Statistics* GetPartitionStatistics() {
-    return partition_statistics_;
+  std::atomic<uint64_t>* GetSearchCounter() {
+    return search_counter_;
   }
 
   void ReportCounters();
@@ -183,7 +183,7 @@ class GetContext {
   // the merge operations encountered;
   Logger* logger_;
   Statistics* statistics_;
-  Statistics* partition_statistics_;
+  std::atomic<uint64_t>* search_counter_;
 
   GetState state_;
   Slice user_key_;

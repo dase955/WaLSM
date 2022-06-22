@@ -215,7 +215,7 @@ class Block {
                                    bool key_includes_seq, bool value_is_full,
                                    bool block_contents_pinned = false,
                                    BlockPrefixIndex* prefix_index = nullptr,
-                                   Statistics* partition_statistics = nullptr);
+                                   std::atomic<uint64_t>* search_counter = nullptr);
 
   // Report an approximation of how much memory has been used.
   size_t ApproximateMemoryUsage() const;
@@ -468,7 +468,7 @@ class BlockIter : public InternalIteratorBase<TValue> {
   template <typename DecodeKeyFunc>
   inline bool BinarySeek(const Slice& target, uint32_t* index,
                          bool* is_index_key_result,
-                         Statistics* partition_statistics = nullptr);
+                         std::atomic<uint64_t>* search_counter = nullptr);
 
   void FindKeyAfterBinarySeek(const Slice& target, uint32_t index,
                               bool is_index_key_result);
@@ -603,7 +603,7 @@ class IndexBlockIter final : public BlockIter<IndexValue> {
   // applied to values.
   void Initialize(const Comparator* raw_ucmp, const char* data,
                   uint32_t restarts, uint32_t num_restarts,
-                  Statistics* partition_statistics,
+                  std::atomic<uint64_t>* search_counter,
                   SequenceNumber global_seqno, BlockPrefixIndex* prefix_index,
                   bool have_first_key, bool key_includes_seq,
                   bool value_is_full, bool block_contents_pinned) {
@@ -613,7 +613,7 @@ class IndexBlockIter final : public BlockIter<IndexValue> {
     prefix_index_ = prefix_index;
     value_delta_encoded_ = !value_is_full;
     have_first_key_ = have_first_key;
-    partition_statistics_ = partition_statistics;
+    search_counter_ = search_counter;
     if (have_first_key_ && global_seqno != kDisableGlobalSequenceNumber) {
       global_seqno_state_.reset(new GlobalSeqnoState(global_seqno));
     } else {
@@ -678,7 +678,7 @@ class IndexBlockIter final : public BlockIter<IndexValue> {
  private:
   bool value_delta_encoded_;
   bool have_first_key_;  // value includes first_internal_key
-  Statistics* partition_statistics_;
+  std::atomic<uint64_t>* search_counter_;
   BlockPrefixIndex* prefix_index_;
   // Whether the value is delta encoded. In that case the value is assumed to be
   // BlockHandle. The first value in each restart interval is the full encoded

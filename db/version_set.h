@@ -20,7 +20,9 @@
 
 #pragma once
 #include <atomic>
+#include <chrono>
 #include <deque>
+#include <iostream>
 #include <limits>
 #include <map>
 #include <memory>
@@ -28,7 +30,6 @@
 #include <string>
 #include <utility>
 #include <vector>
-#include <iostream>
 
 #include "db/blob/blob_file_meta.h"
 #include "db/column_family.h"
@@ -114,7 +115,7 @@ class VersionStorageInfo {
                      const Comparator* user_comparator, int num_levels,
                      CompactionStyle compaction_style,
                      VersionStorageInfo* src_vstorage,
-                     bool _force_consistency_checks,
+                     bool _force_consistency_checks, MergeQTable* q_table,
                      const std::vector<Slice>& partition_keys);
   // No copying allowed
   VersionStorageInfo(const VersionStorageInfo&) = delete;
@@ -180,9 +181,7 @@ class VersionStorageInfo {
   void UpdateFilesByCompactionPri(CompactionPri compaction_pri);
 
   void GenerateLevel0NonOverlapping();
-  bool level0_non_overlapping() const {
-    return level0_non_overlapping_;
-  }
+  bool level0_non_overlapping() const { return level0_non_overlapping_; }
 
   // Check whether each file in this version is bottommost (i.e., nothing in its
   // key-range could possibly exist in an older file/level).
@@ -209,9 +208,12 @@ class VersionStorageInfo {
 
   void SetL0CompactionScore(double val) { l0_compaction_score = val; }
 
-  int PartitionSize() const { return static_cast<int>(partitions_keys_set_.size()); }
+  int PartitionSize() const {
+    return static_cast<int>(partitions_keys_set_.size());
+  }
 
-  bool BelongToSamePartition(const std::string& prev_key, const Slice& current_key) const {
+  bool BelongToSamePartition(const std::string& prev_key,
+                             const Slice& current_key) const {
     auto it_prev = partitions_keys_set_.upper_bound(Slice(prev_key));
     auto it_current = partitions_keys_set_.upper_bound(current_key);
     return it_prev == it_current;
@@ -292,7 +294,6 @@ class VersionStorageInfo {
   }
 
   struct FilePartition {
-
     int level_;
 
     // Level that should be compacted next and its compaction score.
@@ -312,8 +313,12 @@ class VersionStorageInfo {
     // is this partition the last partition?
     bool is_last;
 
-    Statistics* partition_statistics_;
+    // for merge operations
+    bool is_tier;
+    bool is_compaction_work;
+    std::chrono::milliseconds timestamp;
 
+    std::atomic<uint64_t> search_counter;
 
     FilePartition(int level, Slice smallest, bool is_last)
         : level_(level),
@@ -323,7 +328,9 @@ class VersionStorageInfo {
           files_(new std::vector<FileMetaData*>[level]),
           data_size_(0),
           is_last(is_last),
-          partition_statistics_(new StatisticsImpl(nullptr)) { };
+          is_tier(true),
+          is_compaction_work(false),
+          search_counter(0){};
 
     FilePartition(const FilePartition* another)
         : level_(another->level_),
@@ -333,10 +340,23 @@ class VersionStorageInfo {
           files_(new std::vector<FileMetaData*>[another->level_]),
           data_size_(0),
           is_last(another->is_last),
-          partition_statistics_(another->partition_statistics_) { };
+          is_tier(another->is_tier),
+          is_compaction_work(another->is_compaction_work),
+          search_counter(another->search_counter.load()) {};
 
-    ~FilePartition() {
-      delete[] files_;
+    ~FilePartition() { delete[] files_; }
+
+    void UpdateTimestamp() {
+      timestamp = std::chrono::duration_cast<std::chrono::milliseconds>(
+          std::chrono::system_clock::now().time_since_epoch());
+    }
+
+    std::chrono::milliseconds GetTimeDelta() {
+      std::chrono::milliseconds now =
+          std::chrono::duration_cast<std::chrono::milliseconds>(
+              std::chrono::system_clock::now().time_since_epoch());
+      std::chrono::milliseconds delta = now - timestamp;
+      return delta;
     }
 
     int GetLevel() const { return level_; }
@@ -346,7 +366,8 @@ class VersionStorageInfo {
 
       // largest key for last partition
       if (is_last && f->largest.user_key().compare(largest_) > 0) {
-        std::string* largest_string = new std::string(f->largest.user_key().ToString());
+        std::string* largest_string =
+            new std::string(f->largest.user_key().ToString());
         largest_ = Slice(largest_string->data(), largest_string->size());
       }
 
@@ -365,8 +386,8 @@ class VersionStorageInfo {
       } else if (f->fd.table_reader != nullptr) {
         InternalKey ismallest(smallest_, kMaxSequenceNumber, kTypeValue),
             ilargest(largest_, kMaxSequenceNumber, kTypeValue);
-        uint64_t append_size = f->fd.table_reader->ApproximateSize(ismallest.Encode(), ilargest.Encode(),
-                                                          kUncategorized);
+        uint64_t append_size = f->fd.table_reader->ApproximateSize(
+            ismallest.Encode(), ilargest.Encode(), kUncategorized);
         data_size_ += append_size;
         level_size[level] += append_size;
       }
@@ -379,7 +400,7 @@ class VersionStorageInfo {
       InternalKey ismallest(smallest_, kMaxSequenceNumber, kTypeValue),
           ilargest(largest_, kMaxSequenceNumber, kTypeValue);
       const Slice ssmallest = ismallest.Encode(), slargest = ilargest.Encode();
-      for (int i = level_-1; i >= 0; i--) {
+      for (int i = level_ - 1; i >= 0; i--) {
         for (FileMetaData* f : files_[i]) {
           if (f->fd.table_reader != nullptr) {
             middleKey =
@@ -399,14 +420,14 @@ class VersionStorageInfo {
       }
 
       std::string* newMidKey = new std::string(middleKey);
-      auto* fp = new FilePartition(level_, Slice(newMidKey->data(),
-                                                 newMidKey->size()), this->is_last);
+      auto* fp = new FilePartition(
+          level_, Slice(newMidKey->data(), newMidKey->size()), this->is_last);
       fp->largest_ = this->largest_;
       this->largest_ = Slice(newMidKey->data(), newMidKey->size());
       // add files
       for (int i = 1; i < level_; i++) {
         for (FileMetaData* f : files_[i]) {
-            fp->AddFile(i, f);
+          fp->AddFile(i, f);
         }
       }
       this->data_size_ /= 2;
@@ -418,7 +439,6 @@ class VersionStorageInfo {
     }
 
     bool Oversize(uint64_t threshold) const { return data_size_ > threshold; }
-
   };
 
   FilePartition* GetHitPartition(Slice& smallest_user_key) {
@@ -549,7 +569,7 @@ class VersionStorageInfo {
     assert(finalized_);
     return files_marked_for_periodic_compaction_;
   }
-//
+  //
   void TEST_AddFileMarkedForPeriodicCompaction(int level, FileMetaData* f) {
     files_marked_for_periodic_compaction_.emplace_back(level, f);
   }
@@ -670,9 +690,7 @@ class VersionStorageInfo {
                                      const Slice& largest_user_key,
                                      int last_level, int last_l0_idx);
 
-  const InternalKeyComparator* GetComparator() {
-    return internal_comparator_;
-  }
+  const InternalKeyComparator* GetComparator() { return internal_comparator_; }
 
   // List of file partitions
   // and custom comparatives
@@ -688,7 +706,7 @@ class VersionStorageInfo {
 
   double l0_compaction_score;
 
-  MergeQTable *q_table_;
+  MergeQTable* q_table_;
 
   // Per-level max bytes
   std::vector<uint64_t> level_max_bytes_;
@@ -703,8 +721,6 @@ class VersionStorageInfo {
   // List of files per level, files in each level are arranged
   // in increasing order of keys
   std::vector<FileMetaData*>* files_;
-
-
 
   // Map of all table files in version. Maps file number to (level, position on
   // level).
@@ -832,8 +848,8 @@ class Version {
 
   Status OverlapWithLevelIterator(const ReadOptions&, const FileOptions&,
                                   const Slice& smallest_user_key,
-                                  const Slice& largest_user_key,
-                                  int level, bool* overlap);
+                                  const Slice& largest_user_key, int level,
+                                  bool* overlap);
 
   Status InitTableReader(FileMetaData& f);
 
@@ -872,7 +888,6 @@ class Version {
   // to be called before applying the version to the version set.
   void PrepareApply(const MutableCFOptions& mutable_cf_options,
                     bool update_stats);
-
 
   // Reference count management (so Versions do not disappear out from
   // under live iterators)
@@ -930,9 +945,7 @@ class Version {
   ColumnFamilyData* cfd() const { return cfd_; }
 
   // Return the next Version in the linked list. Used for debug only
-  Version* TEST_Next() const {
-    return next_;
-  }
+  Version* TEST_Next() const { return next_; }
 
   int TEST_refs() const { return refs_; }
 
@@ -991,10 +1004,10 @@ class Version {
   const MergeOperator* merge_operator_;
 
   VersionStorageInfo storage_info_;
-  VersionSet* vset_;            // VersionSet to which this Version belongs
-  Version* next_;               // Next version in linked list
-  Version* prev_;               // Previous version in linked list
-  int refs_;                    // Number of live refs to this version
+  VersionSet* vset_;  // VersionSet to which this Version belongs
+  Version* next_;     // Next version in linked list
+  Version* prev_;     // Previous version in linked list
+  int refs_;          // Number of live refs to this version
   const FileOptions file_options_;
   const MutableCFOptions mutable_cf_options_;
   // Cached value to avoid recomputing it on every read.
@@ -1019,7 +1032,7 @@ class Version {
 
 struct ObsoleteFileInfo {
   FileMetaData* metadata;
-  std::string   path;
+  std::string path;
 
   ObsoleteFileInfo() noexcept : metadata(nullptr) {}
   ObsoleteFileInfo(FileMetaData* f, const std::string& file_path)
@@ -1028,9 +1041,8 @@ struct ObsoleteFileInfo {
   ObsoleteFileInfo(const ObsoleteFileInfo&) = delete;
   ObsoleteFileInfo& operator=(const ObsoleteFileInfo&) = delete;
 
-  ObsoleteFileInfo(ObsoleteFileInfo&& rhs) noexcept :
-    ObsoleteFileInfo() {
-      *this = std::move(rhs);
+  ObsoleteFileInfo(ObsoleteFileInfo&& rhs) noexcept : ObsoleteFileInfo() {
+    *this = std::move(rhs);
   }
 
   ObsoleteFileInfo& operator=(ObsoleteFileInfo&& rhs) noexcept {
@@ -1335,7 +1347,7 @@ class VersionSet {
                             FileMetaData** metadata, ColumnFamilyData** cfd);
 
   // This function doesn't support leveldb SST filenames
-  void GetLiveFilesMetaData(std::vector<LiveFileMetaData> *metadata);
+  void GetLiveFilesMetaData(std::vector<LiveFileMetaData>* metadata);
 
   void AddObsoleteBlobFile(uint64_t blob_file_number, std::string path) {
     obsolete_blob_files_.emplace_back(blob_file_number, std::move(path));
