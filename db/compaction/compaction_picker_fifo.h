@@ -38,7 +38,7 @@ class FIFOCompactionPicker : public CompactionPicker {
   virtual int MaxOutputLevel() const override { return 0; }
 
   virtual bool NeedsCompaction(
-      const VersionStorageInfo* vstorage) const override;
+      VersionStorageInfo* vstorage) const override;
 
   virtual bool NeedsMerge(
       const VersionStorageInfo*) const override { return false; };

@@ -1690,7 +1690,7 @@ void Version::Get(const ReadOptions& read_options, const LookupKey& k,
   auto* hit_partition = storage_info_.GetHitPartition(user_key);
   GetContext get_context(
       user_comparator(), merge_operator_, info_log_,
-      db_statistics_, &hit_partition->search_counter,
+      db_statistics_, nullptr,
       status->ok() ? GetContext::kNotFound : GetContext::kMerge, user_key,
       do_merge ? value : nullptr, do_merge ? timestamp : nullptr, value_found,
       merge_context, do_merge, max_covering_tombstone_seq, this->env_, seq,
@@ -1714,7 +1714,12 @@ void Version::Get(const ReadOptions& read_options, const LookupKey& k,
       user_comparator(), internal_comparator());
   FileMetaData* f = fp.GetNextFile();
 
+  int prev_level = 0;
   while (f != nullptr) {
+    if (fp.GetCurrentLevel() != prev_level) {
+      prev_level = fp.GetCurrentLevel();
+      hit_partition->queries[prev_level]++;
+    }
     if (*max_covering_tombstone_seq > 0) {
       // The remaining files we look at will only contain covered keys, so we
       // stop here.
@@ -1723,6 +1728,10 @@ void Version::Get(const ReadOptions& read_options, const LookupKey& k,
     if (get_context.sample()) {
       sample_file_read_inc(f);
     }
+
+    // set counter
+    get_context.SetSearchCount(
+        &hit_partition->search_counter[fp.GetCurrentLevel()]);
 
     bool timer_enabled =
         GetPerfLevel() >= PerfLevel::kEnableTimeExceptForMutex &&
@@ -2453,6 +2462,32 @@ void VersionStorageInfo::UpdateNumNonEmptyLevels() {
       return;
     } else {
       num_non_empty_levels_ = i;
+    }
+  }
+}
+
+void VersionStorageInfo::TryUpdateQValues() {
+  for (auto& kv : this->partitions_map_) {
+    FilePartition* fp = kv.second;
+    const uint64_t gap = 300;
+    for (int i = 1; i < fp->level_; i++) {
+      // update state every 300 queries
+      if (fp->is_compaction_work[i] && fp->queries[i] >= gap &&
+          fp->search_counter[i] > 0) {
+        uint64_t penalty = fp->search_counter[i] * gap / fp->queries[i];
+        uint64_t state = q_table_->genQState(fp->level_size[i], penalty, fp->files_[i].size());
+        QKey key(state, penalty, 0, true);
+        if (!fp->q_keys[i].empty()) {
+          key.keep = q_table_->ShouldMerge(state, fp->is_tier[i]);
+          if (!key.keep) {
+            fp->is_compaction_work[i] = false;
+            fp->is_tier[i] = !fp->is_tier[i];
+          }
+        }
+        fp->q_keys[i].push_back(key);
+        fp->queries[i] = 0;
+        fp->search_counter[i] = 0;
+      }
     }
   }
 }

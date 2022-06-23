@@ -29,7 +29,7 @@ uint64_t GetTotalFilesSize(const std::vector<FileMetaData*>& files) {
 }  // anonymous namespace
 
 bool FIFOCompactionPicker::NeedsCompaction(
-    const VersionStorageInfo* vstorage) const {
+    VersionStorageInfo* vstorage) const {
   const int kLevel0 = 0;
   return vstorage->CompactionScore(kLevel0) >= 1;
 }

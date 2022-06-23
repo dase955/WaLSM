@@ -18,7 +18,7 @@
 namespace ROCKSDB_NAMESPACE {
 
 bool LevelCompactionPicker::NeedsCompaction(
-    const VersionStorageInfo* vstorage) const {
+    VersionStorageInfo* vstorage) const {
   if (!vstorage->ExpiredTtlFiles().empty()) {
     return true;
   }

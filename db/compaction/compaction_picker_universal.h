@@ -26,7 +26,7 @@ class UniversalCompactionPicker : public CompactionPicker {
   virtual int MaxOutputLevel() const override { return NumberLevels() - 1; }
 
   virtual bool NeedsCompaction(
-      const VersionStorageInfo* vstorage) const override;
+      VersionStorageInfo* vstorage) const override;
 
   virtual bool NeedsMerge(
       const VersionStorageInfo* vstorage) const override;

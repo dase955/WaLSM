@@ -169,6 +169,10 @@ class GetContext {
     return search_counter_;
   }
 
+  void SetSearchCount(std::atomic<uint64_t>* p) {
+    search_counter_ = p;
+  }
+
   void ReportCounters();
 
   bool has_callback() const { return callback_ != nullptr; }

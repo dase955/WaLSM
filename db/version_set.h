@@ -133,6 +133,8 @@ class VersionStorageInfo {
   // Update num_non_empty_levels_.
   void UpdateNumNonEmptyLevels();
 
+  void TryUpdateQValues();
+
   void GenerateFileIndexer() {
     file_indexer_.UpdateIndex(&arena_, num_non_empty_levels_, files_);
   }
@@ -314,11 +316,12 @@ class VersionStorageInfo {
     bool is_last;
 
     // for merge operations
-    bool is_tier;
-    bool is_compaction_work;
-    std::chrono::milliseconds timestamp;
+    std::vector<bool> is_tier;
+    std::vector<bool> is_compaction_work;
 
-    std::atomic<uint64_t> search_counter;
+    std::atomic<uint64_t>* search_counter;
+    std::atomic<uint64_t>* queries;
+    std::vector<QKey>* q_keys;
 
     FilePartition(int level, Slice smallest, bool is_last)
         : level_(level),
@@ -328,9 +331,11 @@ class VersionStorageInfo {
           files_(new std::vector<FileMetaData*>[level]),
           data_size_(0),
           is_last(is_last),
-          is_tier(true),
-          is_compaction_work(false),
-          search_counter(0){};
+          is_tier(level, true),
+          is_compaction_work(level, false),
+          search_counter(new std::atomic<uint64_t>[level]),
+          queries(new std::atomic<uint64_t>[level]),
+          q_keys(new std::vector<QKey>[level]){};
 
     FilePartition(const FilePartition* another)
         : level_(another->level_),
@@ -342,21 +347,23 @@ class VersionStorageInfo {
           is_last(another->is_last),
           is_tier(another->is_tier),
           is_compaction_work(another->is_compaction_work),
-          search_counter(another->search_counter.load()) {};
+          search_counter(new std::atomic<uint64_t>[level_]),
+          queries(new std::atomic<uint64_t>[level_]),
+          q_keys(new std::vector<QKey>[level_]) {
+              for (int i = 1; i < level_; i++) {
+                search_counter[i] = another->search_counter[i].load();
+                queries[i] = another->queries[i].load();
+                for (QKey k : another->q_keys[i]) {
+                  q_keys[i].push_back(k);
+                }
+              }
+          };
 
-    ~FilePartition() { delete[] files_; }
-
-    void UpdateTimestamp() {
-      timestamp = std::chrono::duration_cast<std::chrono::milliseconds>(
-          std::chrono::system_clock::now().time_since_epoch());
-    }
-
-    std::chrono::milliseconds GetTimeDelta() {
-      std::chrono::milliseconds now =
-          std::chrono::duration_cast<std::chrono::milliseconds>(
-              std::chrono::system_clock::now().time_since_epoch());
-      std::chrono::milliseconds delta = now - timestamp;
-      return delta;
+    ~FilePartition() {
+      delete[] files_;
+      delete[] search_counter;
+      delete[] queries;
+      delete[] q_keys;
     }
 
     int GetLevel() const { return level_; }

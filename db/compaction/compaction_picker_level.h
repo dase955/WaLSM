@@ -27,7 +27,7 @@ class LevelCompactionPicker : public CompactionPicker {
       SequenceNumber earliest_memtable_seqno = kMaxSequenceNumber) override;
 
   virtual bool NeedsCompaction(
-      const VersionStorageInfo* vstorage) const override;
+      VersionStorageInfo* vstorage) const override;
 
   virtual bool NeedsMerge(
       const VersionStorageInfo*) const override { return false; }

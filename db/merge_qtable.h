@@ -36,12 +36,12 @@ struct QValue {
 
 struct QKey {
   uint64_t q_state;
+  uint64_t penalty;
   double reward;
   bool keep;
-  QKey(uint64_t q_state, double reward, bool keep)
-      : q_state(q_state), reward(reward), keep(keep) {}
+  QKey(uint64_t q_state, uint64_t penalty, double reward, bool keep)
+      : q_state(q_state), penalty(penalty), reward(reward), keep(keep) {}
 };
-
 
 class MergeQTable {
  public:

@@ -678,7 +678,7 @@ bool InternalStats::HandleCompactionPending(uint64_t* value, DBImpl* /*db*/,
                                             Version* /*version*/) {
   // 1 if the system already determines at least one compaction is needed.
   // 0 otherwise,
-  const auto* vstorage = cfd_->current()->storage_info();
+  auto* vstorage = cfd_->current()->storage_info();
   *value = (cfd_->compaction_picker()->NeedsCompaction(vstorage) ? 1 : 0);
   return true;
 }

@@ -83,7 +83,7 @@ class CompactionPicker {
   // The maximum allowed output level.  Default value is NumberLevels() - 1.
   virtual int MaxOutputLevel() const { return NumberLevels() - 1; }
 
-  virtual bool NeedsCompaction(const VersionStorageInfo* vstorage) const = 0;
+  virtual bool NeedsCompaction(VersionStorageInfo* vstorage) const = 0;
 
   virtual bool NeedsMerge(const VersionStorageInfo* vstorage) const = 0;
 
@@ -278,12 +278,11 @@ class NullCompactionPicker : public CompactionPicker {
 
   // Always returns false.
   virtual bool NeedsCompaction(
-      const VersionStorageInfo* /*vstorage*/) const override {
+      VersionStorageInfo* /*vstorage*/) const override {
     return false;
   }
 
-  virtual bool NeedsMerge(
-      const VersionStorageInfo*) const override {
+  virtual bool NeedsMerge(const VersionStorageInfo*) const override {
     return false;
   }
 };

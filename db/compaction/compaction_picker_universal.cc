@@ -247,13 +247,14 @@ bool UniversalCompactionBuilder::IsInputFilesNonOverlapping(Compaction* c) {
 }
 
 bool UniversalCompactionPicker::NeedsCompaction(
-    const VersionStorageInfo* vstorage) const {
+    VersionStorageInfo* vstorage) const {
+  vstorage->TryUpdateQValues();
   if (vstorage->LevelFiles(0).size() >= 4) {
     return true;
   }
   for (auto& kv : vstorage->partitions_map_) {
     auto* partition = kv.second;
-    uint64_t base_size = 256 * 1024 * 1024L;
+    uint64_t base_size = 128 * 1024 * 1024L;
     for (int i = 1; i < vstorage->num_levels() - 1; i++) {
       if (partition->level_size[i] >= base_size) {
         return true;
@@ -401,14 +402,14 @@ Compaction* UniversalCompactionBuilder::PickCompaction() {
 
   Compaction* c = nullptr;
 
-  if (sorted_runs_.size() >=
+  if (c == nullptr) {
+    c = PickCompactionForSizeMarked();
+  }
+
+  if (c == nullptr && sorted_runs_.size() >=
       static_cast<size_t>(
           mutable_cf_options_.level0_file_num_compaction_trigger)) {
     c = PickCompactionForL0();
-  }
-
-  if (c == nullptr) {
-    c = PickCompactionForSizeMarked();
   }
 
   if (mutable_cf_options_.compaction_options_universal.allow_trivial_move ==
@@ -500,30 +501,27 @@ Compaction* UniversalCompactionBuilder::PickCompactionForL0() {
                        cf_name_.c_str(), file_num_buf);
     }
 
-    // for L1 compaction modes
     for (auto& kv : vstorage_->partitions_map_) {
-      if (!kv.second->is_tier && !kv.second->files_[output_level].empty()) {
-        bool ok = true;
-        std::vector<FileMetaData*> to_add;
-        auto& files = kv.second->files_[output_level];
-        for (FileMetaData* next : files) {
-          if (next->being_compacted) {
-            ok = false;
+      auto* fp = kv.second;
+      std::vector<FileMetaData*> to_add;
+      if (!fp->is_tier[output_level]) {
+        for (FileMetaData* f : fp->files_[output_level]) {
+          if (f->being_compacted) {
+            to_add.clear();
             break;
           }
-          to_add.push_back(next);
+          to_add.push_back(f);
         }
 
-        if (ok) {
-          for (FileMetaData* next : to_add) {
-            inputs[output_level].files.push_back(next);
-          }
-          if (!kv.second->is_compaction_work) {
-            kv.second->is_compaction_work = true;
-
+        for (FileMetaData* f : to_add) {
+          auto& input_files = inputs[output_level].files;
+          if (std::find(input_files.begin(), input_files.end(), f)
+              == input_files.end()) {
+            input_files.push_back(f);
           }
         }
       }
+      fp->is_compaction_work[output_level] = true;
     }
 
     uint32_t path_id =
@@ -545,8 +543,8 @@ Compaction* UniversalCompactionBuilder::PickCompactionForL0() {
 
 Compaction* UniversalCompactionBuilder::PickCompactionForSizeMarked() {
   for (auto& kv : vstorage_->partitions_map_) {
-    uint64_t base_size = 256 * 1024 * 1024L;
-    auto partition = kv.second;
+    uint64_t base_size = 128 * 1024 * 1024L;
+    auto* partition = kv.second;
     int target_level = -1;
     for (int level = 1; level < vstorage_->num_levels() - 1; level++) {
       if (partition->level_size[level] >= base_size) {
@@ -570,6 +568,22 @@ Compaction* UniversalCompactionBuilder::PickCompactionForSizeMarked() {
         }
         inputs[target_level].files.push_back(fs[i]);
       }
+
+      // if target level is level compaction ...
+      if (!partition->is_tier[output_level]) {
+        std::vector<FileMetaData*> to_add;
+        for (FileMetaData* f : partition->files_[output_level]) {
+          if (f->being_compacted) {
+            to_add.clear();
+            break;
+          }
+          to_add.push_back(f);
+        }
+        for (FileMetaData* f : to_add) {
+          inputs[output_level].files.push_back(f);
+        }
+      }
+      partition->is_compaction_work[output_level] = true;
 
       uint32_t path_id =
           GetPathId(ioptions_, mutable_cf_options_, estimated_total_size);
