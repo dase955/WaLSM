@@ -31,6 +31,8 @@ struct Timestamps {
 
   void DecayHeat();
 
+  std::pair<int, int> GetLastStamp();
+
   // Return true if timestamp is updated.
   bool UpdateHeat();
 

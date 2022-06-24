@@ -30,8 +30,6 @@ class HeatGroupManager {
 
   void InsertIntoLayer(HeatGroup* inserted, int level);
 
-  void TestChooseCompaction();
-
  private:
   void BGWorkProcessHeatGroup();
 

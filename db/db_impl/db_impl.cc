@@ -291,11 +291,17 @@ DBImpl::DBImpl(const DBOptions& options, const std::string& dbname,
       vlog_manager_, group_manager_, env_, recovery);
 
   Compactor::compaction_threshold_ = options.compaction_threshold;
+  Compactor::max_rewrite_count = options.max_rewrite_count;
+  Compactor::rewrite_threshold = options.rewrite_threshold;
+
   compactor_.SetDB(this);
   compactor_.SetGroupManager(group_manager_);
   compactor_.SetVLogManager(vlog_manager_);
   compactor_.SetGlobalMemtable(global_memtable_);
   compactor_.StartCompactionThread();
+
+  printf("max_rewrite_count=%d, rewrite_threshold=%d\n",
+         options.max_rewrite_count, options.rewrite_threshold);
 }
 
 Status DBImpl::Resume() {

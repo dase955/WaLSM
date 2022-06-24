@@ -421,17 +421,28 @@ void DoTest(DB* db, TestFunction test_func, std::string file_name) {
 }
 
 int main(int argc, char* argv[]) {
-  std::string test_name = "art";
-  if (argc == 2) {
-    test_name = argv[1];
-  } else if (argc == 3) {
-    total_count = atoi(argv[2]);
-  }
-
   Options options;
   options.create_if_missing = true;
   options.enable_pipelined_write = true;
   options.OptimizeLevelStyleCompaction();
+
+  std::string test_name = "art";
+  /*if (argc >= 2) {
+    test_name = argv[1];
+  }
+  if (argc >= 3) {
+    total_count = atoi(argv[2]);
+  }*/
+
+  if (argc >= 2) {
+    options.max_rewrite_count = atoi(argv[1]);
+  }
+  if (argc >= 3) {
+    options.rewrite_threshold = atoi(argv[2]);
+  }
+
+  printf("max_rewrite_count=%d, rewrite_threshold=%d\n",
+         options.max_rewrite_count, options.rewrite_threshold);
 
   std::string db_path = "/tmp/db_test_" + test_name;
   std::string ops_path =  "/tmp/run_ops_" + test_name;

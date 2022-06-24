@@ -34,6 +34,9 @@ struct SingleCompactionJob {
   uint64_t     out_file_size;
   int64_t      oldest_key_time_;
 
+  int          total_count;
+  int          hot_count;
+
   std::deque<InnerNode*>   candidates;
   std::vector<InnerNode*>  candidates_removed;
   std::vector<InnerNode*>  candidate_parents;
@@ -45,6 +48,7 @@ struct SingleCompactionJob {
   std::vector<std::pair<NVMNode*, int>> nvm_nodes_and_sizes;
 
   void Reset() {
+    total_count = hot_count = 0;
     hot_data.clear();
     candidates.clear();
     candidates_removed.clear();
@@ -78,6 +82,10 @@ class Compactor {
   void Notify(std::vector<HeatGroup*>& heat_groups);
 
   static int64_t compaction_threshold_;
+
+  static size_t max_rewrite_count;
+
+  static int rewrite_threshold;
 
  private:
   void CompactionPreprocess(SingleCompactionJob* job);

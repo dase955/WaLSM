@@ -93,7 +93,7 @@ void HeatGroup::UpdateSize(int32_t size) {
   if (new_status != kGroupNone &&
       status_.compare_exchange_strong(
           cur_status, new_status, std::memory_order_relaxed)) {
-    group_manager_->AddOperation(this, op);
+    group_manager_->AddOperation(this, op, op == kOperatorMove);
   }
 }
 
@@ -146,6 +146,7 @@ int ChooseGroupLevel(HeatGroup* group) {
     return -1;
   }
 
+#ifdef BOUND_ESTIMATION
   float lower_bound = 0.0f;
   float upper_bound = 0.0f;
 
@@ -153,6 +154,9 @@ int ChooseGroupLevel(HeatGroup* group) {
   int lower_level = ChooseLevelByHeat(lower_bound);
   int upper_level = ChooseLevelByHeat(upper_bound);
   return (lower_level + upper_level) >> 1;
+#else
+  return ChooseLevelByHeat(group->ts.GetTotalHeat());
+#endif
 }
 
 void InsertNodesToGroup(InnerNode* node, InnerNode* insert) {
@@ -395,23 +399,6 @@ void HeatGroupManager::ForceGroupLevelDown() {
   for (int l = 2; l < MAX_LAYERS; ++l) {
     MoveAllGroupsToLayer(l, l - 2);
   }
-}
-
-void HeatGroupManager::TestChooseCompaction() {
-  for (int layer = 0; layer < MAX_LAYERS; ++layer) {
-    auto group = group_queue_.heads[layer]->next;
-    while (group != group_queue_.tails[layer]) {
-      auto size = group->group_size_.load();
-      if (size > (1 >> 20)) {
-        RemoveFromQueue(group);
-        InsertIntoLayer(group, TEMP_LAYER);
-        //compactor_->Notify(groups);
-        return;
-      }
-      group = group->next;
-    }
-  }
-  assert(false);
 }
 
 void HeatGroupManager::ChooseCompaction(size_t num_chosen) {

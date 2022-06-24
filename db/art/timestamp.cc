@@ -13,9 +13,10 @@
 
 namespace ROCKSDB_NAMESPACE {
 
+std::atomic<int32_t> Timestamp{128};
+
 int32_t GetTimestamp() {
-  static std::atomic<int32_t> Timestamp{64};
-  return Timestamp.fetch_add(1, std::memory_order_relaxed) >> 6;
+  return Timestamp.fetch_add(1, std::memory_order_relaxed) >> 7;
 }
 
 Timestamps::Timestamps()
@@ -140,6 +141,11 @@ void Timestamps::EstimateBound(float& lower_bound, float& upper_bound) {
   float h3 = CalculateHeat(end_ts);
   lower_bound = heat + (h1 + h2) * (float)len;
   upper_bound = heat + (h2 + h3) * (float)len;
+}
+
+std::pair<int, int> Timestamps::GetLastStamp() {
+  return {Timestamp.load(std::memory_order_relaxed) >> 6,
+          last_ts_ + last_global_dec_};
 }
 
 } // namespace ROCKSDB_NAMESPACE

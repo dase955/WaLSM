@@ -164,6 +164,10 @@ void ProcessNodes(InnerNode* parent, std::vector<InnerNode*>& children,
 
 int64_t Compactor::compaction_threshold_;
 
+size_t Compactor::max_rewrite_count;
+
+int Compactor::rewrite_threshold;
+
 Compactor::~Compactor() noexcept {
   printf("Statistics:\n"
       "Data remain in nvm:   %zu\n"
@@ -219,8 +223,6 @@ void Compactor::StopCompactionThread() {
   compactor_thread_.join();
 }
 
-int flush_times[4];
-
 void Compactor::BGWorkDoCompaction() {
   static int64_t choose_threshold = compaction_threshold_ +
                                     num_parallel_compaction_ *
@@ -234,39 +236,40 @@ void Compactor::BGWorkDoCompaction() {
     std::this_thread::sleep_for(std::chrono::milliseconds(5));
 
     for (auto job : chosen_jobs_) {
-        for (auto vptr : job->hot_data) {
-          int i = vptr >> 20;
-          auto header = (VLogSegmentHeader*)(
-              vlog_manager_->pmemptr_ + vlog_manager_->vlog_segment_size_ * i);
+      job->keys_in_node[0].clear();
+      for (auto vptr : job->hot_data) {
+        int i = vptr >> 20;
+        auto header = (VLogSegmentHeader*)(
+            vlog_manager_->pmemptr_ + vlog_manager_->vlog_segment_size_ * i);
 
-          char* record_start = vlog_manager_->pmemptr_ + vptr;
-          Slice slice(record_start, 1 << 20);
-          ValueType type = *((ValueType*)record_start);
-          slice.remove_prefix(WriteBatchInternal::kRecordPrefixSize);
+        char* record_start = vlog_manager_->pmemptr_ + vptr;
+        Slice slice(record_start, 1 << 20);
+        ValueType type = *((ValueType*)record_start);
+        slice.remove_prefix(WriteBatchInternal::kRecordPrefixSize);
 
-          uint32_t key_length;
-          GetVarint32(&slice, &key_length);
-          Slice key(slice.data(), key_length);
-          slice.remove_prefix(key_length);
+        uint32_t key_length;
+        GetVarint32(&slice, &key_length);
+        Slice key(slice.data(), key_length);
+        slice.remove_prefix(key_length);
 
-          if (type == kTypeValue) {
-            uint32_t value_length;
-            GetVarint32(&slice, &value_length);
-            slice.remove_prefix(value_length);
-          }
-
-          auto kv_size = slice.data() - record_start;
-          std::lock_guard<SpinMutex> status_lk(header->lock.mutex_);
-          if (unlikely(header->status_ == kSegmentGC)) {
-            std::string record(record_start, kv_size);
-            vlog_manager_->WriteToNewSegment(record, vptr);
-          }
-
-          auto hash = HashOnly(key.data(), key.size());
-          KVStruct kv_info(hash, vptr);
-          kv_info.kv_size_ = kv_size;
-          global_memtable_->Put(key, kv_info);
+        if (type == kTypeValue) {
+          uint32_t value_length;
+          GetVarint32(&slice, &value_length);
+          slice.remove_prefix(value_length);
         }
+
+        auto kv_size = slice.data() - record_start;
+        std::lock_guard<SpinMutex> status_lk(header->lock.mutex_);
+        if (unlikely(header->status_ == kSegmentGC)) {
+          std::string record(record_start, kv_size);
+          vlog_manager_->WriteToNewSegment(record, vptr);
+        }
+
+        auto hash = HashOnly(key.data(), key.size());
+        KVStruct kv_info(hash, vptr);
+        kv_info.kv_size_ = kv_size;
+        global_memtable_->Put(key, kv_info);
+      }
     }
 
     vlog_manager_->FreeQueue();
@@ -335,27 +338,38 @@ void Compactor::BGWorkDoCompaction() {
                 (end_time - start_time) * 1e-6, start_time * 1e-6,
                 0);
 
-    for (int& flush_time : flush_times) {
-      flush_time = -1;
-    }
-    for (size_t i = 0; i < chosen_groups_.size(); ++i) {
-      flush_times[i] = chosen_groups_[i]->flush_times_;
-    }
-
     int rewrite_count = 0;
+    int total_count = 0;
+    int hot_count = 0;
     for (auto job : chosen_jobs_) {
       rewrite_count += job->hot_data.size();
+      total_count += job->total_count;
+      hot_count += job->hot_count;
     }
 
     RECORD_DEBUG("free pages: "
-        "%zu, %zu(%.2f), size: %zu, %zu, %zu; squeezed in groups %zu. rewrite %d. flush times: %d %d %d %d\n",
+        "%zu, %zu(%.2f), size: %zu, %zu, %zu; squeezed in groups %zu. "
+        "rewrite %d, total count %d, hot count %d\n",
         GetNodeAllocator()->GetNumFreePages(),
         vlog_manager_->free_segments_.size(), vlog_manager_->Estimate(),
         MemTotalSize.load(std::memory_order_relaxed),
         CompactedSize.load(std::memory_order_relaxed),
         SqueezedSize.load(std::memory_order_relaxed),
-        SqueezedSizeInCompaction.load(std::memory_order_relaxed), rewrite_count,
-        flush_times[0], flush_times[1], flush_times[2], flush_times[3]);
+        SqueezedSizeInCompaction.load(std::memory_order_relaxed),
+        rewrite_count, total_count, hot_count);
+
+    int ts_delta[4] = {0};
+    for (size_t i = 0; i < chosen_jobs_.size(); ++i) {
+      auto pair = chosen_jobs_[i]->group_->ts.GetLastStamp();
+      ts_delta[i] = pair.first - pair.second;
+    }
+
+    RECORD_DEBUG("Group prefixes: %s, %s, %s, %s, ts delta: %d %d %d %d\n",
+                 compaction_jobs_[0]->keys_in_node[0].c_str(),
+                 compaction_jobs_[1]->keys_in_node[0].c_str(),
+                 compaction_jobs_[2]->keys_in_node[0].c_str(),
+                 compaction_jobs_[3]->keys_in_node[0].c_str(),
+                 ts_delta[0], ts_delta[1], ts_delta[2], ts_delta[3]);
 
     SqueezedSizeInCompaction.store(0);
 

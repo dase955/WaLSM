@@ -421,9 +421,12 @@ int64_t ReadAndBuild(SingleCompactionJob* job,
             .push_back(last_kv.record_index);
         ++cur_count;
       } else {
+        ++job->total_count;
+        job->hot_count += (cur_count >= Compactor::rewrite_threshold);
+
         // TODO: choose highest freq data
-        if (cur_count >= HOT_THRESHOLD &&
-            job->hot_data.size() < MAX_REWRITE_COUNT) {
+        if (cur_count >= Compactor::rewrite_threshold &&
+            job->hot_data.size() < Compactor::max_rewrite_count) {
           job->hot_data.push_back(last_kv.vptr);
         } else {
           job->compacted_indexes[last_kv.vptr >> 20]
