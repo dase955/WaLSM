@@ -5452,9 +5452,9 @@ InternalIterator* VersionSet::MakeInputIterator(
   // Level-0 files have to be merged together.  For other levels,
   // we will make a concatenating iterator per level.
   // TODO(opt): use concatenating iterator for level-0 if there is no overlap
-  size_t space = 1;
+  size_t space = 0;
   for (size_t i = 0; i < c->num_input_levels(); i++) {
-    space = std::max(space, 1+c->num_input_files(i));
+    space += c->num_input_files(i);
   }
   InternalIterator** list = new InternalIterator* [space];
   size_t num = 0;
