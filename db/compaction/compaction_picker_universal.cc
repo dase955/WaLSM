@@ -595,7 +595,7 @@ Compaction* UniversalCompactionBuilder::PickCompactionForSizeMarked() {
           GetCompressionOptions(mutable_cf_options_, vstorage_, output_level,
                                 true /* enable_compression */),
           /* max_subcompactions */ 0, /* grandparents */ {},
-          /* is manual */ false, 1.0, false /* deletion_compaction */,
+          /* is manual */ false, 2.0, false /* deletion_compaction */,
           CompactionReason::kUniversalSizeRatio);
     }
   }
