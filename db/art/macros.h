@@ -31,18 +31,22 @@ namespace ROCKSDB_NAMESPACE {
 #define NVM_MAX_ROWS              14
 #define NVM_MAX_SIZE              224
 
+#define INITIAL_STATUS(s)         (0x80000000 | (s))
+
 // Macro for InnerNode status_
-#define IS_LEAF(s)                ((s) & 0x80000000)
-#define SET_LEAF(s)               (s) |= 0x80000000
-#define SET_NON_LEAF(s)           (s) &= ~(0x80000000)
+#define IS_LEAF(n)                ((n)->status_ & 0x80000000)
+#define NOT_LEAF(n)               (!IS_LEAF(n))
+#define SET_LEAF(n)               ((n)->status_) |= 0x80000000
+#define SET_NON_LEAF(n)           ((n)->status_) &= ~(0x80000000)
 
-#define IS_ART_FULL(s)            ((s) & 0x40000000)
-#define SET_ART_FULL(s)           (s) |= 0x40000000
-#define SET_ART_NON_FULL(s)       (s) &= ~(0x40000000)
+#define IS_ART_FULL(n)            (((n)->status_) & 0x40000000)
+#define SET_ART_FULL(n)           ((n)->status_) |= 0x40000000
+#define SET_ART_NON_FULL(n)       ((n)->status_) &= ~(0x40000000)
 
-#define IS_GROUP_START(s)         ((s) & 0x20000000)
-#define SET_GROUP_START(s)        (s) |= 0x20000000
-#define SET_NON_GROUP_START(s)    (s) &= ~(0x20000000)
+#define IS_GROUP_START(n)         (((n)->status_) & 0x20000000)
+#define NOT_GROUP_START(n)         (!IS_GROUP_START(n))
+#define SET_GROUP_START(n)        ((n)->status_) |= 0x20000000
+#define SET_NON_GROUP_START(n)    ((n)->status_) &= ~(0x20000000)
 
 #define IS_INVALID(s)             ((s) & 0x10000000)
 #define SET_NODE_INVALID(s)       (s) |= 0x10000000
@@ -99,7 +103,7 @@ namespace ROCKSDB_NAMESPACE {
 
 #define MAX_LAYERS 10
 
-// BASE_LAYER is for groups whose size_ is below threshold.
+// BASE_LAYER is for groups whose size is below threshold.
 #define BASE_LAYER (-1)
 
 // TEMP_LAYER is for groups doing compaction.

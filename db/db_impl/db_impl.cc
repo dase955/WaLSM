@@ -284,8 +284,10 @@ DBImpl::DBImpl(const DBOptions& options, const std::string& dbname,
   InitializeNodeAllocator(options, recovery);
   vlog_manager_ = new VLogManager(options, recovery);
 
+  compactor_ = new Compactor(options);
+
   group_manager_ = new HeatGroupManager(options);
-  group_manager_->SetCompactor(&compactor_);
+  group_manager_->StartThread();
 
   global_memtable_ = new GlobalMemtable(
       vlog_manager_, group_manager_, env_, recovery);
@@ -294,11 +296,11 @@ DBImpl::DBImpl(const DBOptions& options, const std::string& dbname,
   Compactor::max_rewrite_count = options.max_rewrite_count;
   Compactor::rewrite_threshold = options.rewrite_threshold;
 
-  compactor_.SetDB(this);
-  compactor_.SetGroupManager(group_manager_);
-  compactor_.SetVLogManager(vlog_manager_);
-  compactor_.SetGlobalMemtable(global_memtable_);
-  compactor_.StartCompactionThread();
+  compactor_->SetDB(this);
+  compactor_->SetGroupManager(group_manager_);
+  compactor_->SetVLogManager(vlog_manager_);
+  compactor_->SetGlobalMemtable(global_memtable_);
+  compactor_->StartThread();
 
   printf("max_rewrite_count=%d, rewrite_threshold=%d\n",
          options.max_rewrite_count, options.rewrite_threshold);
@@ -522,7 +524,8 @@ void DBImpl::CancelAllBackgroundWork(bool wait) {
 Status DBImpl::CloseHelper() {
   // Guarantee that there is no background error recovery in progress before
   // continuing with the shutdown
-  compactor_.StopCompactionThread();
+  compactor_->StopThread();
+  group_manager_->StopThread();
   mutex_.Lock();
 
   shutdown_initiated_ = true;

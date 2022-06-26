@@ -101,8 +101,8 @@ GlobalMemtable::~GlobalMemtable() {
 void CheckHeatGroup(HeatGroup* group) {
   auto start = group->first_node_;
   auto end = group->last_node_;
-  assert(IS_GROUP_START(start->status_));
-  assert(start == end || !IS_GROUP_START(end->status_));
+  assert(IS_GROUP_START(start));
+  assert(start == end || NOT_GROUP_START(end));
   assert(end->heat_group_ = group);
   assert(group->group_manager_);
 
@@ -113,7 +113,7 @@ void CheckHeatGroup(HeatGroup* group) {
   auto cur = start->next_node_;
   while (cur != end) {
     assert(cur->heat_group_ == group);
-    assert(!IS_GROUP_START(cur->status_));
+    assert(NOT_GROUP_START(cur));
     cur = cur->next_node_;
   }
 }
@@ -123,7 +123,7 @@ InnerNode* GlobalMemtable::RecoverNonLeaf(InnerNode* parent, int level,
   NVMNode* cur = parent->nvm_node_;
   parent->vptr_ = cur->meta.node_info;
   parent->heat_group_ = group;
-  SET_NON_LEAF(parent->status_);
+  SET_NON_LEAF(parent);
 
   std::vector<InnerNode*> children;
   std::vector<unsigned char> prefixes;
@@ -134,7 +134,7 @@ InnerNode* GlobalMemtable::RecoverNonLeaf(InnerNode* parent, int level,
 
     int cur_level = GET_LEVEL(cur->meta.header);
     if (cur_level > level) {
-      SET_NON_LEAF(last_inner_node->status_);
+      SET_NON_LEAF(last_inner_node);
       last_inner_node = RecoverNonLeaf(last_inner_node, cur_level, group);
       cur = GetNextNode(last_inner_node->nvm_node_);
     }
@@ -151,13 +151,14 @@ InnerNode* GlobalMemtable::RecoverNonLeaf(InnerNode* parent, int level,
     if (GET_TAG(cur->meta.header, GROUP_START_TAG)) {
       group->group_manager_ = group_manager_;
       CheckHeatGroup(group);
-      group_manager_->InsertIntoLayer(group, BASE_LAYER);
+      // group_manager_->InsertIntoLayer(group, BASE_LAYER);
+      group_manager_->InsertIntoLayer(group, TEMP_LAYER);
       group = new HeatGroup();
       group->first_node_ = inner_node;
       inner_node->parent_node_ = nullptr;
       inner_node->heat_group_ = group;
-      SET_GROUP_START(inner_node->status_);
-      SET_NON_LEAF(inner_node->status_);
+      SET_GROUP_START(inner_node);
+      SET_NON_LEAF(inner_node);
       last_inner_node = inner_node;
       continue;
     }
@@ -181,8 +182,8 @@ InnerNode* GlobalMemtable::RecoverNonLeaf(InnerNode* parent, int level,
 
 void GlobalMemtable::Recovery() {
   root_ = RecoverInnerNode(GetNodeAllocator()->GetHead());
-  SET_ART_FULL(root_->status_);
-  SET_GROUP_START(root_->status_);
+  SET_ART_FULL(root_);
+  SET_GROUP_START(root_);
 
   HeatGroup* group = new HeatGroup;
   group->first_node_ = root_;
@@ -191,7 +192,8 @@ void GlobalMemtable::Recovery() {
 
   group->group_manager_ = group_manager_;
   CheckHeatGroup(group);
-  group_manager_->InsertIntoLayer(group, BASE_LAYER);
+  //group_manager_->InsertIntoLayer(group, BASE_LAYER);
+  group_manager_->InsertIntoLayer(group, TEMP_LAYER);
 
 #ifndef NDEBUG
   auto cur = root_;
@@ -218,11 +220,13 @@ void GlobalMemtable::Recovery() {
 void GlobalMemtable::InitFirstLevel() {
   root_ = AllocateLeafNode(0, 0, nullptr);
   auto tail = AllocateLeafNode(1, 0, nullptr);
+  SET_NON_GROUP_START(tail);
+
   tail->parent_node_ = root_;
   SET_TAG(tail->nvm_node_->meta.header, DUMMY_TAG);
   FLUSH(tail->nvm_node_, CACHE_LINE_SIZE);
-  SET_NON_LEAF(root_->status_);
-  SET_ART_FULL(root_->status_);
+  SET_NON_LEAF(root_);
+  SET_ART_FULL(root_);
 
   // First level
   root_->support_node_ = tail;
@@ -266,8 +270,14 @@ void GlobalMemtable::InitFirstLevel() {
     FLUSH(inner_node->nvm_node_, CACHE_LINE_SIZE);
   } */
 
+  HeatGroup* last_group = new HeatGroup(tail);
+  group_manager_->InsertIntoLayer(last_group, TEMP_LAYER);
+
   for (int first_char = LAST_CHAR; first_char >= 0;) {
     auto heat_group = new HeatGroup();
+    heat_group->next_seq = last_group;
+    last_group = heat_group;
+
     for (int n = 0; n < 4; ++n, --first_char) {
       auto inner_node = AllocateLeafNode(
           1, static_cast<unsigned char>(first_char), next_inner_node);
@@ -280,8 +290,8 @@ void GlobalMemtable::InitFirstLevel() {
 
     auto group_start_node = AllocateLeafNode(
         0, 0, next_inner_node);
-    SET_GROUP_START(group_start_node->status_);
-    SET_NON_LEAF(group_start_node->status_);
+    SET_GROUP_START(group_start_node);
+    SET_NON_LEAF(group_start_node);
     SET_TAG(group_start_node->nvm_node_->meta.header, GROUP_START_TAG);
     FLUSH(group_start_node->nvm_node_, CACHE_LINE_SIZE);
 
@@ -289,7 +299,8 @@ void GlobalMemtable::InitFirstLevel() {
     heat_group->last_node_ = art256->children_[first_char + 4];
     heat_group->group_manager_ = group_manager_;
     group_start_node->heat_group_ = heat_group;
-    group_manager_->InsertIntoLayer(heat_group, BASE_LAYER);
+    //group_manager_->InsertIntoLayer(heat_group, BASE_LAYER);
+    group_manager_->InsertIntoLayer(heat_group, TEMP_LAYER);
 
     next_inner_node = group_start_node;
   }
@@ -346,7 +357,7 @@ void GlobalMemtable::Put(Slice& slice, uint64_t base_vptr, size_t count) {
   }
 }
 
-void GlobalMemtable::Put(Slice& key, KVStruct& kv_info) {
+void GlobalMemtable::Put(Slice& key, KVStruct& kv_info, bool update_heat) {
   size_t max_level = key.size();
 
   uint32_t version;
@@ -361,7 +372,7 @@ Restart:
 LocalRestart:
     version = current->opt_lock_.AwaitUnlocked();
 
-    if (IS_LEAF(current->status_)) {
+    if (IS_LEAF(current)) {
       if (!current->opt_lock_.TryLock(version)) {
         goto LocalRestart;
       }
@@ -372,13 +383,13 @@ LocalRestart:
       }
 
       Rehash(key.data(), key.size(), kv_info.hash_, level);
-      InsertIntoLeaf(current, kv_info, level);
+      InsertIntoLeaf(current, kv_info, level, update_heat);
       return;
     }
 
     if (level == max_level) {
       std::lock_guard<RWSpinLock> vptr_lk(current->vptr_lock_);
-      if (unlikely(IS_LEAF(current->status_))) {
+      if (unlikely(IS_LEAF(current))) {
         goto LocalRestart;
       }
 
@@ -394,7 +405,7 @@ LocalRestart:
         goto LocalRestart;
       }
 
-      if (IS_LEAF(current->status_)) {
+      if (IS_LEAF(current)) {
         current->opt_lock_.unlock();
         goto LocalRestart;
       }
@@ -433,7 +444,7 @@ bool GlobalMemtable::Get(std::string& key, std::string& value, Status* s) {
   // assume first level will not become non-leaf again
   bool found = false;
   while (current && !found) {
-    if (IS_LEAF(current->status_)) {
+    if (IS_LEAF(current)) {
       printf("squeezed size in this node = %d\n", current->squeezed_size_);
 
       found = FindKeyInInnerNode(current, level, key, value, s);
@@ -442,7 +453,7 @@ bool GlobalMemtable::Get(std::string& key, std::string& value, Status* s) {
 
       // This mean children of current node is waiting to be reclaimed,
       // so this node becomes a leaf node again.
-      if (unlikely(IS_LEAF(current->status_))) {
+      if (unlikely(IS_LEAF(current))) {
         found = FindKeyInInnerNode(current, level, key, value, s);
       } else if (current->vptr_ > 0) {
         auto type = vlog_manager_->GetKeyValue(current->vptr_, key, value);
@@ -642,7 +653,7 @@ void GlobalMemtable::SplitLeaf(InnerNode* leaf, size_t level,
       level + 1, static_cast<unsigned char>(LAST_CHAR), nullptr);
   dummy_node->parent_node_ = leaf;
   dummy_node->oldest_key_time_ = oldest_key_time;
-  SET_NON_LEAF(dummy_node->status_);
+  SET_NON_LEAF(dummy_node);
   SET_TAG(dummy_node->nvm_node_->meta.header, DUMMY_TAG);
   PERSIST(dummy_node, 8);
 
@@ -734,8 +745,8 @@ void GlobalMemtable::SplitLeaf(InnerNode* leaf, size_t level,
     leaf->art = art;
     leaf->vptr_ = leaf_vptr;
     leaf->hash_ = leaf_hash;
-    SET_ART_NON_FULL(leaf->status_);
-    SET_NON_LEAF(leaf->status_);
+    SET_ART_NON_FULL(leaf);
+    SET_NON_LEAF(leaf);
   }
 
 }
@@ -743,7 +754,7 @@ void GlobalMemtable::SplitLeaf(InnerNode* leaf, size_t level,
 // "4b prefix + 4b hash + 8b pointer" OR "4b SeqNum + 4b hash + 8b pointer"
 // This function is responsible for unlocking opt_lock_
 void GlobalMemtable::InsertIntoLeaf(InnerNode* leaf, KVStruct& kv_info,
-                                    size_t level) {
+                                    size_t level, bool update_heat) {
   int write_pos = GET_NODE_BUFFER_SIZE(++leaf->status_) << 1;
 
   leaf->buffer_[write_pos - 2] = kv_info.hash_;
@@ -753,12 +764,16 @@ void GlobalMemtable::InsertIntoLeaf(InnerNode* leaf, KVStruct& kv_info,
   if (likely(write_pos < 32)) {
     leaf->opt_lock_.unlock();
     leaf->heat_group_->UpdateSize(kv_info.kv_size_);
-    leaf->heat_group_->UpdateHeat();
+    if (update_heat) {
+      leaf->heat_group_->UpdateHeat();
+    }
     return;
   }
 
   leaf->heat_group_->UpdateSize(kv_info.kv_size_);
-  leaf->heat_group_->UpdateHeat();
+  if (update_heat) {
+    leaf->heat_group_->UpdateHeat();
+  }
 
   InnerNode* next_to_split = nullptr;
 
@@ -919,7 +934,7 @@ InnerNode* GlobalMemtable::FindInnerNodeByKey(Slice& key,
   InnerNode* current = FindChild(root_, key[0]);
 
   while (current) {
-    if (IS_LEAF(current->status_)) {
+    if (IS_LEAF(current)) {
       return current;
     }
 

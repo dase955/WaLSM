@@ -69,166 +69,74 @@
 
 namespace ROCKSDB_NAMESPACE {
 
+int      thread_num = 32;
+int      total_count = 320000000;
+int      sample_range = 1000000000;
+int      count_per_thread = total_count / thread_num;
+std::vector<int> final_samples;
+std::atomic<int> counter{0};
+
 class ZipfianGenerator {
  public:
-  ZipfianGenerator(long min, long max, double zipfianconstant_, double zetan_) {
-    items = max - min + 1;
-    base = min;
-    this->zipfianconstant = zipfianconstant_;
-
-    theta = this->zipfianconstant;
-
-    zeta2theta = zeta(2, theta);
-
-    alpha = 1.0 / (1.0 - theta);
-    this->zetan = zetan_;
-    eta = (1 - std::pow(2.0 / items, 1 - theta)) / (1 - zeta2theta / this->zetan);
-
-    std::random_device rd;
-    rng = std::default_random_engine{rd()};
-
-    nextValue();
+  ZipfianGenerator(double alpha) : alpha_(alpha) {
+    InitProbs();
   }
 
-  double zeta(long n, double thetaVal) {
-    return zetastatic(n, thetaVal);
-  }
-
-  static double zetastatic(long n, double theta) {
-    return zetastatic(0, n, theta, 0);
-  }
-
-  static double zetastatic(long st, long n, double theta, double initialsum) {
-    double sum = initialsum;
-    for (long i = st; i < n; i++) {
-
-      sum += 1 / (std::pow(i + 1, theta));
-    }
-
-    return sum;
-  }
-
-  long nextLong(long itemcount) {
-    double u = rand_double(rng);
-    double uz = u * zetan;
-
-    if (uz < 1.0) {
-      return base;
-    }
-
-    if (uz < 1.0 + std::pow(0.5, theta)) {
-      return base + 1;
-    }
-
-    return base + (long) ((itemcount) * std::pow(eta * u - eta + 1, alpha));
+  ~ZipfianGenerator() {
+    delete[] sum_probs_;
   }
 
   long nextValue() {
-    return nextLong(items);
+    long res = 0;
+    double z;
+    do {
+      z = rand_val(rng);
+    } while ((z == 0) || (z == 1));
+
+    int low = 1;
+    int high = sample_range;
+    int mid;
+    do {
+      mid = (low + high) / 2;
+      if (sum_probs_[mid] >= z && sum_probs_[mid - 1] < z) {
+        res = mid;
+        break;
+      } else if (sum_probs_[mid] >= z) {
+        high = mid - 1;
+      } else {
+        low = mid + 1;
+      }
+    } while (low <= high);
+
+    return res;
   }
 
  private:
-  long items;
+  void InitProbs() {
+    printf("Start InitProbs\n");
 
-  long base;
-
-  double zipfianconstant;
-
-  double alpha, zetan, eta, theta, zeta2theta;
-
-  std::uniform_real_distribution<> rand_double{0.0, 1.0};
-
-  std::default_random_engine rng;
-};
-
-class ScrambledZipfianGenerator {
- public:
-  ScrambledZipfianGenerator(long min_, long max_) {
-    this->min = min_;
-    this->max = max_;
-    itemcount = this->max - this->min + 1;
-    gen = new ZipfianGenerator(0, ITEM_COUNT, 0.99, ZETAN);
-  }
-
-  ~ScrambledZipfianGenerator() {
-    delete gen;
-  }
-
-  long nextValue() {
-    long ret = gen->nextValue();
-    return min + fnvhash64(ret) % itemcount;
-  }
-
-  long highestFreqValue(int f) {
-    return min + fnvhash64(f) % itemcount;
-  }
-
-
- private:
-  static long fnvhash64(long val) {
-    //from http://en.wikipedia.org/wiki/Fowler_Noll_Vo_hash
-    long hashval = 0xCBF29CE484222325L;
-
-    for (int i = 0; i < 8; i++) {
-      long octet = val & 0x00ff;
-      val = val >> 8;
-
-      hashval = hashval ^ octet;
-      hashval = hashval * 1099511628211L;
-      //hashval = hashval ^ octet;
+    double c = 0.0;
+    for (int i = 1; i <= sample_range; i++) {
+      c = c + (1.0 / pow((double)i, alpha_));
     }
-    return std::fabs(hashval);
-  }
+    c = 1.0 / c;
 
-  double ZETAN = 26.46902820178302;
-  long ITEM_COUNT = 10000000000L;
-
-  ZipfianGenerator* gen;
-  long min, max, itemcount;
-
-};
-
-class CustomZipfianGenerator {
- public:
-  CustomZipfianGenerator(long count) {
-    gen[0] = new ScrambledZipfianGenerator(0, count - 1);
-    gen[1] = new ScrambledZipfianGenerator(1 * count / 10, 2 * count / 10 - 1);
-    gen[2] = new ScrambledZipfianGenerator(2 * count / 10, 3 * count / 10 - 1);
-    gen[3] = new ScrambledZipfianGenerator(4 * count / 10, 5 * count / 10 - 1);
-    gen[4] = new ScrambledZipfianGenerator(8 * count / 10, 9 * count / 10 - 1);
-
-    std::random_device rd;
-    dist = std::uniform_int_distribution<int>{1, 100};
-    rng = std::default_random_engine{rd()};
-  }
-
-  ~CustomZipfianGenerator() {
-    for (auto& g : gen) {
-      delete g;
+    sum_probs_ = new double[sample_range + 1];
+    sum_probs_[0] = 0;
+    for (int i = 1; i <= sample_range; ++i) {
+      sum_probs_[i] = sum_probs_[i - 1] + c / pow((double)i, alpha_);
     }
+
+    printf("Final value: %f\n", (float)sum_probs_[sample_range]);
   }
 
-  long NextKey() {
-    int r = dist(rng);
-    long ret = 0;
-    if (r <= 10) {
-      ret = gen[0]->nextValue();
-    } else if (r <= 32) {
-      ret = gen[1]->nextValue();
-    } else if (r <= 54) {
-      ret = gen[2]->nextValue();
-    } else if (r <= 77) {
-      ret = gen[3]->nextValue();
-    } else {
-      ret = gen[4]->nextValue();
-    }
-    return ret;
-  }
+  double* sum_probs_;
 
- private:
-  std::uniform_int_distribution<int> dist;
-  std::default_random_engine rng;
-  ScrambledZipfianGenerator* gen[5];
+  double alpha_;
+
+  std::random_device rd;
+  std::default_random_engine rng = std::default_random_engine{rd()};
+  std::uniform_real_distribution<> rand_val{0.0, 1.0};
 };
 
 // Note that whole DBTest and its child classes disable fsync on files
@@ -239,10 +147,6 @@ class DBTest3 : public DBTestBase {
   DBTest3() : DBTestBase("/db_test3", /*env_do_fsync=*/false) {}
 };
 
-int thread_num = 16;
-int total_count = 16384 * 8192;
-int count_per_thread = total_count / thread_num;
-
 std::string repeat(std::string& str) {
   int repeat_times = 1024UL / str.length();
   size_t len = str.length() * repeat_times;
@@ -252,81 +156,6 @@ std::string repeat(std::string& str) {
     ret += str;
   }
   return ret;
-}
-
-unsigned long fnvhash64(int64_t val) {
-  //from http://en.wikipedia.org/wiki/Fowler_Noll_Vo_hash
-  static int64_t FNV_OFFSET_BASIS_64 = 0xCBF29CE484222325LL;
-  static int64_t FNV_PRIME_64 = 1099511628211L;
-
-  int64_t hashval = FNV_OFFSET_BASIS_64;
-
-  for (int i = 0; i < 8; i++) {
-    int64_t octet = val & 0x00ff;
-    val = val >> 8;
-
-    hashval = hashval ^ octet;
-    hashval = hashval * FNV_PRIME_64;
-    //hashval = hashval ^ octet;
-  }
-  return hashval > 0 ? hashval : -hashval;
-}
-
-std::atomic<int64_t> counter{0};
-
-std::vector<int> final_samples;
-
-void Test1Thread(DB *db) {
-  for (int i = 0; i < count_per_thread; ++i) {
-    auto keynum = fnvhash64(counter++);
-    std::string key = "user" + std::to_string(keynum);
-    std::string value = repeat(key);
-    ASSERT_OK(db->Put(WriteOptions(), key, value));
-  }
-}
-
-void Test3Thread(DB* db, std::unordered_set<long>& map) {
-  CustomZipfianGenerator zipf(100000000);
-  std::string prefix = "user";
-  for (int i = 0; i < count_per_thread; ++i) {
-    long ret = zipf.NextKey();
-    std::string s = std::to_string(ret);
-    std::string key = prefix + std::string(8 - s.length(), '0') + s;
-    std::string value = repeat(key);
-    db->Put(WriteOptions(), key, value);
-    if (i % 16 == 0) {
-      map.emplace(ret);
-    }
-  }
-}
-
-void Test3(DB* db) {
-  std::thread threads[thread_num];
-  std::unordered_set<long> maps[thread_num];
-  for (int i = 0; i < thread_num; ++i) {
-    threads[i] = std::thread(Test3Thread, db, std::ref(maps[i]));
-  }
-
-  for (auto& thread : threads) {
-    thread.join();
-  }
-
-  std::cout << "Start testing" << std::endl;
-  for (auto& map : maps) {
-    std::string prefix = "user";
-    std::cout << "Test num: " << map.size() << std::endl;
-    for (auto& num : map) {
-      std::string s = std::to_string(num);
-      std::string key = prefix + std::string(8 - s.length(), '0') + s;
-      std::string res;
-      std::string expected = repeat(key);
-      auto status = db->Get(ReadOptions(), key, &res);
-      ASSERT_TRUE(!status.ok() || res == expected);
-      if (!status.ok()) {
-        std::cout << key << " Error!" << std::endl;
-      }
-    }
-  }
 }
 
 void Test4Thread(DB* db) {
@@ -351,43 +180,6 @@ void Test4(DB* db) {
   }
 }
 
-int      sample_range = 1000000000;
-
-void GenerateSamples() {
-  final_samples.resize(total_count);
-  std::uniform_int_distribution<int> dist(0, sample_range - 1);
-  std::random_device rd;
-  std::default_random_engine rng = std::default_random_engine{rd()};
-
-  int cold_count = 0;
-  int hot_count;
-
-  {
-    ZipfianGenerator gen(0, sample_range, 0.99, 26.46902820178302);
-    std::unordered_map<int, int> freqs;
-    int left[2] = {400000000, 800000000};
-
-    for (int i = 0; i < total_count; ++i) {
-      long value = gen.nextValue();
-      freqs[value]++;
-      final_samples[i] = (int)value;
-    }
-
-    for (auto& value : final_samples) {
-      cold_count += (freqs[value] == 1);
-      value = freqs[value] == 1
-                  ? dist(rng) :
-                  (int)(fnvhash64(value) % 50000000) + left[value % 2];
-    }
-
-    hot_count = freqs.size() - cold_count;
-  }
-
-  float hot_freq = (total_count - cold_count) / (float)total_count * 100.f;
-  printf("Sample generated. hot count = %d(%.2f), cold count = %d\n",
-         hot_count, hot_freq, cold_count);
-}
-
 void CheckFreq() {
   std::unordered_map<int, int> freqs;
   for (auto& value : final_samples) {
@@ -403,55 +195,115 @@ void CheckFreq() {
   float hot_freq = (total_count - cold_count) / (float)total_count * 100.f;
   printf("Sample generated. hot count = %d(%.2f), cold count = %d\n",
          hot_count, hot_freq, cold_count);
+  std::cout << std::endl;
+}
+
+void ShuffleSamples(std::unordered_map<int, int>& freqs,
+                    std::unordered_map<int, int>& modified) {
+  std::random_device rd;
+  std::default_random_engine rng = std::default_random_engine{rd()};
+  std::uniform_int_distribution<int> dist(0, sample_range - 1);
+
+  int left[2] = {400000000, 800000000};
+  int interval = 50000000;
+  int mod = interval * 2;
+
+  std::random_device shuffle_rd;
+  std::vector<int> shuffled(mod);
+  std::iota(std::begin(shuffled), std::end(shuffled), 0);
+  std::shuffle(shuffled.begin(), shuffled.end(), shuffle_rd);
+
+  auto check_func = [&](int val) {
+    for (auto l : left) {
+      if (val >= l && val <= l + interval) {
+        return false;
+      }
+    }
+    return true;
+  };
+
+  int cur = 0;
+  for (auto& pair : freqs) {
+    int old_value = pair.first;
+    if (pair.second == 1) {
+      int new_value = dist(rng);
+      while (!check_func(new_value)) {
+        new_value = dist(rng);
+      }
+      modified[old_value] = new_value;
+    } else {
+      int new_value = shuffled[cur++];
+      modified[old_value] = left[new_value / interval] + (new_value % interval);
+    }
+  }
+}
+
+void GenerateSamples() {
+  final_samples.resize(total_count);
+
+  ZipfianGenerator gen(0.98);
+  std::unordered_map<int, int> freqs;
+
+  for (int i = 0; i < total_count; ++i) {
+    int value = gen.nextValue();
+    final_samples[i] = value;
+    freqs[value]++;
+  }
+
+  CheckFreq();
+
+  std::unordered_map<int, int> modified;
+  ShuffleSamples(freqs, modified);
+  for (auto& value : final_samples) {
+    value = modified[value];
+  }
+
+  CheckFreq();
+}
+
+void LoadOrWriteSamples() {
+  int64_t sample_file_size = 4ll << 30;
+  std::string sample_file = "/tmp/sample_data";
+
+  int fd;
+  struct stat buffer;
+  bool file_exist = stat(sample_file.c_str(), &buffer) == 0;
+  if (!file_exist) {
+    std::cout << "Create file and generate samples" << std::endl;
+    fd = open(sample_file.c_str(), O_RDWR|O_CREAT, 00777);
+    assert(-1 != fd);
+    lseek(fd, sample_file_size - 1, SEEK_SET);
+    write(fd, "", 1);
+  } else {
+    std::cout << "Read samples from files" << std::endl;
+    fd = open(sample_file.c_str(), O_RDWR, 00777);
+  }
+
+  char* ptr = (char*)mmap(
+      nullptr, sample_file_size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+  close(fd);
+
+  final_samples.resize(total_count);
+  if (file_exist) {
+    memcpy(final_samples.data(), ptr, total_count * sizeof(int));
+    CheckFreq();
+  } else {
+    GenerateSamples();
+    memcpy(ptr, final_samples.data(), total_count * sizeof(int));
+  }
+
+  munmap(ptr, sample_file_size);
 }
 
 TEST_F(DBTest3, MockEnvTest) {
-  Options options;
-  options.create_if_missing = true;
-  options.enable_pipelined_write = false;
-  options.OptimizeLevelStyleCompaction();
-
-  int sample_count = 320000000;
-
-  final_samples.resize(sample_count);
-  std::uniform_int_distribution<int> dist(0, 1000000000 - 1);
-  std::random_device rd;
-  std::default_random_engine rng = std::default_random_engine{rd()};
-
-  {
-    ZipfianGenerator gen(0, 1000000000L, 0.99, 26.46902820178302);
-    std::unordered_map<int, int> freqs;
-    std::unordered_map<int, int> modified;
-    int left[2] = {400000000, 800000000};
-    int interval = 50000000;
-    int mod = interval * 2;
-
-    for (int i = 0; i < sample_count; ++i) {
-      int value = gen.nextValue();
-      final_samples[i] = value;
-      freqs[value]++;
-    }
-
-    CheckFreq();
-
-    for (auto& pair : freqs) {
-      int old_value = pair.first;
-      if (pair.second == 1) {
-        modified[old_value] = dist(rng);
-      } else {
-        int new_val = fnvhash64(old_value) % (unsigned long)mod;
-        modified[old_value] = left[new_val / interval] + (new_val % interval);
-      }
-    }
-
-    for (auto& value : final_samples) {
-      value = modified[value];
-    }
-
-    CheckFreq();
-  }
+  LoadOrWriteSamples();
 
   DB* db;
+
+  Options options;
+  options.create_if_missing = true;
+  options.enable_pipelined_write = true;
+  options.OptimizeLevelStyleCompaction();
 
   ASSERT_OK(DB::Open(options, "/tmp/db_test", &db));
 

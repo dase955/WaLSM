@@ -50,6 +50,14 @@ Timestamps Timestamps::Copy() {
   return ts;
 }
 
+void Timestamps::Merge(Timestamps& rhs) {
+  float heat = GetTotalHeat();
+  float heat_rhs = rhs.GetTotalHeat();
+
+  std::lock_guard<SpinMutex> update_lk(update_lock_);
+  accumulate_ = (heat + heat_rhs);
+}
+
 void Timestamps::DecayHeat() {
   auto global_dec = GlobalDecay.load(std::memory_order_relaxed);
   if (likely(last_global_dec_ >= global_dec)) {
@@ -141,11 +149,6 @@ void Timestamps::EstimateBound(float& lower_bound, float& upper_bound) {
   float h3 = CalculateHeat(end_ts);
   lower_bound = heat + (h1 + h2) * (float)len;
   upper_bound = heat + (h2 + h3) * (float)len;
-}
-
-std::pair<int, int> Timestamps::GetLastStamp() {
-  return {Timestamp.load(std::memory_order_relaxed) >> 6,
-          last_ts_ + last_global_dec_};
 }
 
 } // namespace ROCKSDB_NAMESPACE

@@ -472,9 +472,9 @@ void InsertToArtNode(InnerNode* current, InnerNode* leaf,
   {
     std::lock_guard<RWSpinLock> write_lk(current->art_rw_lock_);
 
-    if (IS_ART_FULL(current->status_)) {
+    if (IS_ART_FULL(current)) {
       ReallocateArtNode(&current->art);
-      SET_ART_NON_FULL(current->status_);
+      SET_ART_NON_FULL(current);
     }
 
     art = current->art;
@@ -499,7 +499,7 @@ void InsertToArtNode(InnerNode* current, InnerNode* leaf,
   InsertInnerNode(left_node, leaf);
 
   if ((++art->num_children_) == full_num[art->art_type_]) {
-    SET_ART_FULL(current->status_);
+    SET_ART_FULL(current);
   }
 
   if (insert_to_group) {
@@ -560,7 +560,7 @@ void DeleteInnerNode(InnerNode* inner_node, uint64_t* inode_vptrs, int count) {
     return;
   }
 
-  if (IS_LEAF(inner_node->status_)) {
+  if (IS_LEAF(inner_node)) {
     inner_node->opt_lock_.lock();
     std::lock_guard<SharedMutex> write_lk(inner_node->share_mutex_);
 

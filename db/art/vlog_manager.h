@@ -9,6 +9,7 @@
 #include <db/dbformat.h>
 #include <util/autovector.h>
 #include "concurrent_queue.h"
+#include "utils.h"
 
 namespace ROCKSDB_NAMESPACE {
 
@@ -49,13 +50,13 @@ struct GCData {
 
 class GlobalMemtable;
 
-class VLogManager {
+class VLogManager : public BackgroundThread {
   friend class Compactor;
 
  public:
   explicit VLogManager(const DBOptions& options, bool recovery = false);
 
-  ~VLogManager();
+  ~VLogManager() override;
 
   void Initialize();
 
@@ -86,8 +87,10 @@ class VLogManager {
 
   float Estimate();
 
+  bool RecentWritten(uint64_t vptr);
+
  private:
-  void BGWorkGarbageCollection();
+  void BGWork() override;
 
   char* GetSegmentFromFreeQueue();
 
@@ -111,6 +114,8 @@ class VLogManager {
 
   GlobalMemtable* mem_;
 
+  int* write_time_;
+
   TQueueConcurrent<char*> free_segments_;
 
   TQueueConcurrent<char*> used_segments_;
@@ -122,9 +127,6 @@ class VLogManager {
   std::vector<GCData> gc_data;
 
   char* segment_for_gc_;
-
-  bool thread_stop_;
-  std::thread gc_thread_;
 
   // Parameters
   const uint64_t vlog_file_size_;

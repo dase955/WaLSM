@@ -3,9 +3,10 @@
 //
 
 #pragma once
+#include <rocksdb/rocksdb_namespace.h>
 #include <cstdint>
 #include <immintrin.h>
-#include <rocksdb/rocksdb_namespace.h>
+#include <condition_variable>
 #include <util/hash.h>
 #include <db/dbformat.h>
 #include "macros.h"
@@ -16,16 +17,12 @@
 
 namespace ROCKSDB_NAMESPACE {
 
-/*constexpr size_t RecordPrefixSize
-    = 1 + sizeof(SequenceNumber) + sizeof(RecordIndex);*/
-
-// Forward declaration
 struct InnerNode;
 struct NVMNode;
 struct ArtNode;
 
-#define likely(x)       __builtin_expect(!!(x), 1)
-#define unlikely(x)     __builtin_expect(!!(x), 0)
+#define likely(x)    __builtin_expect(!!(x), 1)
+#define unlikely(x)  __builtin_expect(!!(x), 0)
 
 inline uint64_t HashOnly(const char* key, size_t n) {
   assert(n < 256);
@@ -150,7 +147,8 @@ void InsertInnerNode(InnerNode* node, InnerNode* inserted);
 // These two functions are used in compaction.
 void InsertNewNVMNode(InnerNode* node, NVMNode* inserted);
 
-// Different from RemoveChildrenNVMNode, this function is used to remove backup node
+// Different from RemoveChildrenNVMNode,
+// this function is used to remove backup node
 void RemoveOldNVMNode(InnerNode* node);
 
 NVMNode* GetNextNode(NVMNode* node);
@@ -160,6 +158,36 @@ NVMNode* GetNextNode(int64_t offset);
 int64_t GetNextRelativeNode(NVMNode* node);
 
 int64_t GetNextRelativeNode(int64_t offset);
+
+/////////////////////////////////////////////////////
+
+class BackgroundThread {
+ public:
+  virtual ~BackgroundThread() = default;
+
+  void StartThread() {
+    background_thread_ = std::thread(&BackgroundThread::BGWork, this);
+  }
+
+  void StopThread() {
+    thread_stop_ = true;
+    cond_var_.notify_one();
+    background_thread_.join();
+    printf("background thread stop.\n");
+  }
+
+ private:
+  virtual void BGWork() = 0;
+
+ protected:
+  std::thread background_thread_;
+
+  std::mutex mutex_;
+
+  std::condition_variable cond_var_;
+
+  bool thread_stop_ = false;
+};
 
 } // namespace ROCKSDB_NAMESPACE
 

@@ -20,6 +20,8 @@
 
 namespace ROCKSDB_NAMESPACE {
 
+int fetch_time = 0;
+
 int SearchVptr(
     InnerNode* inner_node, uint8_t hash, int rows, uint64_t vptr) {
 
@@ -60,6 +62,11 @@ int SearchVptr(
 
 auto RecordPrefixSize = WriteBatchInternal::kRecordPrefixSize;
 
+bool VLogManager::RecentWritten(uint64_t vptr) {
+  GetActualVptr(vptr);
+  return fetch_time - write_time_[vptr >> 20] <= 1024;
+}
+
 void VLogManager::PopFreeSegment() {
   while (free_segments_.size() < 36) {
     std::this_thread::sleep_for(std::chrono::milliseconds(1));
@@ -69,6 +76,9 @@ void VLogManager::PopFreeSegment() {
   header_ = (VLogSegmentHeader*)cur_segment_;
   segment_remain_ = vlog_segment_size_ - header_->offset_;
   assert(header_->offset_ < vlog_segment_size_);
+
+  int idx = (cur_segment_ - pmemptr_) / vlog_segment_size_;
+  write_time_[idx] = ++fetch_time;
 }
 
 char* VLogManager::GetSegmentFromFreeQueue() {
@@ -91,14 +101,18 @@ void VLogManager::PushToUsedQueue(char* segment) {
 // Why size of vlog header equals vlog_segment_size_ / 128 ?
 // We assume that minimum length of single record is 16 byte,
 VLogManager::VLogManager(const DBOptions& options, bool recovery)
-    : thread_stop_(false),
-      vlog_file_size_(options.vlog_file_size),
+    : vlog_file_size_(options.vlog_file_size),
       vlog_segment_size_(options.vlog_segment_size),
       vlog_segment_num_(vlog_file_size_ / vlog_segment_size_),
       vlog_header_size_(vlog_segment_size_ / 128),
       vlog_bitmap_size_(vlog_header_size_ - sizeof(VLogSegmentHeader)),
       force_gc_ratio_((size_t)
                           (options.vlog_force_gc_ratio_ * vlog_segment_num_)){
+  write_time_ = new int[vlog_segment_num_];
+  for (size_t i = 0; i < vlog_segment_num_; ++i) {
+    write_time_[i] = 0;
+  }
+
   pmemptr_ = GetMappedAddress("vlog");
   recovery ? Recover() : Initialize();
 
@@ -108,12 +122,11 @@ VLogManager::VLogManager(const DBOptions& options, bool recovery)
 
   PopFreeSegment();
 
-  gc_thread_ = std::thread(&VLogManager::BGWorkGarbageCollection, this);
+  StartThread();
 }
 
 VLogManager::~VLogManager() {
-  thread_stop_ = true;
-  gc_thread_.join();
+  StopThread();
 }
 
 void VLogManager::Recover() {
@@ -299,7 +312,7 @@ void VLogManager::ReadAndSortData(std::vector<char*>& segments) {
             });
 }
 
-void VLogManager::BGWorkGarbageCollection() {
+void VLogManager::BGWork() {
   std::vector<char*> segments;
 
   while (!thread_stop_) {
@@ -358,7 +371,7 @@ void VLogManager::BGWorkGarbageCollection() {
 
         // If inner node is leaf node after holding vptr_lock,
         // this record has been stored into node buffer.
-        if (unlikely(IS_LEAF(inner_node->status_))) {
+        if (unlikely(IS_LEAF(inner_node))) {
           continue;
         }
 
@@ -382,7 +395,7 @@ void VLogManager::BGWorkGarbageCollection() {
         std::lock_guard<SharedMutex> write_lk(inner_node->share_mutex_);
 
         // node is split or compacted
-        if (unlikely(!IS_LEAF(inner_node->status_))) {
+        if (unlikely(NOT_LEAF(inner_node))) {
           continue;
         }
 

@@ -1169,12 +1169,16 @@ struct DBOptions {
 
   // Options below are used for art.
 
+  // Number of maximum number of parallel running compaction.
+  // Default: 4
+  int num_parallel_compactions = 4;
+
   // Amount of data in global memtable before trigger compaction.
   // Default: 5G
   int64_t compaction_threshold = 5120LL << 20;
 
-  // A threshold for the max size of a group,
-  // larger size will trigger group split.
+  // Maximum size of a group,
+  // group larger than this will be split.
   // Default: 12M
   int group_split_threshold = 12 << 20;
 
@@ -1204,16 +1208,16 @@ struct DBOptions {
 
   // When global timestamp exceed waterline, we need to do heat decay.
   // default: 1024
-  int timestamp_waterline = 1024;
+  int timestamp_waterline = 512;
 
   // default: 100
-  int layer_ts_interval = 100;
+  int layer_ts_interval = 50;
 
   // Space for allocating nvm nodes.
   // default: 1G
   int64_t node_memory_size = 1024LL << 20;
 
-  int max_rewrite_count = 10000;
+  int max_rewrite_count = 600;
 
   int rewrite_threshold = 2;
 };

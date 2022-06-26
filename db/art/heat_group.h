@@ -6,6 +6,8 @@
 #include <mutex>
 #include <atomic>
 #include <vector>
+#include <sstream>
+#include <iomanip>
 #include <condition_variable>
 #include <rocksdb/rocksdb_namespace.h>
 #include "macros.h"
@@ -17,29 +19,31 @@ struct InnerNode;
 struct HeatGroup;
 class HeatGroupManager;
 
-// Status of heat group
 enum GroupStatus {
   kGroupNone,
-  kGroupWaitSplit,
   kGroupWaitMove,
+  kGroupWaitSplit,
+  kGroupWaitMerge,
   kGroupCompaction,
 };
 
 enum GroupOperator {
-  kOperatorSplit,
   kOperatorMove,
+  kOperatorSplit,
+  kOperatorMerge,
   kOperatorLevelDown,
-  kOperationChooseCompaction,
-  kOperationStop,
+  kOperationChooseCompaction
 };
 
 struct GroupOperation {
   HeatGroup* target;
   GroupOperator op;
+  void* arg;
 
   GroupOperation() = default;
-  GroupOperation(HeatGroup* target_, GroupOperator op_)
-      : target(target_), op(op_) {};
+
+  GroupOperation(HeatGroup* target_, GroupOperator op_, void* arg_)
+      : target(target_), op(op_), arg(arg_) {};
 };
 
 struct HeatGroup {
@@ -52,12 +56,22 @@ struct HeatGroup {
   InnerNode*               first_node_;
   InnerNode*               last_node_;
   std::atomic<GroupStatus> status_;
-  bool                     in_base_layer_;
 
+  // Groups smaller than threshold will be placed in base layer
+  bool                     in_base_layer;
+  bool                     in_temp_layer;
+
+  // Removed group will not be used anymore
+  bool                     is_removed = false;
+
+  // next_seq and prev_seq present physically adjacent node
+  HeatGroup*               next_seq = nullptr;
+  HeatGroup*               prev_seq = nullptr;
+
+  // next and prev present adjacent node in heat group queue
   HeatGroupManager*        group_manager_;
   HeatGroup*               next;
   HeatGroup*               prev;
-  int                      flush_times_ = 0;
 
   static int group_min_size_;
 
@@ -87,7 +101,24 @@ struct MultiLayerGroupQueue {
   HeatGroup*  tails_[MAX_LAYERS + 2]{};
   HeatGroup** heads = heads_ + 2;
   HeatGroup** tails = tails_ + 2;
-  int totalLayers = 1;
+  int         total_layers = 1;
+
+  void CountGroups() const {
+    std::stringstream ss;
+    for (int l = -2; l < MAX_LAYERS; ++l) {
+      int count = 0;
+      int64_t sum = 0;
+      auto cur = heads[l]->next;
+      while (cur != tails[l]) {
+        sum += cur->group_size_.load(std::memory_order_relaxed);
+        cur = cur->next;
+        ++count;
+      }
+      sum /= 1048576;
+      ss << std::setw(4) << count << "(" << sum << "M) ";
+    }
+    printf("Group counts: %s\n", ss.str().c_str());
+  }
 };
 
 inline float CalculateHeat(int32_t ts) {

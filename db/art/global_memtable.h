@@ -102,7 +102,7 @@ class GlobalMemtable {
 
   void PutRecover(uint64_t vptr);
 
-  void Put(Slice& key, KVStruct& kv_info);
+  void Put(Slice& key, KVStruct& kv_info, bool update_heat = true);
 
   bool FindKeyInInnerNode(InnerNode* leaf, size_t level,
                           std::string& key, std::string& value, Status* s);
@@ -110,7 +110,8 @@ class GlobalMemtable {
   bool ReadInNVMNode(NVMNode* nvm_node, uint64_t hash,
                      std::string& key, std::string& value, Status* s);
 
-  void InsertIntoLeaf(InnerNode* leaf, KVStruct& kv_info, size_t level);
+  void InsertIntoLeaf(InnerNode* leaf, KVStruct& kv_info,
+                      size_t level, bool update_heat = true);
 
   bool SqueezeNode(InnerNode* leaf);
 

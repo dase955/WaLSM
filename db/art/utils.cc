@@ -58,13 +58,13 @@ InnerNode* AllocateLeafNode(uint8_t prefix_length,
                             unsigned char last_prefix,
                             InnerNode* next_node) {
   auto inode = new InnerNode();
-  uint32_t status = inode->status_;
+  /*uint32_t status = inode->status_;
   SET_LEAF(status);
   SET_NON_GROUP_START(status);
   SET_ART_NON_FULL(status);
   SET_NODE_BUFFER_SIZE(status, 0);
-  SET_GC_FLUSH_SIZE(status, 0);
-  inode->status_ = status;
+  SET_GC_FLUSH_SIZE(status, 0);*/
+  inode->status_ = INITIAL_STATUS(0);
 
   auto mgr = GetNodeAllocator();
 
@@ -113,12 +113,12 @@ InnerNode* RecoverInnerNode(NVMNode* nvm_node) {
     inode->hll_[bucket] = std::max(inode->hll_[bucket], digit);
   }
 
-  uint32_t status = 0;
-  SET_LEAF(status);
+  uint32_t status = INITIAL_STATUS(buffer_size);
+  /*SET_LEAF(status);
   SET_NON_GROUP_START(status);
   SET_ART_NON_FULL(status);
   SET_NODE_BUFFER_SIZE(status, buffer_size);
-  SET_GC_FLUSH_SIZE(status, 0);
+  SET_GC_FLUSH_SIZE(status, 0);*/
 
   inode->status_ = status;
   inode->estimated_size_ = nvm_node->meta.node_info;

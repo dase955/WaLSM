@@ -9,22 +9,24 @@
 #include <thread>
 #include <mutex>
 #include <deque>
+#include <db/art/utils.h>
 #include <condition_variable>
 #include <db/dbformat.h>
 #include <rocksdb/rocksdb_namespace.h>
-#include <rocksdb//threadpool.h>
+#include <rocksdb/threadpool.h>
+#include <rocksdb/threadpool.h>
 #include <util/autovector.h>
 
 namespace ROCKSDB_NAMESPACE {
 
-struct HeatGroup;
-class HeatGroupManager;
-class VLogManager;
-struct InnerNode;
 struct NVMNode;
-class DBImpl;
 struct ArtNode;
+struct HeatGroup;
+struct InnerNode;
+class DBImpl;
+class VLogManager;
 class GlobalMemtable;
+class HeatGroupManager;
 
 struct SingleCompactionJob {
   static ThreadPool* thread_pool;
@@ -36,6 +38,7 @@ struct SingleCompactionJob {
 
   int          total_count;
   int          hot_count;
+  int          recent_count;
 
   std::deque<InnerNode*>   candidates;
   std::vector<InnerNode*>  candidates_removed;
@@ -48,7 +51,7 @@ struct SingleCompactionJob {
   std::vector<std::pair<NVMNode*, int>> nvm_nodes_and_sizes;
 
   void Reset() {
-    total_count = hot_count = 0;
+    total_count = hot_count = recent_count = 0;
     hot_data.clear();
     candidates.clear();
     candidates_removed.clear();
@@ -58,12 +61,11 @@ struct SingleCompactionJob {
   }
 };
 
-class Compactor {
+class Compactor : public BackgroundThread {
  public:
-  Compactor() : thread_stop_(false), group_manager_(nullptr),
-                vlog_manager_(nullptr) {};
+  explicit Compactor(const DBOptions& options);
 
-  ~Compactor() noexcept;
+  ~Compactor() noexcept override;
 
   void SetGroupManager(HeatGroupManager* group_manager);
 
@@ -72,12 +74,6 @@ class Compactor {
   void SetGlobalMemtable(GlobalMemtable* global_memtable);
 
   void SetDB(DBImpl* db_impl);
-
-  void StartCompactionThread();
-
-  void StopCompactionThread();
-
-  void BGWorkDoCompaction();
 
   void Notify(std::vector<HeatGroup*>& heat_groups);
 
@@ -88,17 +84,13 @@ class Compactor {
   static int rewrite_threshold;
 
  private:
+  void BGWork() override;
+
   void CompactionPreprocess(SingleCompactionJob* job);
 
   void CompactionPostprocess(SingleCompactionJob* job);
 
-  std::mutex mutex_;
-
-  std::condition_variable cond_var_;
-
-  std::thread compactor_thread_;
-
-  bool thread_stop_;
+  void RewriteData(SingleCompactionJob* job);
 
   GlobalMemtable* global_memtable_ = nullptr;
 
@@ -108,7 +100,7 @@ class Compactor {
 
   DBImpl* db_impl_ = nullptr;
 
-  int num_parallel_compaction_ = 4;
+  int num_parallel_compaction_;
 
   std::vector<HeatGroup*> chosen_groups_;
 

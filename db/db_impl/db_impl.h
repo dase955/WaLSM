@@ -1883,7 +1883,7 @@ class DBImpl : public DB {
 
   GlobalMemtable* global_memtable_;
 
-  Compactor compactor_;
+  Compactor* compactor_;
 
   HeatGroupManager* group_manager_;
 

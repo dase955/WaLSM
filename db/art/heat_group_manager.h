@@ -6,6 +6,7 @@
 #include <rocksdb/rocksdb_namespace.h>
 #include <thread>
 #include <atomic>
+#include "utils.h"
 #include "heat_group.h"
 #include "concurrent_queue.h"
 
@@ -15,46 +16,39 @@ extern std::atomic<int32_t> GlobalDecay;
 
 class Compactor;
 
-class HeatGroupManager {
+class HeatGroupManager : public BackgroundThread {
  public:
-  HeatGroupManager(const DBOptions& options);
+  explicit HeatGroupManager(const DBOptions& options);
 
-  ~HeatGroupManager();
-
-  void SetCompactor(Compactor* compactor);
-
-  void InitGroupQueue(float coeff);
-
-  // Operation with high priority will be put in front
-  void AddOperation(HeatGroup* group, GroupOperator op, bool highPri = false);
+  void AddOperation(HeatGroup* group, GroupOperator op,
+                    bool high_pri = false, void* arg = nullptr);
 
   void InsertIntoLayer(HeatGroup* inserted, int level);
 
  private:
-  void BGWorkProcessHeatGroup();
+  void BGWork() override;
 
-  void ChooseCompaction(size_t num);
+  void ChooseCompaction(Compactor* compactor, size_t num_chosen);
 
-  // Split heat group
+  bool MergeNextGroup(HeatGroup* group, HeatGroup* next_group);
+
+  void TryMergeBaseLayerGroups();
+
   void SplitGroup(HeatGroup* group);
 
   void MoveGroup(HeatGroup* group);
 
-  // Different from GroupLevelDown,
-  // groups in layer1 will be moved to layer0 even if layer0 is not empty
   void ForceGroupLevelDown();
 
   void GroupLevelDown();
 
-  void MoveAllGroupsToLayer(int from, int to);
+  bool CheckForCompaction(HeatGroup* group, int cur_level);
 
-  Compactor* compactor_;
+  void MoveAllGroupsToLayer(int from, int to);
 
   TQueueConcurrent<GroupOperation> group_operations_;
 
   MultiLayerGroupQueue group_queue_;
-
-  std::thread heat_processor_;
 };
 
 } // namespace ROCKSDB_NAMESPACE

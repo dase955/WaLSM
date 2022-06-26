@@ -410,10 +410,10 @@ int64_t ReadAndBuild(SingleCompactionJob* job,
     keys[count] = "";
     kvs[count].key = &keys[count];
 
-    int cur_count = 0;
+    int cur_count = 1;
     auto& last_kv = kvs.front();
 
-    for (size_t i = 0; i <= count; ++i) {
+    for (size_t i = 1; i <= count; ++i) {
       auto& kv = kvs[i];
 
       if (*kv.key == *last_kv.key) {
@@ -425,9 +425,12 @@ int64_t ReadAndBuild(SingleCompactionJob* job,
         job->hot_count += (cur_count >= Compactor::rewrite_threshold);
 
         // TODO: choose highest freq data
-        if (cur_count >= Compactor::rewrite_threshold &&
-            job->hot_data.size() < Compactor::max_rewrite_count) {
+        if ((cur_count >= Compactor::rewrite_threshold &&
+            job->hot_count < (int)Compactor::max_rewrite_count) || (
+                cur_count == 1 &&
+                job->vlog_manager_->RecentWritten(last_kv.vptr))) {
           job->hot_data.push_back(last_kv.vptr);
+          job->recent_count += (cur_count == 1);
         } else {
           job->compacted_indexes[last_kv.vptr >> 20]
               .push_back(last_kv.record_index);

@@ -29,9 +29,9 @@ struct Timestamps {
 
   Timestamps Copy();
 
-  void DecayHeat();
+  void Merge(Timestamps& rhs);
 
-  std::pair<int, int> GetLastStamp();
+  void DecayHeat();
 
   // Return true if timestamp is updated.
   bool UpdateHeat();

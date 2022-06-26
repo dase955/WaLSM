@@ -441,9 +441,6 @@ int main(int argc, char* argv[]) {
     options.rewrite_threshold = atoi(argv[2]);
   }
 
-  printf("max_rewrite_count=%d, rewrite_threshold=%d\n",
-         options.max_rewrite_count, options.rewrite_threshold);
-
   std::string db_path = "/tmp/db_test_" + test_name;
   std::string ops_path =  "/tmp/run_ops_" + test_name;
 

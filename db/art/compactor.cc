@@ -72,6 +72,9 @@ void RemoveChildren(InnerNode* parent, InnerNode* child) {
       heat_group->last_node_ = parent;
       next_node = child->next_node_;
 
+      assert(IS_GROUP_START(next_node));
+      assert(next_node->next_node_ == support_node);
+
       auto after = support_node->next_node_;
       std::lock_guard<RWSpinLock> next_link_lk(after->link_lock_);
 
@@ -122,8 +125,8 @@ void RemoveChildren(InnerNode* parent, InnerNode* child) {
     parent->backup_art = parent->art;
     parent->art = nullptr;
 
-    SET_LEAF(parent->status_);
-    SET_ART_NON_FULL(parent->status_);
+    SET_LEAF(parent);
+    SET_ART_NON_FULL(parent);
     SET_NODE_BUFFER_SIZE(parent->status_, 0);
     memset(parent->buffer_, 0, 256);
     parent->estimated_size_ = 0;
@@ -142,7 +145,7 @@ void ProcessNodes(InnerNode* parent, std::vector<InnerNode*>& children,
   std::lock_guard<OptLock> opt_lk(parent->opt_lock_);
   std::lock_guard<SharedMutex> write_lk(parent->share_mutex_);
 
-  if (children.size() == parent->art->num_children_) {
+  if (children.size() == parent->art->num_children_ && parent->heat_group_ == job->group_) {
     RemoveChildren(parent, children.back());
     job->candidate_parents.push_back(parent);
     for (auto child : children) {
@@ -167,6 +170,10 @@ int64_t Compactor::compaction_threshold_;
 size_t Compactor::max_rewrite_count;
 
 int Compactor::rewrite_threshold;
+
+Compactor::Compactor(const DBOptions& options)
+    : group_manager_(nullptr), vlog_manager_(nullptr),
+      num_parallel_compaction_(options.num_parallel_compactions) {}
 
 Compactor::~Compactor() noexcept {
   printf("Statistics:\n"
@@ -212,18 +219,45 @@ void Compactor::Notify(std::vector<HeatGroup*>& heat_groups) {
   cond_var_.notify_one();
 }
 
-void Compactor::StartCompactionThread() {
-  compactor_thread_ =
-      std::thread(&Compactor::BGWorkDoCompaction, this);
+void Compactor::RewriteData(SingleCompactionJob* job) {
+  job->keys_in_node[0].clear();
+
+  for (auto vptr : job->hot_data) {
+    int i = vptr >> 20;
+    auto header = (VLogSegmentHeader*)(
+        vlog_manager_->pmemptr_ + vlog_manager_->vlog_segment_size_ * i);
+
+    char* record_start = vlog_manager_->pmemptr_ + vptr;
+    Slice slice(record_start, 1 << 20);
+    ValueType type = *((ValueType*)record_start);
+    slice.remove_prefix(WriteBatchInternal::kRecordPrefixSize);
+
+    uint32_t key_length;
+    GetVarint32(&slice, &key_length);
+    Slice key(slice.data(), key_length);
+    slice.remove_prefix(key_length);
+
+    if (type == kTypeValue) {
+      uint32_t value_length;
+      GetVarint32(&slice, &value_length);
+      slice.remove_prefix(value_length);
+    }
+
+    auto kv_size = slice.data() - record_start;
+    std::lock_guard<SpinMutex> status_lk(header->lock.mutex_);
+    if (unlikely(header->status_ == kSegmentGC)) {
+      std::string record(record_start, kv_size);
+      vlog_manager_->WriteToNewSegment(record, vptr);
+    }
+
+    auto hash = HashOnly(key.data(), key.size());
+    KVStruct kv_info(hash, vptr);
+    kv_info.kv_size_ = kv_size;
+    global_memtable_->Put(key, kv_info, false);
+  }
 }
 
-void Compactor::StopCompactionThread() {
-  thread_stop_ = true;
-  cond_var_.notify_one();
-  compactor_thread_.join();
-}
-
-void Compactor::BGWorkDoCompaction() {
+void Compactor::BGWork() {
   static int64_t choose_threshold = compaction_threshold_ +
                                     num_parallel_compaction_ *
                                         HeatGroup::group_min_size_;
@@ -235,43 +269,6 @@ void Compactor::BGWorkDoCompaction() {
 
     std::this_thread::sleep_for(std::chrono::milliseconds(5));
 
-    for (auto job : chosen_jobs_) {
-      job->keys_in_node[0].clear();
-      for (auto vptr : job->hot_data) {
-        int i = vptr >> 20;
-        auto header = (VLogSegmentHeader*)(
-            vlog_manager_->pmemptr_ + vlog_manager_->vlog_segment_size_ * i);
-
-        char* record_start = vlog_manager_->pmemptr_ + vptr;
-        Slice slice(record_start, 1 << 20);
-        ValueType type = *((ValueType*)record_start);
-        slice.remove_prefix(WriteBatchInternal::kRecordPrefixSize);
-
-        uint32_t key_length;
-        GetVarint32(&slice, &key_length);
-        Slice key(slice.data(), key_length);
-        slice.remove_prefix(key_length);
-
-        if (type == kTypeValue) {
-          uint32_t value_length;
-          GetVarint32(&slice, &value_length);
-          slice.remove_prefix(value_length);
-        }
-
-        auto kv_size = slice.data() - record_start;
-        std::lock_guard<SpinMutex> status_lk(header->lock.mutex_);
-        if (unlikely(header->status_ == kSegmentGC)) {
-          std::string record(record_start, kv_size);
-          vlog_manager_->WriteToNewSegment(record, vptr);
-        }
-
-        auto hash = HashOnly(key.data(), key.size());
-        KVStruct kv_info(hash, vptr);
-        kv_info.kv_size_ = kv_size;
-        global_memtable_->Put(key, kv_info);
-      }
-    }
-
     vlog_manager_->FreeQueue();
     GetNodeAllocator()->FreeNodes();
     for (auto job : chosen_jobs_) {
@@ -281,14 +278,14 @@ void Compactor::BGWorkDoCompaction() {
     }
     chosen_jobs_.clear();
 
-    auto mem_total_size = MemTotalSize.load(std::memory_order_relaxed);
-    if (mem_total_size < choose_threshold) {
+    auto cur_mem_size = MemTotalSize.load(std::memory_order_relaxed);
+    if (cur_mem_size < choose_threshold) {
       continue;
     }
 
     {
       std::unique_lock<std::mutex> lock{mutex_};
-      group_manager_->AddOperation(nullptr, kOperationChooseCompaction, true);
+      group_manager_->AddOperation(nullptr, kOperationChooseCompaction, false, this);
       cond_var_.wait(lock);
 
       if (thread_stop_) {
@@ -302,7 +299,6 @@ void Compactor::BGWorkDoCompaction() {
       for (size_t i = 0; i < chosen_groups_.size(); ++i) {
         auto job = compaction_jobs_[i];
         job->group_ = chosen_groups_[i];
-        job->group_->flush_times_++;
         chosen_jobs_.push_back(job);
       }
     }
@@ -327,6 +323,10 @@ void Compactor::BGWorkDoCompaction() {
     }
     SingleCompactionJob::thread_pool->Join();
 
+    for (auto job : chosen_jobs_) {
+      group_manager_->AddOperation(job->group_, kOperatorMove, true);
+    }
+
     auto end_time = GetStartTime();
 
     // Use sfence after all vlog are modified
@@ -341,35 +341,31 @@ void Compactor::BGWorkDoCompaction() {
     int rewrite_count = 0;
     int total_count = 0;
     int hot_count = 0;
+    int recent_count = 0;
     for (auto job : chosen_jobs_) {
+      recent_count += job->recent_count;
       rewrite_count += job->hot_data.size();
       total_count += job->total_count;
       hot_count += job->hot_count;
     }
 
+    auto squeezed_in_compaction =
+        (float)SqueezedSizeInCompaction.load(std::memory_order_relaxed) / 1048576.0f;
+    auto mem_total_size =
+        (float)MemTotalSize.load(std::memory_order_relaxed) / 1048576.0f;
+    auto compacted_size =
+        (float)CompactedSize.load(std::memory_order_relaxed) / 1048576.0f;
+    auto total_squeezed_size =
+        (float)SqueezedSize.load(std::memory_order_relaxed) / 1048576.0f;
+
     RECORD_DEBUG("free pages: "
-        "%zu, %zu(%.2f), size: %zu, %zu, %zu; squeezed in groups %zu. "
-        "rewrite %d, total count %d, hot count %d\n",
+        "%zu, %zu(%.2f), size: %.2fM, %.2fM, %.2fM; squeezed in groups %.2fM "
+        "rewrite %d total count %d hot count %d, recent count %d\n",
         GetNodeAllocator()->GetNumFreePages(),
         vlog_manager_->free_segments_.size(), vlog_manager_->Estimate(),
-        MemTotalSize.load(std::memory_order_relaxed),
-        CompactedSize.load(std::memory_order_relaxed),
-        SqueezedSize.load(std::memory_order_relaxed),
-        SqueezedSizeInCompaction.load(std::memory_order_relaxed),
-        rewrite_count, total_count, hot_count);
-
-    int ts_delta[4] = {0};
-    for (size_t i = 0; i < chosen_jobs_.size(); ++i) {
-      auto pair = chosen_jobs_[i]->group_->ts.GetLastStamp();
-      ts_delta[i] = pair.first - pair.second;
-    }
-
-    RECORD_DEBUG("Group prefixes: %s, %s, %s, %s, ts delta: %d %d %d %d\n",
-                 compaction_jobs_[0]->keys_in_node[0].c_str(),
-                 compaction_jobs_[1]->keys_in_node[0].c_str(),
-                 compaction_jobs_[2]->keys_in_node[0].c_str(),
-                 compaction_jobs_[3]->keys_in_node[0].c_str(),
-                 ts_delta[0], ts_delta[1], ts_delta[2], ts_delta[3]);
+        mem_total_size, compacted_size, total_squeezed_size,
+        squeezed_in_compaction,
+        rewrite_count, total_count, hot_count, recent_count);
 
     SqueezedSizeInCompaction.store(0);
 
@@ -378,16 +374,22 @@ void Compactor::BGWorkDoCompaction() {
     while (BackupRead.load(std::memory_order_acquire)) {
       std::this_thread::yield();
     }
+
+    SingleCompactionJob::thread_pool->SetJobCount(chosen_jobs_.size());
+    for (auto& job : chosen_jobs_) {
+      auto func = std::bind(&Compactor::RewriteData, this, job);
+      SingleCompactionJob::thread_pool->SubmitJob(func);
+    }
+    SingleCompactionJob::thread_pool->Join();
   }
 }
 
 void Compactor::CompactionPreprocess(SingleCompactionJob* job) {
   auto chosen_group = job->group_;
   InnerNode* start_node = chosen_group->first_node_;
-  InnerNode* end_node = chosen_group->last_node_;
-  InnerNode* node_after_end = end_node->next_node_;
-  InnerNode* cur_node = start_node->next_node_;
-  assert(IS_GROUP_START(start_node->status_));
+  InnerNode* next_start_node = chosen_group->next_seq->first_node_;
+  assert(IS_GROUP_START(start_node));
+  assert(IS_GROUP_START(next_start_node));
 
   job->Reset();
   job->vlog_manager_ = vlog_manager_;
@@ -397,12 +399,12 @@ void Compactor::CompactionPreprocess(SingleCompactionJob* job) {
   std::vector<InnerNode*> children;
   InnerNode* cur_parent = nullptr;
 
-  while (cur_node != node_after_end) {
+  InnerNode* cur_node = start_node->next_node_;
+  while (cur_node != next_start_node) {
     cur_node->opt_lock_.lock();
     cur_node->share_mutex_.lock();
 
-    if (!(IS_LEAF(cur_node->status_) &&
-          cur_node->heat_group_ == chosen_group)) {
+    if (NOT_LEAF(cur_node) || !cur_node->heat_group_) {
       cur_node->share_mutex_.unlock();
       cur_node->opt_lock_.unlock();
       cur_node = cur_node->next_node_;
@@ -457,7 +459,7 @@ void Compactor::CompactionPostprocess(SingleCompactionJob* job) {
   auto cur_node = job->group_->first_node_;
   auto node_after_end = job->group_->last_node_->next_node_;
   auto candidates = job->candidates;
-  assert(IS_GROUP_START(cur_node->status_));
+  assert(IS_GROUP_START(cur_node));
 
   auto candidate = candidates.front();
   candidates.pop_front();
@@ -488,7 +490,6 @@ void Compactor::CompactionPostprocess(SingleCompactionJob* job) {
   vlog_manager_->UpdateBitmap(job->compacted_indexes);
 
   job->group_->status_.store(kGroupWaitMove, std::memory_order_relaxed);
-  group_manager_->AddOperation(job->group_, kOperatorMove, true);
 }
 
 } // namespace ROCKSDB_NAMESPACE

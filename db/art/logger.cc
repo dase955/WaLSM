@@ -44,6 +44,8 @@ void WriteLog(const char* format, ...) {
 }
 
 void WriteDebug(const char* format, ...) {
+  std::lock_guard<std::mutex> write_lk(m);
+
   va_list ap;
   va_start(ap, format);
   char buf[8192];
