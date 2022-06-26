@@ -35,6 +35,7 @@ const uint64_t hot_read_low_bound = 0;
 const uint64_t hot_read_up_bound =
     hot_read_low_bound + static_cast<uint64_t>(hot_range) * (UINT64_MAX / 10);
 
+// threads num
 const int t_num = 8;
 
 struct TestContext {
@@ -176,7 +177,7 @@ void runOps(DB* db, TestContext* ctx, uint64_t start) {
     }
 
     for (size_t i = 0; i < query_rate; i++) {
-      idx = ctx->run_insert.fetch_add(1);
+      idx = ctx->run_query.fetch_add(1);
       if (idx >= op_query_num) {
         break;
       }
@@ -186,7 +187,6 @@ void runOps(DB* db, TestContext* ctx, uint64_t start) {
       if (s.ok()) {
         assert(value == numToValue(num));
       }
-      break;
     }
 
     size_t cur_ops = ctx->total_ops.fetch_add(insert_rate + query_rate);
@@ -205,8 +205,8 @@ int main() {
   DB* db;
   Options options;
   // Optimize RocksDB. This is the easiest way to get RocksDB to perform well
-  options.IncreaseParallelism();
   options.OptimizeUniversalStyleCompaction();
+  options.IncreaseParallelism(16);
   options.use_direct_io_for_flush_and_compaction = true;
   options.use_direct_reads = true;
   // create the DB if it's not already present
@@ -214,8 +214,6 @@ int main() {
   options.write_buffer_size = 4 << 20;
   options.max_bytes_for_level_base = 64 << 20;
   options.level0_file_num_compaction_trigger = 4;
-  options.max_background_jobs = 8;
-  options.max_background_compactions = 8;
 
   // open DB
   Status s = DB::Open(options, kDBPath, &db);
@@ -228,8 +226,9 @@ int main() {
   std::cout << "generating data ok!" << std::endl;
 
   std::thread ts[t_num];
+  uint64_t start = systemTime();
   for (int i = 0; i < t_num; i++) {
-    ts[i] = std::thread(insertData, db, &ctx, systemTime());
+    ts[i] = std::thread(insertData, db, &ctx, start);
   }
   for (int i = 0; i < t_num; i++) {
     ts[i].join();
@@ -237,12 +236,14 @@ int main() {
 
   std::cout << "************************" << std::endl;
 
+  start = systemTime();
   for (int i = 0; i < t_num; i++) {
-    ts[i] = std::thread(runOps, db, &ctx, systemTime());
+    ts[i] = std::thread(runOps, db, &ctx, start);
   }
   for (int i = 0; i < t_num; i++) {
     ts[i].join();
   }
+  std::cout << "Run operations take " << systemTime() - start << std::endl;
 
   return 0;
 }
