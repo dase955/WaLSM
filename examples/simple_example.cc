@@ -96,10 +96,15 @@ inline std::string numToKey(uint64_t num) {
   return "user_data_" + num_str;
 }
 
-inline std::string numToValue(uint64_t num) {
-  std::string value = numToKey(num);
-  value.append(1024 - value.size(), 'z');
-  return value;
+inline void randomValue(std::string& value) {
+  value.clear();
+  const std::string VALID_CHARS =
+      "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+  std::default_random_engine generator;
+  std::uniform_int_distribution<int> distribution(0, VALID_CHARS.size() - 1);
+  std::string your_random_string;
+  std::generate_n(std::back_inserter(value), 1024,
+                  [&]() { return VALID_CHARS[distribution(generator)]; });
 }
 
 void genData(TestContext* ctx) {
@@ -146,7 +151,8 @@ void insertData(DB* db, TestContext* ctx, uint64_t start) {
   std::string key, value;
   while ((idx = ctx->inserted.fetch_add(1)) < kInsert) {
     uint64_t num = ctx->insert_nums[idx];
-    key = numToKey(num), value = numToValue(num);
+    randomValue(value);
+    key = numToKey(num);
     s = db->Put(options, key, value);
     assert(s.ok());
     if ((idx + 1) % kPrintGap == 0) {
@@ -171,7 +177,8 @@ void runOps(DB* db, TestContext* ctx, uint64_t start) {
         break;
       }
       num = ctx->op_insert[idx];
-      key = numToKey(num), value = numToValue(num);
+      randomValue(value);
+      key = numToKey(num);
       s = db->Put(write_options, key, value);
       assert(s.ok());
     }
