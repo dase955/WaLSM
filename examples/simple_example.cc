@@ -13,10 +13,10 @@
 using namespace ROCKSDB_NAMESPACE;
 
 const std::string kDBPath = "/Users/chenlixiang/rocksdb_test";
-const size_t kInsert = 2000000;
+const size_t kInsert = 4000000;
 const size_t kOps = 1000000;
-const size_t insert_rate = 3;
-const size_t query_rate = 7;
+const size_t insert_rate = 5;
+const size_t query_rate = 5;
 
 const size_t kPrintGap = 100000;
 
@@ -98,7 +98,7 @@ inline std::string numToKey(uint64_t num) {
 
 inline std::string numToValue(uint64_t num) {
   std::string value = numToKey(num);
-  value.append(1024 - value.size(), 'x');
+  value.append(1024 - value.size(), 'z');
   return value;
 }
 
@@ -184,9 +184,6 @@ void runOps(DB* db, TestContext* ctx, uint64_t start) {
       num = ctx->op_query[idx];
       key = numToKey(num);
       s = db->Get(read_options, key, &value);
-      if (s.ok()) {
-        assert(value == numToValue(num));
-      }
     }
 
     size_t cur_ops = ctx->total_ops.fetch_add(insert_rate + query_rate);
@@ -214,6 +211,7 @@ int main() {
   options.write_buffer_size = 4 << 20;
   options.max_bytes_for_level_base = 64 << 20;
   options.level0_file_num_compaction_trigger = 4;
+  options.compression = rocksdb::kNoCompression;
 
   // open DB
   Status s = DB::Open(options, kDBPath, &db);
