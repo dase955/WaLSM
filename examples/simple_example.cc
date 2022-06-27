@@ -12,21 +12,16 @@
 
 using namespace ROCKSDB_NAMESPACE;
 
-const std::string kDBPath = "/Users/chenlixiang/rocksdb_test";
-const size_t kInsert = 4000000;
-const size_t kOps = 1000000;
-const size_t insert_rate = 5;
-const size_t query_rate = 5;
+const std::string kDBPath = "/tmp/rocksdb_test";
+const size_t kInsert = 50000000;
+const size_t kOps = 20000000;
 
 const size_t kPrintGap = 100000;
 
-const int hot_range = 1;  // 1/10
-const int hot_rate = 9;   // 9/10
+const int hot_range = 2;  // 2/10
+const int hot_rate = 8;   // 8/10
 
 const double hot_prob = static_cast<double>(hot_rate) / 10.0;
-
-const size_t op_insert_num = (insert_rate * kOps) / (insert_rate + query_rate);
-const size_t op_query_num = (query_rate * kOps) / (insert_rate + query_rate);
 
 const uint64_t hot_insert_up_bound = UINT64_MAX;
 const uint64_t hot_insert_low_bound =
@@ -48,10 +43,24 @@ struct TestContext {
   uint64_t* op_insert;
   uint64_t* op_query;
 
-  TestContext() : inserted(0), run_insert(0), run_query(0), total_ops(0) {
+  size_t op_insert_num;
+  size_t op_query_num;
+  size_t insert_cnt;
+  size_t query_cnt;
+
+  TestContext(size_t insert_rate, size_t query_rate)
+      : inserted(0),
+        run_insert(0),
+        run_query(0),
+        total_ops(0),
+        insert_cnt(insert_rate),
+        query_cnt(query_rate) {
     insert_nums = new uint64_t[kInsert];
     op_insert = new uint64_t[op_insert_num];
     op_query = new uint64_t[op_query_num];
+
+    op_insert_num = (insert_rate * kOps) / (insert_rate + query_rate);
+    op_query_num = (query_rate * kOps) / (insert_rate + query_rate);
   }
 
   ~TestContext() {
@@ -110,7 +119,7 @@ inline void randomValue(std::string& value) {
 void genData(TestContext* ctx) {
   std::vector<uint64_t> hot_read_keys;
   // generate op insert data
-  for (size_t i = 0; i < op_insert_num; i++) {
+  for (size_t i = 0; i < ctx->op_insert_num; i++) {
     if (randomBool(hot_prob)) {
       ctx->op_insert[i] =
           randomUINT64T(hot_insert_low_bound, hot_insert_up_bound);
@@ -133,12 +142,12 @@ void genData(TestContext* ctx) {
   }
 
   // generate op query data
-  for (size_t i = 0; i < op_query_num; i++) {
+  for (size_t i = 0; i < ctx->op_query_num; i++) {
     if (randomBool(hot_prob)) {
       size_t idx = randomSIZET(0, hot_read_keys.size() - 1);
       ctx->op_query[i] = hot_read_keys[idx];
     } else {
-      size_t idx = randomSIZET(0, op_insert_num - 1);
+      size_t idx = randomSIZET(0, ctx->op_insert_num - 1);
       ctx->op_query[i] = ctx->op_insert[idx];
     }
   }
@@ -171,9 +180,9 @@ void runOps(DB* db, TestContext* ctx, uint64_t start) {
   std::string key, value;
   uint64_t num;
   for (;;) {
-    for (size_t i = 0; i < insert_rate; i++) {
+    for (size_t i = 0; i < ctx->insert_cnt; i++) {
       idx = ctx->run_insert.fetch_add(1);
-      if (idx >= op_insert_num) {
+      if (idx >= ctx->op_insert_num) {
         break;
       }
       num = ctx->op_insert[idx];
@@ -183,9 +192,9 @@ void runOps(DB* db, TestContext* ctx, uint64_t start) {
       assert(s.ok());
     }
 
-    for (size_t i = 0; i < query_rate; i++) {
+    for (size_t i = 0; i < ctx->query_cnt; i++) {
       idx = ctx->run_query.fetch_add(1);
-      if (idx >= op_query_num) {
+      if (idx >= ctx->op_query_num) {
         break;
       }
       num = ctx->op_query[idx];
@@ -193,7 +202,7 @@ void runOps(DB* db, TestContext* ctx, uint64_t start) {
       s = db->Get(read_options, key, &value);
     }
 
-    size_t cur_ops = ctx->total_ops.fetch_add(insert_rate + query_rate);
+    size_t cur_ops = ctx->total_ops.fetch_add(ctx->insert_cnt + ctx->query_cnt);
     if ((cur_ops % kPrintGap) == 0) {
       uint64_t delta = systemTime() - start;
       std::cout << cur_ops << " operations take " << delta / 1000 << "."
@@ -205,7 +214,14 @@ void runOps(DB* db, TestContext* ctx, uint64_t start) {
   }
 }
 
-int main() {
+int main(int argc, char* argv[]) {
+  size_t insert_rate = 5, query_rate = 5;
+  if (argc == 3) {
+    insert_rate = static_cast<size_t>(*argv[1] - '0');
+    query_rate = static_cast<size_t>(*argv[2] - '0');
+  }
+  std::cout << "insert rate 0." << insert_rate << std::endl
+            << "query rate 0." << query_rate << std::endl;
   DB* db;
   Options options;
   // Optimize RocksDB. This is the easiest way to get RocksDB to perform well
@@ -226,7 +242,7 @@ int main() {
 
   // init test context
   std::cout << "start generating data..." << std::endl;
-  TestContext ctx;
+  TestContext ctx(insert_rate, query_rate);
   genData(&ctx);
   std::cout << "generating data ok!" << std::endl;
 
