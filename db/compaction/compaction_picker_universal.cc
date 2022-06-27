@@ -563,10 +563,14 @@ Compaction* UniversalCompactionBuilder::PickCompactionForSizeMarked() {
       auto& fs = partition->files_[target_level];
       const uint64_t estimated_total_size = partition->level_size[target_level];
       for (size_t i = 0; i < fs.size(); i++) {
-        if (fs[i]->being_compacted) {
-          return nullptr;
+        if (!fs[i]->being_compacted) {
+          inputs[target_level].files.push_back(fs[i]);
         }
-        inputs[target_level].files.push_back(fs[i]);
+      }
+
+      // too few files to compact
+      if (inputs[target_level].files.size() <= 1) {
+        continue;
       }
 
       // if target level is level compaction ...
@@ -595,7 +599,7 @@ Compaction* UniversalCompactionBuilder::PickCompactionForSizeMarked() {
           GetCompressionOptions(mutable_cf_options_, vstorage_, output_level,
                                 true /* enable_compression */),
           /* max_subcompactions */ 0, /* grandparents */ {},
-          /* is manual */ false, 2.0, false /* deletion_compaction */,
+          /* is manual */ false, 100.0, false /* deletion_compaction */,
           CompactionReason::kUniversalSizeRatio);
     }
   }

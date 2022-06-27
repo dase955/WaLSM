@@ -255,7 +255,7 @@ Status FlushJob::Run(LogsWithPrepTracker* prep_tracker,
   RecordFlushIOStats();
 
   // When measure_io_stats_ is true, the default 512 bytes is not enough.
-  auto stream = event_logger_->LogToBuffer(log_buffer_, 1024);
+  auto stream = event_logger_->LogToBuffer(log_buffer_, 1024 * 10);
   stream << "job" << job_context_->job_id << "event"
          << "flush_finished";
   stream << "output_compression"
@@ -269,6 +269,8 @@ Status FlushJob::Run(LogsWithPrepTracker* prep_tracker,
     stream.StartArray();
     for (int i = 1; i < partition->level_; i++) {
       stream << partition->files_[i].size();
+      stream << (partition->is_tier[i] ? "tier" : "level");
+      stream << (partition->is_compaction_work[i] ? "work" : "pend");
     }
     stream.EndArray();
   }

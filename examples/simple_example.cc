@@ -13,8 +13,8 @@
 using namespace ROCKSDB_NAMESPACE;
 
 const std::string kDBPath = "/Users/chenlixiang/rocksdb_test";
-const size_t kInsert = 1000000;
-const size_t kOps = 500000;
+const size_t kInsert = 2000000;
+const size_t kOps = 1000000;
 const size_t insert_rate = 3;
 const size_t query_rate = 7;
 
