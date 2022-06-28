@@ -13,8 +13,8 @@
 using namespace ROCKSDB_NAMESPACE;
 
 const std::string kDBPath = "/tmp/rocksdb_test";
-const size_t kInsert = 50000000;
-const size_t kOps = 20000000;
+const size_t kInsert = 4000000;
+const size_t kOps = 1000000;
 
 const size_t kPrintGap = 100000;
 
@@ -55,12 +55,11 @@ struct TestContext {
         total_ops(0),
         insert_cnt(insert_rate),
         query_cnt(query_rate) {
+    op_insert_num = (insert_rate * kOps) / (insert_rate + query_rate);
+    op_query_num = (query_rate * kOps) / (insert_rate + query_rate);
     insert_nums = new uint64_t[kInsert];
     op_insert = new uint64_t[op_insert_num];
     op_query = new uint64_t[op_query_num];
-
-    op_insert_num = (insert_rate * kOps) / (insert_rate + query_rate);
-    op_query_num = (query_rate * kOps) / (insert_rate + query_rate);
   }
 
   ~TestContext() {
@@ -225,7 +224,7 @@ int main(int argc, char* argv[]) {
   DB* db;
   Options options;
   // Optimize RocksDB. This is the easiest way to get RocksDB to perform well
-  options.OptimizeUniversalStyleCompaction();
+  options.compaction_style = rocksdb::kCompactionStyleUniversal;
   options.IncreaseParallelism(16);
   options.use_direct_io_for_flush_and_compaction = true;
   options.use_direct_reads = true;
