@@ -1184,8 +1184,8 @@ struct DBOptions {
 
   // A threshold for the min size of a group,
   // Groups whose size smaller than this will not be chosen to do compaction.
-  // Default: 2M
-  int group_min_size = 2 << 20;
+  // Default: 4096K
+  int group_min_size = 4096 << 10;
 
   // Size of vlog file.
   // Default: 7G
@@ -1207,19 +1207,19 @@ struct DBOptions {
   float heat_update_coeff = 1.021897f;
 
   // When global timestamp exceed waterline, we need to do heat decay.
-  // default: 1024
-  int timestamp_waterline = 512;
+  // default: 1000
+  int timestamp_waterline = 1000;
 
   // default: 100
-  int layer_ts_interval = 50;
+  int layer_ts_interval = 100;
+
+  int timestamp_factor = 7;
 
   // Space for allocating nvm nodes.
   // default: 1G
   int64_t node_memory_size = 1024LL << 20;
 
   int max_rewrite_count = 600;
-
-  int rewrite_threshold = 2;
 };
 
 // Options to control the behavior of a database (passed to DB::Open)

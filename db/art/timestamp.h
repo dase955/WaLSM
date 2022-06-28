@@ -21,6 +21,8 @@ struct Timestamps {
   // Hold lock when trying to update heat or update global timestamp
   SpinMutex update_lock_;
 
+  uint8_t padding[12];
+
   Timestamps();
 
   Timestamps(const Timestamps& rhs);
@@ -39,7 +41,11 @@ struct Timestamps {
   float GetTotalHeat();
 
   void EstimateBound(float& lower_bound, float& upper_bound);
+
+  static int factor;
 };
+
+static_assert(sizeof(Timestamps) == 64, "sizeof(Timestamps) != 64!");
 
 int32_t GetTimestamp();
 

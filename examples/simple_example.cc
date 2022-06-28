@@ -26,420 +26,386 @@
 
 using namespace rocksdb;
 
-int      thread_num = 32;
-int      total_count = 320000000;
-int      sample_range = 1000000000;
-int      count_per_thread = total_count / thread_num;
-int64_t* completed_count = new int64_t[thread_num * 8];
-std::vector<int> final_samples;
-std::atomic<int64_t> counter{0};
-
-class ZipfianGenerator {
+class KeyGenerator {
  public:
-  ZipfianGenerator(double alpha) : alpha_(alpha) {
-    InitProbs();
+  KeyGenerator(int record_count, int sample_range)
+      : record_count_(record_count), sample_range_(sample_range) {};
+
+  void SetPrefix(std::string& prefix) {
+    prefix_ = prefix;
   }
 
-  ~ZipfianGenerator() {
-    delete[] sum_probs_;
+  virtual int Next() = 0;
+
+  virtual ~KeyGenerator() {}
+
+  virtual void Prepare() {
+    // Do nothing;
+  };
+
+  // TODO
+  std::string NextKey() {
+    std::string s = std::to_string(Next());
+    return prefix_ + std::string(9 - s.length(), '0') + s;
   }
 
-  long nextValue() {
-    long res = 0;
-    double z;
-    do {
-      z = rand_val(rng);
-    } while ((z == 0) || (z == 1));
+  protected:
+   int record_count_;
 
-    int low = 1;
-    int high = sample_range;
-    int mid;
-    do {
-      mid = (low + high) / 2;
-      if (sum_probs_[mid] >= z && sum_probs_[mid - 1] < z) {
-        res = mid;
-        break;
-      } else if (sum_probs_[mid] >= z) {
-        high = mid - 1;
-      } else {
-        low = mid + 1;
-      }
-    } while (low <= high);
+   int sample_range_;
 
-    return res;
-  }
-
- private:
-  void InitProbs() {
-    printf("Start InitProbs\n");
-
-    double c = 0.0;
-    for (int i = 1; i <= sample_range; i++) {
-      c = c + (1.0 / pow((double)i, alpha_));
-    }
-    c = 1.0 / c;
-
-    sum_probs_ = new double[sample_range + 1];
-    sum_probs_[0] = 0;
-    for (int i = 1; i <= sample_range; ++i) {
-      sum_probs_[i] = sum_probs_[i - 1] + c / pow((double)i, alpha_);
-    }
-
-    printf("Final value: %f\n", (float)sum_probs_[sample_range]);
-  }
-
-  double* sum_probs_;
-
-  double alpha_;
-
-  std::random_device rd;
-  std::default_random_engine rng = std::default_random_engine{rd()};
-  std::uniform_real_distribution<> rand_val{0.0, 1.0};
+   std::string prefix_ = "user";
 };
 
-class ZipfianGeneratorYCSB {
+class YCSBZipfianGenerator : public KeyGenerator{
  public:
-  ZipfianGeneratorYCSB(long min, long max, double zipfianconstant_, double zetan_) {
-    items = max - min + 1;
-    base = min;
-    this->zipfianconstant = zipfianconstant_;
-
-    theta = this->zipfianconstant;
-
-    zeta2theta = zeta(2, theta);
-
+  YCSBZipfianGenerator(int record_count, int sample_range, double theta, double zetan)
+      : KeyGenerator(record_count, sample_range), theta_(theta), zetan_(zetan) {
     alpha = 1.0 / (1.0 - theta);
-    this->zetan = zetan_;
-    eta = (1 - std::pow(2.0 / items, 1 - theta)) / (1 - zeta2theta / this->zetan);
+    eta = (1 - std::pow(2.0 / sample_range_, 1 - theta))
+          / (1 - zetastatic(2, theta) / zetan_);
 
     std::random_device rd;
     rng = std::default_random_engine{rd()};
-
-    nextValue();
-  }
-
-  double zeta(long n, double thetaVal) {
-    return zetastatic(n, thetaVal);
   }
 
   static double zetastatic(long n, double theta) {
-    return zetastatic(0, n, theta, 0);
-  }
-
-  static double zetastatic(long st, long n, double theta, double initialsum) {
-    double sum = initialsum;
-    for (long i = st; i < n; i++) {
-
+    double sum = 0.0f;
+    for (long i = 0; i < n; i++) {
       sum += 1 / (std::pow(i + 1, theta));
     }
-
     return sum;
   }
 
-  long nextLong(long itemcount) {
+  int Next() {
     double u = rand_double(rng);
-    double uz = u * zetan;
+    double uz = u * zetan_;
 
     if (uz < 1.0) {
-      return base;
+      return 0;
     }
 
-    if (uz < 1.0 + std::pow(0.5, theta)) {
-      return base + 1;
+    if (uz < 1.0 + std::pow(0.5, theta_)) {
+      return 1;
     }
 
-    return base + (long) ((itemcount) * std::pow(eta * u - eta + 1, alpha));
-  }
-
-  long nextValue() {
-    return nextLong(items);
+    return (int) ((sample_range_) * std::pow(eta * u - eta + 1, alpha));
   }
 
  private:
-  long items;
-
-  long base;
-
-  double zipfianconstant;
-
-  double alpha, zetan, eta, theta, zeta2theta;
+  double theta_;
+  double zetan_;
+  double alpha, eta;
 
   std::uniform_real_distribution<> rand_double{0.0, 1.0};
 
   std::default_random_engine rng;
 };
 
-inline uint64_t GetMicros() {
-  struct timeval tv;
-  gettimeofday(&tv, NULL);
-  return (tv.tv_sec) * 1000000 + tv.tv_usec;
-}
-
-inline uint64_t GetTime() {
-  static uint64_t start_time = GetMicros();
-  return GetMicros() - start_time;
-}
-
-///////////////////////////////////////////////////////////////////////////////
-
-std::string GenerateValue(std::string& str) {
-  int repeat_times = 1024UL / str.length();
-  size_t len = str.length() * repeat_times;
-  std::string ret;
-  ret.reserve(1024);
-  while (repeat_times--) {
-    ret += str;
+class CustomZipfianGenerator : public KeyGenerator {
+ public:
+  CustomZipfianGenerator(int record_count, int sample_range, double alpha)
+      : KeyGenerator(record_count, sample_range), alpha_(alpha) {
+    records_.resize(record_count);
   }
-  ret += str.substr(0, 1024 - ret.length());
-  return ret;
-}
 
-unsigned long fnvhash64(int64_t val) {
-  //from http://en.wikipedia.org/wiki/Fowler_Noll_Vo_hash
-  static int64_t FNV_OFFSET_BASIS_64 = 0xCBF29CE484222325LL;
-  static int64_t FNV_PRIME_64 = 1099511628211L;
+  void Prepare() override {
+    double c = 0.0;
+    for (int i = 1; i <= sample_range_; i++) {
+      c = c + (1.0 / pow((double)i, alpha_));
+    }
+    c = 1.0 / c;
 
-  int64_t hashval = FNV_OFFSET_BASIS_64;
-
-  for (int i = 0; i < 8; i++) {
-    int64_t octet = val & 0x00ff;
-    val = val >> 8;
-
-    hashval = hashval ^ octet;
-    hashval = hashval * FNV_PRIME_64;
-    //hashval = hashval ^ octet;
-  }
-  return hashval > 0 ? hashval : -hashval;
-}
-
-void YCSBLoadThread(DB* db, int thread_id) {
-  static std::atomic<int64_t> counter{0};
-  thread_id *= 8;
-  for (int i = 0; i < count_per_thread; ++i) {
-    auto keynum = fnvhash64(counter++);
-    std::string key = "user" + std::to_string(keynum);
-    std::string value = GenerateValue(key);
-    assert(db->Put(WriteOptions(), key, value).ok());
-    ++completed_count[thread_id];
-  }
-}
-
-void CustomWorkloadThread(DB* db, int thread_id) {
-  thread_id *= 8;
-  std::string prefix = "user";
-  for (int i = 0; i < count_per_thread; ++i) {
-    int val = final_samples[counter++];
-    std::string s = std::to_string(val);
-    std::string key = prefix + std::string(9 - s.length(), '0') + s;
-    std::string value = GenerateValue(key);
-    db->Put(WriteOptions(), key, value);
-    ++completed_count[thread_id];
-  }
-}
-
-void UniformThread(DB* db, int thread_id) {
-  std::uniform_int_distribution<int> dist(0, sample_range - 1);
-  std::random_device rd;
-  std::default_random_engine rng = std::default_random_engine{rd()};
-
-  thread_id *= 8;
-  std::string prefix = "user";
-
-  for (int i = 0; i < count_per_thread; ++i) {
-    int val = dist(rng);
-    std::string s = std::to_string(val);
-    std::string key = prefix + std::string(9 - s.length(), '0') + s;
-    std::string value = GenerateValue(key);
-    db->Put(WriteOptions(), key, value);
-    ++completed_count[thread_id];
-  }
-}
-
-void StatisticsThread(std::string file_name) {
-  std::ofstream ofs;
-  ofs.open(file_name, std::ios::out);
-
-  int finished = 0;
-  int seconds = 0;
-  while (finished < total_count - thread_num) {
-    int new_finished = 0;
-    for (int i = 0; i < thread_num; ++i) {
-      new_finished += completed_count[i * 8];
+    double* sum_probs = new double[sample_range_ + 1];
+    sum_probs[0] = 0;
+    for (int i = 1; i <= sample_range_; ++i) {
+      sum_probs[i] = sum_probs[i - 1] + c / pow((double)i, alpha_);
     }
 
-    int ops = (new_finished - finished) / 5;
-    printf("[%d sec] %d operations; %d current ops/sec\n",
-           seconds, new_finished, ops);
+    std::random_device rd;
+    std::default_random_engine rng = std::default_random_engine{rd()};
+    std::uniform_real_distribution<> rand_val{0.0, 1.0};
 
-    ofs << seconds << " " << ops << std::endl;
+    printf("Generate samples\n");
 
-    finished = new_finished;
-    std::this_thread::sleep_for(std::chrono::seconds(5));
-    seconds += 5;
-  }
-
-  ofs.close();
-}
-
-void ShuffleSamples(std::unordered_map<int, int>& freqs,
-                    std::unordered_map<int, int>& modified) {
-  std::random_device rd;
-  std::default_random_engine rng = std::default_random_engine{rd()};
-  std::uniform_int_distribution<int> dist(0, sample_range - 1);
-
-  int left[2] = {400000000, 800000000};
-  int interval = 50000000;
-  int mod = interval * 2;
-
-  std::random_device shuffle_rd;
-  std::vector<int> shuffled(mod);
-  std::iota(std::begin(shuffled), std::end(shuffled), 0);
-  std::shuffle(shuffled.begin(), shuffled.end(), shuffle_rd);
-
-  auto check_func = [&](int val) {
-    for (auto l : left) {
-      if (val >= l && val <= l + interval) {
-        return false;
-      }
-    }
-    return true;
-  };
-
-  int cur = 0;
-  for (auto& pair : freqs) {
-    int old_value = pair.first;
-    if (pair.second == 1) {
-      int new_value = dist(rng);
-      while (!check_func(new_value)) {
-        new_value = dist(rng);
-      }
-      modified[old_value] = new_value;
-    } else {
-      int new_value = shuffled[cur++];
-      modified[old_value] = left[new_value / interval] + (new_value % interval);
-    }
-  }
-}
-
-void CheckFreq() {
-  std::unordered_map<int, int> freqs;
-  for (auto& value : final_samples) {
-    ++freqs[value];
-  }
-
-  int cold_count = 0;
-  for (auto& pair : freqs) {
-    cold_count += (pair.second == 1);
-  }
-
-  int hot_count = freqs.size() - cold_count;
-  float hot_freq = (total_count - cold_count) / (float)total_count * 100.f;
-  printf("Sample generated. hot count = %d(%.2f), cold count = %d\n",
-         hot_count, hot_freq, cold_count);
-}
-
-void GenerateSamples() {
-  final_samples.resize(total_count);
-
-  ZipfianGenerator gen(0.98);
-  std::unordered_map<int, int> freqs;
-
-  for (int i = 0; i < total_count; ++i) {
-    int value = gen.nextValue();
-    final_samples[i] = value;
-    freqs[value]++;
-  }
-
-  CheckFreq();
-
-  std::unordered_map<int, int> modified;
-  ShuffleSamples(freqs, modified);
-  for (auto& value : final_samples) {
-    value = modified[value];
-  }
-
-  CheckFreq();
-}
-
-void GenerateSamplesYCSB() {
-  final_samples.resize(total_count);
-  std::uniform_int_distribution<int> dist(0, 1000000000 - 1);
-  std::random_device rd;
-  std::default_random_engine rng = std::default_random_engine{rd()};
-
-  {
-    ZipfianGeneratorYCSB gen(0, 1000000000L, 0.99, 26.46902820178302);
     std::unordered_map<int, int> freqs;
+    for (int i = 0; i < record_count_; ++i) {
+      long res = 0;
+      double z;
+      do {
+        z = rand_val(rng);
+      } while ((z == 0) || (z == 1));
+
+      int low = 1;
+      int high = sample_range_;
+      int mid;
+      do {
+        mid = (low + high) / 2;
+        if (sum_probs[mid] >= z && sum_probs[mid - 1] < z) {
+          res = mid;
+          break;
+        } else if (sum_probs[mid] >= z) {
+          high = mid - 1;
+        } else {
+          low = mid + 1;
+        }
+      } while (low <= high);
+
+      ++freqs[res];
+      records_[i] = res;
+    }
+
     std::unordered_map<int, int> modified;
+    ShuffleSamples(freqs, modified, sample_range_);
+    for (auto& value : records_) {
+      value = modified[value];
+    }
+
+    delete[] sum_probs;
+
+    CheckFreq(records_);
+  }
+
+  int Next() override {
+    return records_[cur_index_++];
+  }
+
+ private:
+  static void ShuffleSamples(
+      std::unordered_map<int, int>& freqs,
+      std::unordered_map<int, int>& modified,
+      int sample_range) {
+    std::random_device rd;
+    std::default_random_engine rng = std::default_random_engine{rd()};
+    std::uniform_int_distribution<int> dist(0, sample_range - 1);
+
     int left[2] = {400000000, 800000000};
     int interval = 50000000;
     int mod = interval * 2;
 
-    for (int i = 0; i < total_count; ++i) {
-      long value = gen.nextValue();
-      freqs[value]++;
-      final_samples[i] = (int)value;
-    }
+    std::random_device shuffle_rd;
+    std::vector<int> shuffled(mod);
+    std::iota(std::begin(shuffled), std::end(shuffled), 0);
+    std::shuffle(shuffled.begin(), shuffled.end(), shuffle_rd);
 
-    CheckFreq();
+    auto check_func = [&](int val) {
+      for (auto l : left) {
+        if (val >= l && val <= l + interval) {
+          return false;
+        }
+      }
+      return true;
+    };
 
+    int cur = 0;
     for (auto& pair : freqs) {
       int old_value = pair.first;
       if (pair.second == 1) {
-        modified[old_value] = dist(rng);
+        int new_value = dist(rng);
+        while (!check_func(new_value)) {
+          new_value = dist(rng);
+        }
+        modified[old_value] = new_value;
       } else {
-        int new_val = fnvhash64(old_value) % mod;
-        modified[old_value] = left[new_val / interval] + (new_val % interval);
+        int new_value = shuffled[cur++];
+        modified[old_value] = left[new_value / interval] + (new_value % interval);
       }
     }
+  }
 
-    for (auto& value : final_samples) {
-      value = modified[value];
+  static void CheckFreq(std::vector<int>& samples) {
+    std::unordered_map<int, int> freqs;
+    for (auto& value : samples) {
+      ++freqs[value];
     }
 
-    CheckFreq();
-  }
-}
+    int cold_count = 0;
+    for (auto& pair : freqs) {
+      cold_count += (pair.second == 1);
+    }
 
-typedef void(*TestFunction)(DB*, int);
-
-void DoTest(DB* db, TestFunction test_func, std::string file_name) {
-  memset(completed_count, 0, thread_num * 64);
-
-  std::thread threads[thread_num];
-  for (int i = 0; i < thread_num; ++i) {
-    threads[i] = std::thread(test_func, db, i);
+    int hot_count = freqs.size() - cold_count;
+    float hot_freq = (samples.size() - cold_count) / (float)samples.size() * 100.f;
+    printf("Sample generated. hot count = %d(%.2f), cold count = %d\n",
+           hot_count, hot_freq, cold_count);
   }
 
-  std::thread statistic_thread = std::thread(StatisticsThread, file_name);
+  double alpha_;
 
-  for (auto& thread : threads) {
-    thread.join();
+  std::vector<int> records_;
+
+  std::atomic<int> cur_index_{0};
+};
+
+class YCSBLoadGenerator : public KeyGenerator {
+ public:
+  YCSBLoadGenerator(int record_count, int sample_range)
+  : KeyGenerator(record_count, sample_range) {};
+
+  int Next() override {
+    return fnvhash64(cur_index_++);
   }
 
-  statistic_thread.join();
-}
+ private:
+  static uint64_t fnvhash64(int64_t val) {
+    //from http://en.wikipedia.org/wiki/Fowler_Noll_Vo_hash
+    static int64_t FNV_OFFSET_BASIS_64 = 0xCBF29CE484222325LL;
+    static int64_t FNV_PRIME_64 = 1099511628211L;
 
-int main(int argc, char* argv[]) {
-  Options options;
+    int64_t hashval = FNV_OFFSET_BASIS_64;
+
+    for (int i = 0; i < 8; i++) {
+      int64_t octet = val & 0x00ff;
+      val = val >> 8;
+
+      hashval = hashval ^ octet;
+      hashval = hashval * FNV_PRIME_64;
+      //hashval = hashval ^ octet;
+    }
+    return hashval > 0 ? hashval : -hashval;
+  }
+
+  std::atomic<int> cur_index_{0};
+};
+
+class Inserter {
+ public:
+  Inserter(int num_threads, DB* db)
+      : num_threads_(num_threads), db_(db) {
+    insert_threads_ = new std::thread[num_threads];
+  }
+
+  void SetGenerator(KeyGenerator* generator) {
+    key_generator_ = generator;
+  }
+
+  void SetMetricInterval(int interval) {
+    interval_ = interval;
+  }
+
+  void DoInsert() {
+    key_generator_->Prepare();
+
+    for (int i = 0; i < num_threads_; ++i) {
+      insert_threads_[i] = std::thread(&Inserter::Insert, this, i);
+    }
+
+    auto ops_thread = std::thread(&Inserter::StatisticsThread, this);
+    ops_thread.join();
+
+    for (int i = 0; i < num_threads_; ++i) {
+      insert_threads_[i].join();
+    }
+  }
+
+  static std::string GenerateValueFromKey(std::string& key) {
+    int repeat_times = 1024UL / key.length();
+    size_t len = key.length() * repeat_times;
+    std::string value;
+    value.reserve(1024);
+    while (repeat_times--) {
+      value += key;
+    }
+    value += key.substr(0, 1024 - value.length());
+    return value;
+  }
+
+ private:
+  void Insert(int thread_id) {
+    int insert_per_thread = insert_counts_ / num_threads_;
+    if (thread_id == 0) {
+      insert_per_thread += (insert_counts_ % num_threads_);
+    }
+
+    while (insert_per_thread--) {
+      auto begin_time = std::chrono::steady_clock::now();
+      auto key = key_generator_->NextKey();
+      auto value = GenerateValueFromKey(key);
+      auto status = db_->Put(WriteOptions(), key, value);
+      auto end_time = std::chrono::steady_clock::now();
+
+      ++completed_count_;
+      if (!status.ok()) {
+        ++failed_count_;
+      }
+    }
+  }
+
+  void StatisticsThread() {
+    int prev_completed = 0;
+    int seconds = 0;
+    while (prev_completed < insert_counts_) {
+      int new_completed = completed_count_.load(std::memory_order_relaxed);
+      int ops = (new_completed - prev_completed) / interval_;
+      printf("[%d sec] %d operations; %d current ops/sec\n",
+             seconds, new_completed, ops);
+
+      prev_completed = new_completed;
+      std::this_thread::sleep_for(std::chrono::seconds(interval_));
+      seconds += interval_;
+    }
+  }
+
+  int interval_ = 5;
+
+  int num_threads_ = 16;
+
+  int insert_counts_ = 320000000;
+
+  std::thread* insert_threads_;
+
+  std::thread ops_thread_;
+
+  std::atomic<int> completed_count_{0};
+
+  std::atomic<int> failed_count_{0};
+
+  KeyGenerator* key_generator_ = nullptr;
+
+  DB* db_;
+};
+
+void ParseOptions(Options& options) {
   options.create_if_missing = true;
+  options.use_direct_io_for_flush_and_compaction = true;
+  options.use_direct_reads = true;
   options.enable_pipelined_write = true;
   options.OptimizeLevelStyleCompaction();
 
-  std::string test_name = "art";
-  /*if (argc >= 2) {
-    test_name = argv[1];
+  std::ifstream option_file("options.txt", std::ios::in);
+  std::string line;
+  while (getline(option_file, line)) {
+    if (line.substr(0, 16) == "timestamp_factor") {
+      options.timestamp_factor = std::atoi(line.substr(17).c_str());
+    } else if (line.substr(0, 17) == "layer_ts_interval") {
+      options.layer_ts_interval = std::atoi(line.substr(18).c_str());
+      options.timestamp_waterline = options.layer_ts_interval * 10;
+    } else if (line.substr(0, 14) == "group_min_size") {
+      options.group_min_size = std::atoi(line.substr(15).c_str()) << 10;
+    } else if (line.substr(0, 21) == "group_split_threshold") {
+      options.group_split_threshold = std::atoi(line.substr(22).c_str()) << 20;
+    } else if (line.substr(0, 17) == "max_rewrite_count") {
+      options.max_rewrite_count = std::atoi(line.substr(18).c_str());
+    }
   }
-  if (argc >= 3) {
-    total_count = atoi(argv[2]);
-  }*/
 
-  if (argc >= 2) {
-    options.max_rewrite_count = atoi(argv[1]);
-  }
-  if (argc >= 3) {
-    options.rewrite_threshold = atoi(argv[2]);
-  }
+  printf("Parse option done.\n");
+  printf("options.timestamp_factor = %d\n", options.timestamp_factor);
+  printf("options.layer_ts_interval = %d\n", options.layer_ts_interval);
+  printf("options.timestamp_waterline = %d\n", options.timestamp_waterline);
+  printf("options.group_min_size = %.2fk\n", options.group_min_size / 1048576.f);
+  printf("options.group_split_threshold = %dM\n",
+         options.group_split_threshold / 1048576);
+  printf("options.max_rewrite_count = %d\n", options.max_rewrite_count);
+}
+
+void DoTest(std::string test_name) {
+  int thread_num = 8;
+  int total_count = 320000000;
+  int sample_range = 1000000000;
+
+  Options options;
+  ParseOptions(options);
 
   std::string db_path = "/tmp/db_test_" + test_name;
   std::string ops_path =  "/tmp/run_ops_" + test_name;
@@ -447,19 +413,18 @@ int main(int argc, char* argv[]) {
   DB* db;
   DB::Open(options, db_path, &db);
 
-  // Step 1: uniform
-  // auto start_time1 = GetTime();
-  // DoTest(db, UniformThread, "/tmp/load_ops.txt");
-  // printf("Load phase: %.3f, %.3f\n", start_time1 * 1e-6, GetTime() * 1e-6);
-
-  GenerateSamples();
-  auto start_time2 = GetTime();
-  DoTest(db, CustomWorkloadThread, ops_path);
-  printf("Run phase:  %.3f, %.3f\n", start_time2 * 1e-6, GetTime() * 1e-6);
+  Inserter inserter(thread_num, db);
+  inserter.SetGenerator(
+      new CustomZipfianGenerator(total_count, sample_range, 0.98));
+  inserter.DoInsert();
 
   db->Close();
 
   delete db;
+}
+
+int main(int argc, char* argv[]) {
+  DoTest("art");
 
   return 0;
 }

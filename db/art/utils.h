@@ -69,7 +69,8 @@ struct KVStruct {
   union {
     uint64_t vptr_;
     struct {
-      char padding2[6];
+      char padding2[5];
+      uint8_t  insert_times;
       uint16_t kv_size_;
     };
   };
@@ -85,11 +86,20 @@ inline char GetPrefix(const KVStruct& kvInfo, size_t level) {
 }
 
 inline void GetActualVptr(uint64_t& vptr) {
-  vptr &= 0x0000ffffffffffff;
+  vptr &= 0x000000ffffffffff;
 }
 
 inline void UpdateActualVptr(uint64_t old_vptr, uint64_t& new_vptr) {
-  new_vptr |= (old_vptr & 0xffff000000000000);
+  new_vptr |= (old_vptr & 0xffffff0000000000);
+}
+
+inline int GetInsertTimes(uint64_t& vptr) {
+  return (vptr >> 40) & 0x0000ff;
+}
+
+inline void UpdateInsertTimes(uint64_t& vptr, uint64_t insert_times) {
+  vptr &= 0xffff00ffffffffff;
+  vptr |= (insert_times << 40);
 }
 #else
 struct KVStruct {
@@ -114,6 +124,10 @@ inline void GetActualVptr(uint64_t& vptr) {
 inline void UpdateActualVptr(uint64_t old_vptr, uint64_t& new_vptr) {
   new_vptr <<= 16;
   new_vptr |= (old_vptr & 0x000000000000ffff);
+}
+inline void UpdateInsertTimes(uint64_t& vptr, uint64_t insert_times) {
+  vptr &= 0xffffffffff00ffff;
+  vptr |= (insert_times << 16);
 }
 #endif
 

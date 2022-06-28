@@ -39,8 +39,9 @@ float HeatGroup::decay_factor_[32] = {0};
 
 HeatGroup::HeatGroup(InnerNode* initial_node)
     : group_size_(0),
-      first_node_(initial_node), last_node_(initial_node),
-      status_(kGroupNone), in_base_layer(false), in_temp_layer(false),
+      first_node_(initial_node), last_node_(initial_node), status_(kGroupNone),
+      in_base_layer(false), in_temp_layer(false), is_removed(false),
+      next_seq(nullptr), prev_seq(nullptr),
       next(nullptr), prev(nullptr) {}
 
 bool HeatGroup::InsertNewNode(
@@ -227,7 +228,7 @@ void HeatGroupManager::BGWork() {
   while (!thread_stop_) {
     if (group_operations_.size() == 0) {
       // TryMergeBaseLayerGroups();
-      std::this_thread::sleep_for(std::chrono::milliseconds(3));
+      std::this_thread::sleep_for(std::chrono::milliseconds(1));
       continue;
     }
 
@@ -316,7 +317,7 @@ bool HeatGroupManager::MergeNextGroup(HeatGroup* group, HeatGroup* next_group) {
 
   int total_size = group->group_size_.load(std::memory_order_relaxed) +
                    next_group->group_size_.load(std::memory_order_relaxed);
-  if (total_size > HeatGroup::group_min_size_ * 2) {
+  if (total_size > HeatGroup::group_min_size_ * 3 / 2) {
     return false;
   }
 
@@ -551,7 +552,7 @@ void HeatGroupManager::ChooseCompaction(
     Compactor* compactor, size_t num_chosen) {
   std::vector<HeatGroup*> chosen_groups;
 
-  group_queue_.CountGroups();
+  // group_queue_.CountGroups();
 
   for (int num_tries = 0; num_tries < 2; ++num_tries) {
     for (int l = 0; l < 3; ++l) {

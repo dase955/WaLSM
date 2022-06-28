@@ -358,6 +358,7 @@ struct CompactionRec {
   uint64_t     seq_num;
   uint64_t     vptr;
   RecordIndex  record_index;
+  int          insert_times;
 
   CompactionRec() = default;
 
@@ -388,6 +389,8 @@ int64_t ReadAndBuild(SingleCompactionJob* job,
     size_t count = 0;
     for (int i = -16; i < data_size; ++i) {
       auto vptr = data[i * 2 + 1];
+      auto insert_times = GetInsertTimes(vptr);
+
       GetActualVptr(vptr);
       if (!vptr) {
         continue;
@@ -399,6 +402,7 @@ int64_t ReadAndBuild(SingleCompactionJob* job,
       kv.seq_num = (seq_num << 8) | type;
       kv.key = &keys[count++];
       kv.vptr = vptr;
+      kv.insert_times = insert_times;
     }
 
     if (count == 0) {
@@ -412,6 +416,7 @@ int64_t ReadAndBuild(SingleCompactionJob* job,
 
     int cur_count = 1;
     auto& last_kv = kvs.front();
+    int insert_times = last_kv.insert_times;
 
     for (size_t i = 1; i <= count; ++i) {
       auto& kv = kvs[i];
@@ -419,18 +424,12 @@ int64_t ReadAndBuild(SingleCompactionJob* job,
       if (*kv.key == *last_kv.key) {
         job->compacted_indexes[last_kv.vptr >> 20]
             .push_back(last_kv.record_index);
+        insert_times += kv.insert_times;
         ++cur_count;
       } else {
-        ++job->total_count;
-        job->hot_count += (cur_count >= Compactor::rewrite_threshold);
-
-        // TODO: choose highest freq data
-        if ((cur_count >= Compactor::rewrite_threshold &&
-            job->hot_count < (int)Compactor::max_rewrite_count) || (
-                cur_count == 1 &&
-                job->vlog_manager_->RecentWritten(last_kv.vptr))) {
-          job->hot_data.push_back(last_kv.vptr);
-          job->recent_count += (cur_count == 1);
+        if (insert_times > 2) {
+          job->rewrite_data.push_back(last_kv.vptr);
+          job->rewrite_times.push_back(std::min(insert_times, 254));
         } else {
           job->compacted_indexes[last_kv.vptr >> 20]
               .push_back(last_kv.record_index);
@@ -443,6 +442,7 @@ int64_t ReadAndBuild(SingleCompactionJob* job,
           out_kv_size += (last_kv.value.size() + key->size());
         }
         cur_count = 1;
+        insert_times = kv.insert_times;
       }
       last_kv = kvs[i];
     }

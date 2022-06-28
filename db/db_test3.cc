@@ -69,7 +69,7 @@
 
 namespace ROCKSDB_NAMESPACE {
 
-int      thread_num = 32;
+int      thread_num = 8;
 int      total_count = 320000000;
 int      sample_range = 1000000000;
 int      count_per_thread = total_count / thread_num;
@@ -249,6 +249,27 @@ void GenerateSamples() {
     final_samples[i] = value;
     freqs[value]++;
   }
+
+  std::unordered_map<int, int> freq_freq;
+  for (auto& pair : freqs) {
+    freq_freq[pair.second]++;
+  }
+  std::vector<std::pair<int, int>> freq_freq_sorted;
+  freq_freq_sorted.reserve(freq_freq.size());
+  for (auto& pair : freq_freq) {
+    freq_freq_sorted.emplace_back(pair);
+  }
+  std::sort(freq_freq_sorted.begin(), freq_freq_sorted.end(),
+            [](std::pair<int, int>& p1, std::pair<int, int>& p2){
+              return p1.first < p2.first;
+            });
+  std::ofstream ofs("/tmp/freq.txt");
+  int sum = 0;
+  for (auto& pair : freq_freq_sorted) {
+    sum += (pair.first * pair.second);
+    ofs << pair.first << ", " << pair.second << ", " << ((float)sum * 1053.0 / 1024.0 / 1024.0 / 1024.0) << "G" << std::endl;
+  }
+  ofs.close();
 
   CheckFreq();
 

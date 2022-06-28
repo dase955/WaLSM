@@ -351,7 +351,11 @@ void GlobalMemtable::Put(Slice& slice, uint64_t base_vptr, size_t count) {
 
     auto hash = HashOnly(key.data(), key.size());
     KVStruct kv_info(hash, vptr);
+    assert(kv_info.insert_times == 0);
     kv_info.kv_size_ = slice.data() - record_start;
+    kv_info.insert_times = 1;
+    assert(kv_info.insert_times == 1);
+    assert((kv_info.vptr_ & 0x000000ffffffffff) == vptr);
     Put(key, kv_info);
     vptr += (slice.data() - record_start);
   }
@@ -488,7 +492,7 @@ bool GlobalMemtable::SqueezeNode(InnerNode* leaf) {
   auto data = node->data;
 
   // Maybe we can use vector instead of map.
-  std::unordered_set<std::string> key_set;
+  std::unordered_map<std::string, std::pair<int, int>> key_set;
 
   RecordIndex index;
   std::unordered_map<uint64_t, std::vector<RecordIndex>> unused_indexes;
@@ -511,13 +515,15 @@ bool GlobalMemtable::SqueezeNode(InnerNode* leaf) {
     }
     std::string key;
     vlog_manager_->GetKeyIndex(vptr, key, index);
-    if (key_set.find(key) != key_set.end()) {
+    auto iter = key_set.find(key);
+    if (iter != key_set.end()) {
       GetActualVptr(vptr);
       unused_indexes[vptr >> 20].emplace_back(index);
+      iter->second.second += kv_info.insert_times;
       continue;
     }
 
-    key_set.emplace(key);
+    key_set[key] = std::make_pair(count + 1, kv_info.insert_times);
     temp_fingerprints[fpos++] = static_cast<uint8_t>(kv_info.hash_);
     temp_data[count++] = kv_info.hash_;
     temp_data[count++] = kv_info.vptr_;
@@ -526,6 +532,12 @@ bool GlobalMemtable::SqueezeNode(InnerNode* leaf) {
 
   if (unlikely(key_set.size() >= NVM_MAX_SIZE - 16)) {
     return false;
+  }
+
+  for (auto& pair : key_set) {
+    auto& pos_and_times = pair.second;
+    UpdateInsertTimes(temp_data[pos_and_times.first],
+                      std::min(pos_and_times.second, 254));
   }
 
   assert(fpos <= NVM_MAX_SIZE - 16);

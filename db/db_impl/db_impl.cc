@@ -25,6 +25,7 @@
 #include <utility>
 #include <vector>
 
+#include "db/art/timestamp.h"
 #include "db/art/logger.h"
 #include "db/art/node_allocator.h"
 #include "db/art/nvm_manager.h"
@@ -272,6 +273,8 @@ DBImpl::DBImpl(const DBOptions& options, const std::string& dbname,
   // is called by client and this seqnum is advanced.
   preserve_deletes_seqnum_.store(0);
 
+  Timestamps::factor = options.timestamp_factor;
+
   // Use init time as start time.
   GetStartTime();
   InitLogFile();
@@ -294,16 +297,12 @@ DBImpl::DBImpl(const DBOptions& options, const std::string& dbname,
 
   Compactor::compaction_threshold_ = options.compaction_threshold;
   Compactor::max_rewrite_count = options.max_rewrite_count;
-  Compactor::rewrite_threshold = options.rewrite_threshold;
 
   compactor_->SetDB(this);
   compactor_->SetGroupManager(group_manager_);
   compactor_->SetVLogManager(vlog_manager_);
   compactor_->SetGlobalMemtable(global_memtable_);
   compactor_->StartThread();
-
-  printf("max_rewrite_count=%d, rewrite_threshold=%d\n",
-         options.max_rewrite_count, options.rewrite_threshold);
 }
 
 Status DBImpl::Resume() {

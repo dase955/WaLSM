@@ -23,11 +23,12 @@ namespace ROCKSDB_NAMESPACE {
 int fetch_time = 0;
 
 int SearchVptr(
-    InnerNode* inner_node, uint8_t hash, int rows, uint64_t vptr) {
+    InnerNode* inner_node, uint8_t hash, int rows, uint64_t& vptr) {
 
   int buffer_size = GET_NODE_BUFFER_SIZE(inner_node->status_);
   for (int i = 0; i < buffer_size; ++i) {
-    if (inner_node->buffer_[i * 2 + 1] == vptr) {
+    if ((inner_node->buffer_[i * 2 + 1] & 0x000000ffffffffff) == vptr) {
+      vptr = inner_node->buffer_[i * 2 + 1];
       return -i - 2;
     }
   }
@@ -49,7 +50,8 @@ int SearchVptr(
       int found = 31 - __builtin_clz(res);
       res -= (1 << found);
       int index = found + base;
-      if (index < size && vptr == data[index * 2 + 1]) {
+      if (index < size && vptr == (data[index * 2 + 1] & 0x000000ffffffffff)) {
+        vptr = data[index * 2 + 1];
         return index;
       }
     }
@@ -278,8 +280,6 @@ void VLogManager::ReadAndSortData(std::vector<char*>& segments) {
     uint16_t read = 0;
     uint32_t key_length, value_length, key_start;
 
-    KVStruct dummy_info{0, 0};
-
     auto total_count = header->total_count_;
     auto bitmap = header->bitmap_;
     while (read < total_count) {
@@ -297,10 +297,8 @@ void VLogManager::ReadAndSortData(std::vector<char*>& segments) {
 
       if (bitmap[read / 8] & (1 << (read % 8))) {
         std::string record(record_start, slice.data() - record_start);
-        dummy_info.vptr_ = record_start - pmemptr_;
-        dummy_info.kv_size_ = record.size();
         gc_data.emplace_back(
-            key_start, key_length, dummy_info.vptr_, record);
+            key_start, key_length, record_start - pmemptr_, record);
       }
       ++read;
     }
@@ -381,9 +379,9 @@ void VLogManager::BGWork() {
         while (index < data_count &&
                gc_data[index].key.compare(vptr_key) == 0) {
           cur_data = gc_data[index++];
-          if (inner_node->vptr_ == cur_data.vptr) {
+          if ((inner_node->vptr_ & 0x000000ffffffffff) == cur_data.vptr) {
             WriteToNewSegment(cur_data.record, new_vptr);
-            UpdateActualVptr(cur_data.vptr, new_vptr);
+            UpdateActualVptr(inner_node->vptr_, new_vptr);
             inner_node->vptr_ = new_vptr;
             // inner_node->hash_ = new_hash;
           }

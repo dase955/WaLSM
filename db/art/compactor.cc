@@ -169,8 +169,6 @@ int64_t Compactor::compaction_threshold_;
 
 size_t Compactor::max_rewrite_count;
 
-int Compactor::rewrite_threshold;
-
 Compactor::Compactor(const DBOptions& options)
     : group_manager_(nullptr), vlog_manager_(nullptr),
       num_parallel_compaction_(options.num_parallel_compactions) {}
@@ -219,13 +217,18 @@ void Compactor::Notify(std::vector<HeatGroup*>& heat_groups) {
   cond_var_.notify_one();
 }
 
+std::atomic<int> total_rewrite{0};
+
 void Compactor::RewriteData(SingleCompactionJob* job) {
   job->keys_in_node[0].clear();
 
-  for (auto vptr : job->hot_data) {
-    int i = vptr >> 20;
+  total_rewrite.fetch_add(job->rewrite_data.size());
+  for (size_t idx = 0; idx < job->rewrite_data.size(); ++idx) {
+    auto vptr = job->rewrite_data[idx];
+
     auto header = (VLogSegmentHeader*)(
-        vlog_manager_->pmemptr_ + vlog_manager_->vlog_segment_size_ * i);
+        vlog_manager_->pmemptr_ +
+        vlog_manager_->vlog_segment_size_ * (vptr >> 20));
 
     char* record_start = vlog_manager_->pmemptr_ + vptr;
     Slice slice(record_start, 1 << 20);
@@ -253,6 +256,9 @@ void Compactor::RewriteData(SingleCompactionJob* job) {
     auto hash = HashOnly(key.data(), key.size());
     KVStruct kv_info(hash, vptr);
     kv_info.kv_size_ = kv_size;
+    kv_info.insert_times = job->rewrite_times[idx];
+    assert((kv_info.vptr_ & 0x000000ffffffffff) == vptr);
+    assert(kv_info.insert_times > 1);
     global_memtable_->Put(key, kv_info, false);
   }
 }
@@ -338,17 +344,6 @@ void Compactor::BGWork() {
                 (end_time - start_time) * 1e-6, start_time * 1e-6,
                 0);
 
-    int rewrite_count = 0;
-    int total_count = 0;
-    int hot_count = 0;
-    int recent_count = 0;
-    for (auto job : chosen_jobs_) {
-      recent_count += job->recent_count;
-      rewrite_count += job->hot_data.size();
-      total_count += job->total_count;
-      hot_count += job->hot_count;
-    }
-
     auto squeezed_in_compaction =
         (float)SqueezedSizeInCompaction.load(std::memory_order_relaxed) / 1048576.0f;
     auto mem_total_size =
@@ -357,15 +352,15 @@ void Compactor::BGWork() {
         (float)CompactedSize.load(std::memory_order_relaxed) / 1048576.0f;
     auto total_squeezed_size =
         (float)SqueezedSize.load(std::memory_order_relaxed) / 1048576.0f;
+    auto rewrite_count = total_rewrite.load(std::memory_order_relaxed);
+    total_rewrite.store(0, std::memory_order_relaxed);
 
     RECORD_DEBUG("free pages: "
-        "%zu, %zu(%.2f), size: %.2fM, %.2fM, %.2fM; squeezed in groups %.2fM "
-        "rewrite %d total count %d hot count %d, recent count %d\n",
+        "%zu, %zu(%.2f), size: %.2fM, %.2fM, %.2fM; squeezed in groups %.2fM, rewrite count: %d\n",
         GetNodeAllocator()->GetNumFreePages(),
         vlog_manager_->free_segments_.size(), vlog_manager_->Estimate(),
         mem_total_size, compacted_size, total_squeezed_size,
-        squeezed_in_compaction,
-        rewrite_count, total_count, hot_count, recent_count);
+        squeezed_in_compaction, rewrite_count);
 
     SqueezedSizeInCompaction.store(0);
 

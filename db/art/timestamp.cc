@@ -13,10 +13,12 @@
 
 namespace ROCKSDB_NAMESPACE {
 
-std::atomic<int32_t> Timestamp{128};
+
+int Timestamps::factor;
 
 int32_t GetTimestamp() {
-  return Timestamp.fetch_add(1, std::memory_order_relaxed) >> 7;
+  static std::atomic<int32_t> Timestamp{1 << Timestamps::factor};
+  return Timestamp.fetch_add(1, std::memory_order_relaxed) >> Timestamps::factor;
 }
 
 Timestamps::Timestamps()
@@ -55,7 +57,7 @@ void Timestamps::Merge(Timestamps& rhs) {
   float heat_rhs = rhs.GetTotalHeat();
 
   std::lock_guard<SpinMutex> update_lk(update_lock_);
-  accumulate_ = (heat + heat_rhs);
+  accumulate_ = (heat + heat_rhs) / 2;
 }
 
 void Timestamps::DecayHeat() {

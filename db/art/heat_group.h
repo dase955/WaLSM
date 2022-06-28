@@ -23,7 +23,6 @@ enum GroupStatus {
   kGroupNone,
   kGroupWaitMove,
   kGroupWaitSplit,
-  kGroupWaitMerge,
   kGroupCompaction,
 };
 
@@ -57,14 +56,12 @@ struct HeatGroup {
   InnerNode*               last_node_;
   std::atomic<GroupStatus> status_;
 
-  // Groups smaller than threshold will be placed in base layer
-  bool                     in_base_layer;
-  bool                     in_temp_layer;
+  bool in_base_layer; // Groups smaller than threshold are in base layer
+  bool in_temp_layer;
+  bool is_removed;    // Removed group will not be used anymore
 
-  // Removed group will not be used anymore
-  bool                     is_removed = false;
-
-  // next_seq and prev_seq present physically adjacent node
+  // next_seq and prev_seq present physically adjacent node,
+  // used for group merge
   HeatGroup*               next_seq = nullptr;
   HeatGroup*               prev_seq = nullptr;
 
