@@ -505,7 +505,7 @@ ColumnFamilyData::ColumnFamilyData(
       name_(name),
       dummy_versions_(_dummy_versions),
       current_(nullptr),
-      global_q_table_(new MergeQTable(0.1, 0.9)),
+      global_q_table_(new MergeQTable(0.5, 0.5)),
       refs_(0),
       initialized_(false),
       dropped_(false),

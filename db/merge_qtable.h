@@ -39,8 +39,8 @@ struct QKey {
   uint64_t penalty;
   double reward;
   bool keep;
-  QKey(uint64_t q_state, uint64_t penalty, double reward, bool keep)
-      : q_state(q_state), penalty(penalty), reward(reward), keep(keep) {}
+  QKey(uint64_t state_, uint64_t penalty_, double reward_, bool keep_)
+      : q_state(state_), penalty(penalty_), reward(reward_), keep(keep_) {}
 };
 
 class MergeQTable {
@@ -69,9 +69,11 @@ class MergeQTable {
 
       auto kv = table.find(keys[i].q_state);
       if (keys[i].keep) {
-        kv->second.q_k += gt;
+        if (gt > 0) kv->second.q_k += gt;
+        else kv->second.q_m += abs(gt);
       } else {
-        kv->second.q_m += gt;
+        if (gt > 0) kv->second.q_m += gt;
+        else kv->second.q_m += abs(gt);
       }
     }
   }

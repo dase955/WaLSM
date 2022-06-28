@@ -337,7 +337,7 @@ class VersionStorageInfo {
           queries(new std::atomic<uint64_t>[level]),
           q_keys(new std::vector<QKey>[level]){
               if (level > 0) {
-                is_tier[1] = true;
+                is_tier[1] = false;
               }
           };
 
