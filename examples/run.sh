@@ -1,7 +1,8 @@
 #!/bin/bash
 make simple_example -j8
 sudo rm -f /tmp/compaction_art.csv
-sudo rm -rf /mnt/chen/*
+sudo rm -rf /mnt/chen/rocksdb_l0
+sudo rm -rf /mnt/chen/rocksdb_log
 sudo rm -rf /tmp/db_test_nvm_l0
 sudo rm -f /tmp/run_ops_nvm_l0
 sudo rm -f /tmp/debug_art.txt
