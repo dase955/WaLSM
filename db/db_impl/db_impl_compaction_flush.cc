@@ -295,7 +295,7 @@ Status DBImpl::FlushMemTableToOutputFile(
     if (sfm) {
       // Notify sst_file_manager that a new file was added
       std::string file_path = MakeTableFileName(
-          cfd->ioptions()->cf_paths[0].path, file_meta.fd.GetNumber());
+          cfd->ioptions()->cf_paths[1].path, file_meta.fd.GetNumber());
       sfm->OnAddFile(file_path);
       if (sfm->IsMaxAllowedSpaceReached()) {
         Status new_bg_error =
@@ -363,6 +363,8 @@ Status DBImpl::AtomicFlushMemTablesToOutputFiles(
     JobContext* job_context, LogBuffer* log_buffer, Env::Priority thread_pri) {
   mutex_.AssertHeld();
 
+  printf("Why u use AtomicFlushMemTablesToOutputFiles?\n");
+
   autovector<ColumnFamilyData*> cfds;
   for (const auto& arg : bg_flush_args) {
     cfds.emplace_back(arg.cfd_);
@@ -390,7 +392,7 @@ Status DBImpl::AtomicFlushMemTablesToOutputFiles(
   for (int i = 0; i < num_cfs; ++i) {
     auto cfd = cfds[i];
     FSDirectory* data_dir = GetDataDir(cfd, 0U);
-    const std::string& curr_path = cfd->ioptions()->cf_paths[0].path;
+    const std::string& curr_path = cfd->ioptions()->cf_paths[1].path;
 
     // Add to distinct output directories if eligible. Use linear search. Since
     // the number of elements in the vector is not large, performance should be
@@ -649,7 +651,7 @@ Status DBImpl::AtomicFlushMemTablesToOutputFiles(
                              jobs[i]->GetCommittedFlushJobsInfo());
       if (sfm) {
         std::string file_path = MakeTableFileName(
-            cfds[i]->ioptions()->cf_paths[0].path, file_meta[i].fd.GetNumber());
+            cfds[i]->ioptions()->cf_paths[1].path, file_meta[i].fd.GetNumber());
         sfm->OnAddFile(file_path);
         if (sfm->IsMaxAllowedSpaceReached() &&
             error_handler_.GetBGError().ok()) {
@@ -725,7 +727,7 @@ void DBImpl::NotifyOnFlushBegin(ColumnFamilyData* cfd, FileMetaData* file_meta,
     //                 go to L0 in the future.
     const uint64_t file_number = file_meta->fd.GetNumber();
     info.file_path =
-        MakeTableFileName(cfd->ioptions()->cf_paths[0].path, file_number);
+        MakeTableFileName(cfd->ioptions()->cf_paths[1].path, file_number);
     info.file_number = file_number;
     info.thread_id = env_->GetThreadID();
     info.job_id = job_id;

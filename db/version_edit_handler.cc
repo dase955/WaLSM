@@ -554,8 +554,12 @@ Status VersionEditHandlerPointInTime::MaybeCreateVersion(
     const FileMetaData& meta = elem.second;
     const FileDescriptor& fd = meta.fd;
     uint64_t file_num = fd.GetNumber();
-    const std::string fpath =
-        MakeTableFileName(cfd->ioptions()->cf_paths[0].path, file_num);
+
+    const std::string fpath = TableFileName(cfd->ioptions()->cf_paths,
+                                            fd.GetNumber(), fd.GetPathId());
+    // Why always use cf_paths[0] here?
+    /*const std::string fpath =
+        MakeTableFileName(cfd->ioptions()->cf_paths[0].path, file_num);*/
     s = version_set_->VerifyFileMetadata(fpath, meta);
     if (s.IsPathNotFound() || s.IsNotFound() || s.IsCorruption()) {
       missing_files.insert(file_num);

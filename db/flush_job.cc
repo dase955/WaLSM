@@ -185,7 +185,7 @@ void FlushJob::PickMemTable() {
   edit_->SetColumnFamily(cfd_->GetID());
 
   // path 0 for level 0 file.
-  meta_.fd = FileDescriptor(versions_->NewFileNumber(), 0, 0);
+  meta_.fd = FileDescriptor(versions_->NewFileNumber(), 1, 0);
 
   base_ = cfd_->current();
   base_->Ref();  // it is likely that we do not need this reference
@@ -492,8 +492,11 @@ std::unique_ptr<FlushJobInfo> FlushJob::GetFlushJobInfo() const {
   info->cf_name = cfd_->GetName();
 
   const uint64_t file_number = meta_.fd.GetNumber();
-  info->file_path =
-      MakeTableFileName(cfd_->ioptions()->cf_paths[0].path, file_number);
+  const uint64_t path_id = meta_.fd.GetPathId();
+  info->file_path = TableFileName(cfd_->ioptions()->cf_paths,
+                             file_number, path_id);
+  /*info->file_path =
+      MakeTableFileName(cfd_->ioptions()->cf_paths[1].path, file_number);*/
   info->file_number = file_number;
   info->oldest_blob_file_number = meta_.oldest_blob_file_number;
   info->thread_id = db_options_.env->GetThreadID();

@@ -404,14 +404,16 @@ struct AdvancedColumnFamilyOptions {
   // Default: 20
   //
   // Dynamically changeable through SetOptions() API
-  int level0_slowdown_writes_trigger = 20;
+  // Slow down writes when L0 file sizes approximately exceed 6G
+  int level0_slowdown_writes_trigger = 96;
 
   // Maximum number of level-0 files.  We stop writes at this point.
   //
   // Default: 36
   //
   // Dynamically changeable through SetOptions() API
-  int level0_stop_writes_trigger = 36;
+  // Writes are stopped when L0 file sizes approximately exceed 7G
+  int level0_stop_writes_trigger = 112;
 
   // Target file size for compaction.
   // target_file_size_base is per-file size for level-1.

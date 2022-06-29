@@ -128,6 +128,8 @@ DBOptions SanitizeOptions(const std::string& dbname, const DBOptions& src) {
 
   if (result.db_paths.size() == 0) {
     result.db_paths.emplace_back(dbname, std::numeric_limits<uint64_t>::max());
+    // Add another path for nvm storage
+    result.db_paths.emplace_back(src.nvm_path, std::numeric_limits<uint64_t>::max());
   }
 
   if (result.use_direct_reads && result.compaction_readahead_size == 0) {
@@ -1741,6 +1743,7 @@ Status DBImpl::Open(const DBOptions& db_options, const std::string& dbname,
       known_file_sizes[name] = md.size;
     }
 
+    // If we need do recovery, cf_paths[1] is also needed
     std::vector<std::string> paths;
     paths.emplace_back(impl->immutable_db_options_.db_paths[0].path);
     for (auto& cf : column_families) {

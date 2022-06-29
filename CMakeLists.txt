@@ -579,6 +579,7 @@ set(SOURCES
         db/blob/blob_log_writer.cc
         db/builder.cc
         db/c.cc
+        db/logger.cc
         db/column_family.cc
         db/compacted_db_impl.cc
         db/compaction/compaction.cc
