@@ -30,20 +30,20 @@ bool InitializeMemory(std::unordered_map<std::string, int64_t>& memory_usages,
   int fd;
 
   struct stat buffer;
-  bool file_exist = stat(nvm_path, &buffer) == 0;
+  bool file_exist = stat(nvm_path.c_str(), &buffer) == 0;
   if (!file_exist) {
-    fd = open(nvm_path, O_CREAT|O_RDWR, 0666);
+    fd = open(nvm_path.c_str(), O_CREAT|O_RDWR, 0666);
     assert(-1 != fd);
     posix_fallocate(fd, 0, TotalSize);
   } else {
-    fd = open(nvm_path, O_CREAT, 0666);
+    fd = open(nvm_path.c_str(), O_CREAT, 0666);
     assert(-1 != fd);
   }
 
   int is_pmem;
   size_t mapped_len;
   base_memptr = (char*)pmem_map_file(
-      nvm_path, TotalSize, PMEM_FILE_CREATE, 0666, &mapped_len, &is_pmem);
+      nvm_path.c_str(), TotalSize, PMEM_FILE_CREATE, 0666, &mapped_len, &is_pmem);
   assert(is_pmem && mapped_len == (size_t)TotalSize);
 
   close(fd);

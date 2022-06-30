@@ -93,7 +93,7 @@ GlobalMemtable::~GlobalMemtable() {
   int count = 0;
   DeleteInnerNode(root_, inode_vptrs, count);
 
-  int fd = open("inode_vptrs", O_CREAT | O_RDWR | O_DIRECT);
+  int fd = open("inode_vptrs", O_CREAT | O_RDWR | O_DIRECT, 0666);
   write(fd, inode_vptrs, 2097152);
   close(fd);
 }
