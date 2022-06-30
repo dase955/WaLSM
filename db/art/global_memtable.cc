@@ -206,7 +206,7 @@ void GlobalMemtable::Recovery() {
 
   // Recover vptr in leaf nodes
   uint64_t inode_vptrs[262144] = {0};
-  int fd = open("inode_vptrs", O_CREAT | O_RDWR | O_DIRECT);
+  int fd = open("inode_vptrs", O_CREAT | O_RDWR | O_DIRECT, 0666);
   read(fd, inode_vptrs, 2097152);
   close(fd);
 
