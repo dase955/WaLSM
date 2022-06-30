@@ -19,7 +19,8 @@ std::unordered_map<std::string, char*> memories;
 
 namespace ROCKSDB_NAMESPACE {
 
-bool InitializeMemory(std::unordered_map<std::string, int64_t>& memory_usages) {
+bool InitializeMemory(std::unordered_map<std::string, int64_t>& memory_usages,
+                      const std::string& nvm_path) {
   TotalSize = 0;
   for (auto& memory_usage : memory_usages) {
     TotalSize += memory_usage.second;
@@ -29,20 +30,20 @@ bool InitializeMemory(std::unordered_map<std::string, int64_t>& memory_usages) {
   int fd;
 
   struct stat buffer;
-  bool file_exist = stat(MEMORY_PATH, &buffer) == 0;
+  bool file_exist = stat(nvm_path, &buffer) == 0;
   if (!file_exist) {
-    fd = open(MEMORY_PATH, O_CREAT|O_RDWR, 0666);
+    fd = open(nvm_path, O_CREAT|O_RDWR, 0666);
     assert(-1 != fd);
     posix_fallocate(fd, 0, TotalSize);
   } else {
-    fd = open(MEMORY_PATH, O_CREAT, 0666);
+    fd = open(nvm_path, O_CREAT, 0666);
     assert(-1 != fd);
   }
 
   int is_pmem;
   size_t mapped_len;
   base_memptr = (char*)pmem_map_file(
-      MEMORY_PATH, TotalSize, PMEM_FILE_CREATE, 0666, &mapped_len, &is_pmem);
+      nvm_path, TotalSize, PMEM_FILE_CREATE, 0666, &mapped_len, &is_pmem);
   assert(is_pmem && mapped_len == (size_t)TotalSize);
 
   close(fd);
@@ -50,14 +51,14 @@ bool InitializeMemory(std::unordered_map<std::string, int64_t>& memory_usages) {
   int fd;
 
   struct stat buffer;
-  bool file_exist = stat(MEMORY_PATH, &buffer) == 0;
+  bool file_exist = stat(nvm_path.c_str(), &buffer) == 0;
   if (!file_exist) {
-    fd = open(MEMORY_PATH, O_RDWR|O_CREAT, 00777);
+    fd = open(nvm_path.c_str(), O_RDWR|O_CREAT, 00777);
     assert(-1 != fd);
     lseek(fd, TotalSize - 1, SEEK_SET);
     write(fd, "", 1);
   } else {
-    fd = open(MEMORY_PATH, O_RDWR, 00777);
+    fd = open(nvm_path.c_str(), O_RDWR, 00777);
   }
 
   base_memptr = (char*)mmap(

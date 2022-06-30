@@ -282,7 +282,7 @@ DBImpl::DBImpl(const DBOptions& options, const std::string& dbname,
   std::unordered_map<std::string, int64_t> memory_usages;
   memory_usages["vlog"] = options.vlog_file_size;
   memory_usages["nodememory"] = options.node_memory_size;
-  bool recovery = InitializeMemory(memory_usages);
+  bool recovery = InitializeMemory(memory_usages, options.nvm_path);
 
   InitializeNodeAllocator(options, recovery);
   vlog_manager_ = new VLogManager(options, recovery);

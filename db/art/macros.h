@@ -115,16 +115,12 @@ namespace ROCKSDB_NAMESPACE {
 #define MEMORY_BARRIER __asm__ volatile("mfence":::"memory")
 
 #ifndef USE_PMEM
-#define MEMORY_PATH "/tmp/nodememory"
-
 #define MEMCPY(des, src, size, flag) memcpy((des), (src), (size))
 #define PERSIST(ptr, len)
 #define FLUSH(addr, len)
 #define NVM_BARRIER
 #define CLWB(ptr, len)
 #else
-#define MEMORY_PATH "/mnt/chen/nodememory"
-
 #define MEMCPY(des, src, size, flags) \
   pmem_memcpy((des), (src), (size), flags)
 // PERSIST = FLUSH + FENCE
