@@ -564,6 +564,66 @@ Status MemTableList::TryInstallMemtableFlushResults(
   return s;
 }
 
+// Try record a successful flush in the manifest file. It might just return
+// Status::OK letting a concurrent flush to do actual the recording..
+Status MemTableList::TryInstallNVMFlushResults(
+    ColumnFamilyData* cfd, const MutableCFOptions& mutable_cf_options,
+    MemTable* mem, [[maybe_unused]] LogsWithPrepTracker* prep_tracker,
+    VersionSet* vset, InstrumentedMutex* mu, uint64_t file_number,
+    // autovector<MemTable*>* to_delete,
+    FSDirectory* db_directory,
+    LogBuffer* log_buffer,
+    std::list<std::unique_ptr<FlushJobInfo>>* committed_flush_jobs_info,
+    IOStatus* io_s) {
+  AutoThreadOperationStageUpdater stage_updater(
+      ThreadStatus::STAGE_MEMTABLE_INSTALL_FLUSH_RESULTS);
+  mu->AssertHeld();
+
+  // Flush was successful
+  // Record the status on the memtable object. Either this call or a call by a
+  // concurrent flush thread will read the status and write it to manifest.
+  mem->file_number_ = file_number;
+
+  // if some other thread is already committing, then return
+  Status s;
+  if (commit_in_progress_) {
+    TEST_SYNC_POINT("MemTableList::TryInstallMemtableFlushResults:InProgress");
+    return s;
+  }
+
+  // Only a single thread can be executing this piece of code
+  commit_in_progress_ = true;
+
+  autovector<VersionEdit*> edit_list{&mem->edit_};
+
+  ROCKS_LOG_BUFFER(log_buffer,
+                   "[%s] Level-0 commit table #%" PRIu64 " started",
+                   cfd->GetName().c_str(), mem->file_number_);
+
+  std::unique_ptr<FlushJobInfo> info = mem->ReleaseFlushJobInfo();
+  if (info != nullptr) {
+    committed_flush_jobs_info->push_back(std::move(info));
+  }
+
+  s = vset->LogAndApply(cfd, mutable_cf_options, edit_list, mu,
+                        db_directory);
+  *io_s = vset->io_status();
+
+  // we will be changing the version in the next code path,
+  // so we better create a new one, since versions are immutable
+  InstallNewVersion();
+
+  ROCKS_LOG_BUFFER(log_buffer,
+                   "[%s] Level-0 commit table #%" PRIu64
+                   ": memtable #%" PRIu64 " done",
+                   cfd->GetName().c_str(), mem->file_number_, 1);
+
+  mem->edit_.Clear();
+
+  commit_in_progress_ = false;
+  return s;
+}
+
 // New memtables are inserted at the front of the list.
 void MemTableList::Add(MemTable* m, autovector<MemTable*>* to_delete) {
   assert(static_cast<int>(current_->memlist_.size()) >= num_flush_not_started_);

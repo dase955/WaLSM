@@ -10,7 +10,11 @@
 // WriteBatch::rep_ :=
 //    sequence: fixed64
 //    count: fixed32
-//    data: record[count]
+//    data: record_data[count]
+// record_data :=
+//    SequenceNumber: fix64
+//    RecordIndex: fixed32
+//    record
 // record :=
 //    kTypeValue varstring varstring
 //    kTypeDeletion varstring
@@ -332,6 +336,7 @@ void WriteBatch::Clear() {
   }
 
   wal_term_point_.clear();
+  sequence_number_pos_.clear();
 }
 
 uint32_t WriteBatch::Count() const { return WriteBatchInternal::Count(this); }
@@ -382,7 +387,7 @@ bool WriteBatch::HasMerge() const {
 bool ReadKeyFromWriteBatchEntry(Slice* input, Slice* key, bool cf_record) {
   assert(input != nullptr && key != nullptr);
   // Skip tag byte
-  input->remove_prefix(1);
+  input->remove_prefix(WriteBatchInternal::kRecordPrefixSize);
 
   if (cf_record) {
     // Skip column_family bytes
@@ -417,7 +422,7 @@ Status ReadRecordFromWriteBatch(Slice* input, char* tag,
                                 Slice* value, Slice* blob, Slice* xid) {
   assert(key != nullptr && value != nullptr);
   *tag = (*input)[0];
-  input->remove_prefix(1);
+  input->remove_prefix(WriteBatchInternal::kRecordPrefixSize);
   *column_family = 0;  // default
   switch (*tag) {
     case kTypeColumnFamilyValue:
@@ -770,6 +775,14 @@ Status WriteBatchInternal::Put(WriteBatch* b, uint32_t column_family_id,
     b->rep_.push_back(static_cast<char>(kTypeColumnFamilyValue));
     PutVarint32(&b->rep_, column_family_id);
   }
+
+  // Reserve space for sequence number
+  SequenceNumber dummy_number = 0;
+  RecordIndex dummy_index = 0;
+  b->sequence_number_pos_.push_back(b->rep_.size());
+  PutFixed64(&b->rep_, dummy_number);
+  PutFixed32(&b->rep_, dummy_index);
+
   if (0 == b->timestamp_size_) {
     PutLengthPrefixedSlice(&b->rep_, key);
   } else {
@@ -779,6 +792,7 @@ Status WriteBatchInternal::Put(WriteBatch* b, uint32_t column_family_id,
     b->rep_.append(b->timestamp_size_, '\0');
   }
   PutLengthPrefixedSlice(&b->rep_, value);
+
   b->content_flags_.store(
       b->content_flags_.load(std::memory_order_relaxed) | ContentFlags::HAS_PUT,
       std::memory_order_relaxed);
@@ -909,6 +923,14 @@ Status WriteBatchInternal::Delete(WriteBatch* b, uint32_t column_family_id,
     b->rep_.push_back(static_cast<char>(kTypeColumnFamilyDeletion));
     PutVarint32(&b->rep_, column_family_id);
   }
+
+  // Reserve space for sequence number
+  SequenceNumber dummy_number = 0;
+  RecordIndex dummy_index = 0;
+  b->sequence_number_pos_.push_back(b->rep_.size());
+  PutFixed64(&b->rep_, dummy_number);
+  PutFixed32(&b->rep_, dummy_index);
+
   if (0 == b->timestamp_size_) {
     PutLengthPrefixedSlice(&b->rep_, key);
   } else {
@@ -938,6 +960,7 @@ Status WriteBatchInternal::Delete(WriteBatch* b, uint32_t column_family_id,
     b->rep_.push_back(static_cast<char>(kTypeColumnFamilyDeletion));
     PutVarint32(&b->rep_, column_family_id);
   }
+
   if (0 == b->timestamp_size_) {
     PutLengthPrefixedSliceParts(&b->rep_, key);
   } else {
@@ -2099,6 +2122,7 @@ Status WriteBatchInternal::Append(WriteBatch* dst, const WriteBatch* src,
   }
 
   SetCount(dst, Count(dst) + src_count);
+  src->SetRelativePos(dst->rep_.size() - WriteBatchInternal::kHeader);
   assert(src->rep_.size() >= WriteBatchInternal::kHeader);
   dst->rep_.append(src->rep_.data() + WriteBatchInternal::kHeader, src_len);
   dst->content_flags_.store(

@@ -16,6 +16,7 @@
 #include <string>
 #include <vector>
 
+#include "db/art/compactor.h"
 #include "db/compaction/compaction_picker.h"
 #include "db/compaction/compaction_picker_fifo.h"
 #include "db/compaction/compaction_picker_level.h"
@@ -827,12 +828,17 @@ int GetL0ThresholdSpeedupCompaction(int level0_file_num_compaction_trigger,
 }
 }  // namespace
 
+// Since we don't use memtable, use total memory usage
+// instead of number of unflushed memtable
 std::pair<WriteStallCondition, ColumnFamilyData::WriteStallCause>
 ColumnFamilyData::GetWriteStallConditionAndCause(
     int num_unflushed_memtables, int num_l0_files,
     uint64_t num_compaction_needed_bytes,
     const MutableCFOptions& mutable_cf_options) {
-  if (num_unflushed_memtables >= mutable_cf_options.max_write_buffer_number) {
+  int64_t memory_total_size = GetMemTotalSize();
+  if (memory_total_size > mutable_cf_options.total_memory_stop_trigger) {
+    return {WriteStallCondition::kStopped, WriteStallCause::kMemtableLimit};
+  } else if (num_unflushed_memtables >= mutable_cf_options.max_write_buffer_number) {
     return {WriteStallCondition::kStopped, WriteStallCause::kMemtableLimit};
   } else if (!mutable_cf_options.disable_auto_compactions &&
              num_l0_files >= mutable_cf_options.level0_stop_writes_trigger) {
@@ -843,6 +849,8 @@ ColumnFamilyData::GetWriteStallConditionAndCause(
                  mutable_cf_options.hard_pending_compaction_bytes_limit) {
     return {WriteStallCondition::kStopped,
             WriteStallCause::kPendingCompactionBytes};
+  } else if (memory_total_size > mutable_cf_options.total_memory_slowdown_trigger) {
+    return {WriteStallCondition::kDelayed, WriteStallCause::kMemtableLimit};
   } else if (mutable_cf_options.max_write_buffer_number > 3 &&
              num_unflushed_memtables >=
                  mutable_cf_options.max_write_buffer_number - 1) {

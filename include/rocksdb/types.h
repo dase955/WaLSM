@@ -15,6 +15,9 @@ namespace ROCKSDB_NAMESPACE {
 // Represents a sequence number in a WAL file.
 typedef uint64_t SequenceNumber;
 
+// Represents index of record in vlog segment, used for gc.
+typedef uint32_t RecordIndex;
+
 const SequenceNumber kMinUnCommittedSeq = 1;  // 0 is always committed
 
 // User-oriented representation of internal key types.

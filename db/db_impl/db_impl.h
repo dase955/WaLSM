@@ -19,6 +19,10 @@
 #include <utility>
 #include <vector>
 
+#include "db/art/compactor.h"
+#include "db/art/heat_group_manager.h"
+#include "db/art/global_memtable.h"
+#include "db/art/vlog_manager.h"
 #include "db/column_family.h"
 #include "db/compaction/compaction_job.h"
 #include "db/dbformat.h"
@@ -130,6 +134,7 @@ class Directories {
 // Since it's a very large class, the definition of the functions is
 // divided in several db_impl_*.cc files, besides db_impl.cc.
 class DBImpl : public DB {
+  friend class Compactor;
  public:
   DBImpl(const DBOptions& options, const std::string& dbname,
          const bool seq_per_batch = false, const bool batch_per_txn = true);
@@ -613,6 +618,10 @@ class DBImpl : public DB {
   // checks if all live files exist on file system and that their file sizes
   // match to our in-memory records
   virtual Status CheckConsistency();
+
+  void TestCompaction();
+
+  void TestGC();
 
   // max_file_num_to_ignore allows bottom level compaction to filter out newly
   // compacted SST files. Setting max_file_num_to_ignore to kMaxUint64 will
@@ -1660,6 +1669,7 @@ class DBImpl : public DB {
   void BackgroundCallCompaction(PrepickedCompaction* prepicked_compaction,
                                 Env::Priority thread_pri);
   void BackgroundCallFlush(Env::Priority thread_pri);
+  void SyncCallFlush(std::vector<SingleCompactionJob*>& jobs);
   void BackgroundCallPurge();
   Status BackgroundCompaction(bool* madeProgress, JobContext* job_context,
                               LogBuffer* log_buffer,
@@ -1868,6 +1878,17 @@ class DBImpl : public DB {
   InstrumentedMutex log_write_mutex_;
 
   std::atomic<bool> shutting_down_;
+
+  VLogManager* vlog_manager_;
+
+  GlobalMemtable* global_memtable_;
+
+  Compactor* compactor_;
+
+  HeatGroupManager* group_manager_;
+
+  // Offset of last record written by leader writer.
+  uint64_t last_record_offset_;
 
   // If zero, manual compactions are allowed to proceed. If non-zero, manual
   // compactions may still be running, but will quickly fail with

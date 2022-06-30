@@ -100,7 +100,7 @@ DBTestBase::DBTestBase(const std::string path, bool env_do_fsync)
   // Destroy it for not alternative WAL dir is used.
   EXPECT_OK(DestroyDB(dbname_, options));
   db_ = nullptr;
-  Reopen(options);
+  //Reopen(options);
   Random::GetTLSInstance()->Reset(0xdeadbeef);
 }
 

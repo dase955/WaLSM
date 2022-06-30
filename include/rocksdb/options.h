@@ -215,7 +215,7 @@ struct ColumnFamilyOptions : public AdvancedColumnFamilyOptions {
   // Default: 4
   //
   // Dynamically changeable through SetOptions() API
-  int level0_file_num_compaction_trigger = 4;
+  int level0_file_num_compaction_trigger = 32;
 
   // If non-nullptr, use the specified function to determine the
   // prefixes for keys.  These prefixes will be placed in the filter.
@@ -1168,6 +1168,63 @@ struct DBOptions {
   //
   // Default: false
   bool allow_data_in_errors = false;
+
+  // Options below are used for art.
+
+  // Number of maximum number of parallel running compaction.
+  // Default: 4
+  int num_parallel_compactions = 4;
+
+  // Amount of data in global memtable before trigger compaction.
+  // Default: 5G
+  int64_t compaction_threshold = 5120LL << 20;
+
+  // Maximum size of a group,
+  // group larger than this will be split.
+  // Default: 12M
+  int group_split_threshold = 12 << 20;
+
+  // A threshold for the min size of a group,
+  // Groups whose size smaller than this will not be chosen to do compaction.
+  // Default: 4096K
+  int group_min_size = 4096 << 10;
+
+  // Size of vlog file.
+  // Default: 7G
+  int64_t vlog_file_size = 7ULL << 30;
+
+  // Vlog file is divided into several segments,
+  // in order to do garbage collection.
+  // Default: 1M
+  int64_t vlog_segment_size = 1ULL << 20;
+
+  // Trigger garbage collection when
+  // ratio of free segments less than threshold.
+  // default: 0.4
+  float vlog_force_gc_ratio_ = 0.4f;
+
+  // Why choose 1.021897 ?
+  // Because 1.021897 ^ 32 = 2.
+  // default: 1.021897
+  float heat_update_coeff = 1.021897f;
+
+  // When global timestamp exceed waterline, we need to do heat decay.
+  // default: 1000
+  int timestamp_waterline = 1000;
+
+  // default: 100
+  int layer_ts_interval = 100;
+
+  int timestamp_factor = 7;
+
+  // Space for allocating nvm nodes.
+  // default: 1G
+  int64_t node_memory_size = 1024LL << 20;
+
+  int max_rewrite_count = 600;
+
+  // Path for nvm file, don't pass directory.
+  std::string nvm_path = "/mnt/chen/nodememory";
 };
 
 // Options to control the behavior of a database (passed to DB::Open)

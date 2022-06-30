@@ -8,6 +8,7 @@
 // found in the LICENSE file. See the AUTHORS file for names of contributors.
 #include <cinttypes>
 
+#include "db/nvm_flush_job.h"
 #include "db/builder.h"
 #include "db/db_impl/db_impl.h"
 #include "db/error_handler.h"
@@ -2490,6 +2491,141 @@ void DBImpl::BackgroundCallFlush(Env::Priority thread_pri) {
     // signal the DB destructor that it's OK to proceed with destruction. In
     // that case, all DB variables will be dealloacated and referencing them
     // will cause trouble.
+  }
+}
+
+struct DBCompactionJob {
+  NVMFlushJob* nvm_flush_job;
+  IOStatus io_s;
+  Status s;
+  SuperVersionContext* superversion_context;
+};
+
+void DBImpl::SyncCallFlush(std::vector<SingleCompactionJob*>& jobs) {
+  JobContext job_context(next_job_id_.fetch_add(1), true);
+
+  TEST_SYNC_POINT("DBImpl::SyncCallFlush:start");
+
+  LogBuffer log_buffer(InfoLogLevel::DEBUG_LEVEL,
+                       immutable_db_options_.info_log.get());
+  {
+    InstrumentedMutexLock l(&mutex_);
+
+    std::unique_ptr<std::list<uint64_t>::iterator>
+        pending_outputs_inserted_elem(new std::list<uint64_t>::iterator(
+            CaptureCurrentFileNumberInPendingOutputs()));
+
+    std::vector<SuperVersionContext>& superversion_contexts =
+        job_context.superversion_contexts;
+    superversion_contexts.clear();
+    superversion_contexts.reserve(jobs.size());
+
+    // Only default column family is created and used.
+    auto cfd_set = versions_->GetColumnFamilySet();
+    assert(cfd_set->NumberOfColumnFamilies() == 1);
+    ColumnFamilyData* default_cfd = *cfd_set->begin();
+    MutableCFOptions mutable_cf_options =
+        *default_cfd->GetLatestMutableCFOptions();
+    default_cfd->mem()->SetNextLogNumber(logfile_number_);
+
+    int idx = 0;
+    std::vector<DBCompactionJob> db_jobs;
+    for (auto job : jobs) {
+      num_running_flushes_++;
+      auto nvm_flush_job = new NVMFlushJob(
+          job,
+          dbname_, default_cfd, immutable_db_options_, mutable_cf_options,
+          file_options_for_compaction_, versions_.get(),
+          &mutex_, &shutting_down_,
+          &job_context, &log_buffer, directories_.GetDbDir(),
+          GetDataDir(default_cfd, 0U),
+          GetCompressionFlush(*default_cfd->ioptions(), mutable_cf_options), stats_,
+          &event_logger_, mutable_cf_options.report_bg_io_stats,
+          true /* sync_output_directory */, true /* write_manifest */,
+          io_tracer_, db_id_, db_session_id_);
+      nvm_flush_job->logs_with_prep_tracker_ = &logs_with_prep_tracker_;
+
+      DBCompactionJob db_job;
+      superversion_contexts.emplace_back(SuperVersionContext((idx++) == 0));
+      db_job.superversion_context = &(superversion_contexts.back());
+      db_job.nvm_flush_job = nvm_flush_job;
+      db_job.nvm_flush_job->Preprocess();
+      db_jobs.push_back(db_job);
+    }
+
+    mutex_.Unlock();
+    SingleCompactionJob::thread_pool->SetJobCount(db_jobs.size());
+    for (auto& db_job : db_jobs) {
+      auto func = std::bind(&NVMFlushJob::Build,
+                            db_job.nvm_flush_job);
+      SingleCompactionJob::thread_pool->SubmitJob(func);
+    }
+    SingleCompactionJob::thread_pool->Join();
+
+    mutex_.Lock();
+    InternalStats::CompactionStats stats(CompactionReason::kFlush, 1);
+    for (auto& db_job : db_jobs) {
+      db_job.nvm_flush_job->PostProcess(stats);
+    }
+    db_jobs.back().nvm_flush_job->WriteResult(stats);
+
+    InstallSuperVersionAndScheduleWork(default_cfd,
+                                       db_jobs.front().superversion_context,
+                                       mutable_cf_options);
+
+    const std::string& column_family_name = default_cfd->GetName();
+    Version* const current = default_cfd->current();
+    const VersionStorageInfo* const storage_info = current->storage_info();
+
+    VersionStorageInfo::LevelSummaryStorage tmp;
+    ROCKS_LOG_BUFFER(&log_buffer, "[%s] Level summary: %s\n",
+                     column_family_name.c_str(),
+                     storage_info->LevelSummary(&tmp));
+
+    auto sfm = static_cast<SstFileManagerImpl*>(
+        immutable_db_options_.sst_file_manager.get());
+    if (sfm) {
+      for (auto& db_job : db_jobs) {
+        // Notify sst_file_manager that a new file was added
+        std::string file_path = MakeTableFileName(
+            default_cfd->ioptions()->cf_paths[0].path,
+            db_job.nvm_flush_job->meta_.fd.GetNumber());
+        sfm->OnAddFile(file_path);
+      }
+    }
+
+    TEST_SYNC_POINT("DBImpl::SyncCallFlush:FlushFinish:0");
+    ReleaseFileNumberFromPendingOutputs(pending_outputs_inserted_elem);
+
+    // If flush failed, we want to delete all temporary files that we might have
+    // created. Thus, we force full scan in FindObsoleteFiles()
+    FindObsoleteFiles(&job_context, false);
+    // delete unnecessary files if any, this is done outside the mutex
+    if (job_context.HaveSomethingToClean() ||
+        job_context.HaveSomethingToDelete() || !log_buffer.IsEmpty()) {
+      mutex_.Unlock();
+      TEST_SYNC_POINT("DBImpl::SyncCallFlush:FilesFound");
+      // Have to flush the info logs before bg_flush_scheduled_--
+      // because if bg_flush_scheduled_ becomes 0 and the lock is
+      // released, the deconstructor of DB can kick in and destroy all the
+      // states of DB so info_log might not be available after that point.
+      // It also applies to access other states that DB owns.
+      log_buffer.FlushBufferToLog();
+      if (job_context.HaveSomethingToDelete()) {
+        PurgeObsoleteFiles(job_context);
+      }
+      job_context.Clean();
+      mutex_.Lock();
+    }
+    TEST_SYNC_POINT("DBImpl::SyncCallFlush:ContextCleanedUp");
+
+    for (auto& db_job : db_jobs) {
+      num_running_flushes_--;
+      delete db_job.nvm_flush_job;
+    }
+
+    atomic_flush_install_cv_.SignalAll();
+    bg_cv_.SignalAll();
   }
 }
 

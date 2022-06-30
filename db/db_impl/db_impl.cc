@@ -25,6 +25,10 @@
 #include <utility>
 #include <vector>
 
+#include "db/art/timestamp.h"
+#include "db/art/logger.h"
+#include "db/art/node_allocator.h"
+#include "db/art/nvm_manager.h"
 #include "db/arena_wrapped_db_iter.h"
 #include "db/builder.h"
 #include "db/compaction/compaction_job.h"
@@ -268,6 +272,37 @@ DBImpl::DBImpl(const DBOptions& options, const std::string& dbname,
   // we won't drop any deletion markers until SetPreserveDeletesSequenceNumber()
   // is called by client and this seqnum is advanced.
   preserve_deletes_seqnum_.store(0);
+
+  Timestamps::factor = options.timestamp_factor;
+
+  // Use init time as start time.
+  GetStartTime();
+  InitLogFile();
+
+  std::unordered_map<std::string, int64_t> memory_usages;
+  memory_usages["vlog"] = options.vlog_file_size;
+  memory_usages["nodememory"] = options.node_memory_size;
+  bool recovery = InitializeMemory(memory_usages, options.nvm_path);
+
+  InitializeNodeAllocator(options, recovery);
+  vlog_manager_ = new VLogManager(options, recovery);
+
+  compactor_ = new Compactor(options);
+
+  group_manager_ = new HeatGroupManager(options);
+  group_manager_->StartThread();
+
+  global_memtable_ = new GlobalMemtable(
+      vlog_manager_, group_manager_, env_, recovery);
+
+  Compactor::compaction_threshold_ = options.compaction_threshold;
+  Compactor::max_rewrite_count = options.max_rewrite_count;
+
+  compactor_->SetDB(this);
+  compactor_->SetGroupManager(group_manager_);
+  compactor_->SetVLogManager(vlog_manager_);
+  compactor_->SetGlobalMemtable(global_memtable_);
+  compactor_->StartThread();
 }
 
 Status DBImpl::Resume() {
@@ -488,7 +523,10 @@ void DBImpl::CancelAllBackgroundWork(bool wait) {
 Status DBImpl::CloseHelper() {
   // Guarantee that there is no background error recovery in progress before
   // continuing with the shutdown
+  compactor_->StopThread();
+  group_manager_->StopThread();
   mutex_.Lock();
+
   shutdown_initiated_ = true;
   error_handler_.CancelErrorRecovery();
   while (error_handler_.IsRecoveryInProgress()) {
@@ -657,6 +695,10 @@ DBImpl::~DBImpl() {
     closed_ = true;
     CloseHelper().PermitUncheckedError();
   }
+  delete group_manager_;
+  delete vlog_manager_;
+  delete global_memtable_;
+  UnmapMemory();
 }
 
 void DBImpl::MaybeIgnoreError(Status* s) const {
@@ -1678,10 +1720,16 @@ Status DBImpl::GetImpl(const ReadOptions& read_options, const Slice& key,
   LookupKey lkey(key, snapshot, read_options.timestamp);
   PERF_TIMER_STOP(get_snapshot_time);
 
-  bool skip_memtable = (read_options.read_tier == kPersistedTier &&
+  [[maybe_unused]] bool skip_memtable = (read_options.read_tier == kPersistedTier &&
                         has_unpersisted_data_.load(std::memory_order_relaxed));
   bool done = false;
   std::string* timestamp = ts_sz > 0 ? get_impl_options.timestamp : nullptr;
+
+  // Change
+#ifdef ART
+  std::string art_key(key.data(), key.size());
+  done = global_memtable_->Get(art_key, *get_impl_options.value->GetSelf(), &s);
+#else
   if (!skip_memtable) {
     // Get value associated with key
     if (get_impl_options.get_value) {
@@ -1723,6 +1771,8 @@ Status DBImpl::GetImpl(const ReadOptions& read_options, const Slice& key,
       return s;
     }
   }
+#endif
+
   if (!done) {
     PERF_TIMER_GUARD(get_from_output_files_time);
     sv->current->Get(
@@ -2466,7 +2516,12 @@ Status DBImpl::CreateColumnFamily(const ColumnFamilyOptions& cf_options,
     s = WriteOptionsFile(true /*need_mutex_lock*/,
                          true /*need_enter_write_thread*/);
   }
-  return s;
+
+  //return s;
+
+  // Ignore error when column family already exists, just use default handle
+  *handle = DefaultColumnFamily();
+  return Status::OK();
 }
 
 Status DBImpl::CreateColumnFamilies(
@@ -4983,6 +5038,14 @@ Status DBImpl::GetCreationTimeOfOldestFile(uint64_t* creation_time) {
     return Status::NotSupported("This API only works if max_open_files = -1");
   }
 }
+
+void DBImpl::TestCompaction() {
+  //compactor_.TestCompaction();
+}
+
+void DBImpl::TestGC() {
+}
+
 #endif  // ROCKSDB_LITE
 
 }  // namespace ROCKSDB_NAMESPACE

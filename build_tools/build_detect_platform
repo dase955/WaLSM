@@ -272,6 +272,10 @@ JAVA_LDFLAGS="$PLATFORM_LDFLAGS"
 JAVA_STATIC_LDFLAGS="$PLATFORM_LDFLAGS"
 JAVAC_ARGS="-source 7"
 
+COMMON_FLAGS="$COMMON_FLAGS -DUSE_PMEM -DART"
+PLATFORM_LDFLAGS="$PLATFORM_LDFLAGS -lpmem"
+JAVA_LDFLAGS="$JAVA_LDFLAGS -lpmem"
+
 if [ "$CROSS_COMPILE" = "true" -o "$FBCODE_BUILD" = "true" ]; then
     # Cross-compiling; do not try any compilation tests.
     # Also don't need any compilation tests if compiling on fbcode
@@ -478,9 +482,9 @@ EOF
           }
 EOF
         if [ "$?" = 0 ]; then
-            COMMON_FLAGS="$COMMON_FLAGS -DMEMKIND"
-            PLATFORM_LDFLAGS="$PLATFORM_LDFLAGS -lmemkind"
-            JAVA_LDFLAGS="$JAVA_LDFLAGS -lmemkind"
+            COMMON_FLAGS="$COMMON_FLAGS"
+            PLATFORM_LDFLAGS="$PLATFORM_LDFLAGS"
+            JAVA_LDFLAGS="$JAVA_LDFLAGS"
         fi
     fi
 

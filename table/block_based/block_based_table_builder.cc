@@ -1551,7 +1551,7 @@ void BlockBasedTableBuilder::EnterUnbuffered() {
     assert(!keys.empty());
 
     if (r->compression_opts.parallel_threads > 1) {
-      ParallelCompressionRep::BlockRep* block_rep;
+      ParallelCompressionRep::BlockRep* block_rep = nullptr;
       r->pc_rep->block_rep_pool.pop(block_rep);
 
       std::swap(*(block_rep->data), data_block);

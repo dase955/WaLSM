@@ -1,0 +1,5 @@
+group_split_threshold 12
+group_min_size 4096
+layer_ts_interval 100
+timestamp_factor 7
+max_rewrite_count 500

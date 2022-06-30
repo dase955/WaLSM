@@ -27,6 +27,17 @@ LIB_SOURCES =                                                   \
   db/compaction/sst_partitioner.cc                              \
   db/convenience.cc                                             \
   db/db_filesnapshot.cc                                         \
+  db/art/art_node.cc                                            \
+  db/art/compactor.cc                                           \
+  db/art/global_memtable.cc                                     \
+  db/art/heat_group.cc                                          \
+  db/art/lock.cc                                                \
+  db/art/logger.cc                                              \
+  db/art/node_allocator.cc                                      \
+  db/art/timestamp.cc                                           \
+  db/art/utils.cc                                               \
+  db/art/vlog_manager.cc                                        \
+  db/art/nvm_manager.cc                                         \
   db/db_impl/db_impl.cc                                         \
   db/db_impl/db_impl_compaction_flush.cc                        \
   db/db_impl/db_impl_debug.cc                                   \
@@ -44,6 +55,7 @@ LIB_SOURCES =                                                   \
   db/experimental.cc                                            \
   db/external_sst_file_ingestion_job.cc                         \
   db/file_indexer.cc                                            \
+  db/nvm_flush_job.cc                                           \
   db/flush_job.cc                                               \
   db/flush_scheduler.cc                                         \
   db/forward_iterator.cc                                        \
@@ -103,7 +115,6 @@ LIB_SOURCES =                                                   \
   memory/arena.cc                                               \
   memory/concurrent_arena.cc                                    \
   memory/jemalloc_nodump_allocator.cc                           \
-  memory/memkind_kmem_allocator.cc                              \
   memtable/alloc_tracker.cc                                     \
   memtable/hash_linklist_rep.cc                                 \
   memtable/hash_skiplist_rep.cc                                 \
