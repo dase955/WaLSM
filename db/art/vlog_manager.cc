@@ -50,7 +50,7 @@ int SearchVptr(
       int found = 31 - __builtin_clz(res);
       res -= (1 << found);
       int index = found + base;
-      if (index < size && vptr == (data[index * 2 + 1] & 0x000000ffffffffff)) {
+      if ((index < size) && (vptr == (data[index * 2 + 1] & 0x000000ffffffffff))) {
         vptr = data[index * 2 + 1];
         return index;
       }
@@ -295,6 +295,8 @@ void VLogManager::ReadAndSortData(std::vector<char*>& segments) {
         slice.remove_prefix(value_length);
       }
 
+      //TODO: Check record
+
       if (bitmap[read / 8] & (1 << (read % 8))) {
         std::string record(record_start, slice.data() - record_start);
         gc_data.emplace_back(
@@ -402,17 +404,17 @@ void VLogManager::BGWork() {
         int rows = GET_ROWS(nvm_node->meta.header);
 
         while (index < data_count) {
-          cur_data = gc_data[index];
-          if (!cur_data.key.starts_with(cur_prefix)) {
+          auto& check_data = gc_data[index];
+          if (!check_data.key.starts_with(cur_prefix)) {
             break;
           }
 
-          auto hash = (uint8_t)Hash(cur_data.key.data(), cur_data.key.size(), 397);
+          auto hash = (uint8_t)Hash(check_data.key.data(), check_data.key.size(), 397);
           auto found_index = SearchVptr(
-              inner_node, hash, rows, cur_data.vptr);
+              inner_node, hash, rows, check_data.vptr);
           if (found_index != -1) {
-            WriteToNewSegment(cur_data.record, new_vptr);
-            UpdateActualVptr(cur_data.vptr, new_vptr);
+            WriteToNewSegment(check_data.record, new_vptr);
+            UpdateActualVptr(check_data.vptr, new_vptr);
 
             if (found_index >= 0) {
               nvm_node->data[found_index * 2 + 1] = new_vptr;

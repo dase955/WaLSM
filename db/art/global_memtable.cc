@@ -449,8 +449,6 @@ bool GlobalMemtable::Get(std::string& key, std::string& value, Status* s) {
   bool found = false;
   while (current && !found) {
     if (IS_LEAF(current)) {
-      printf("squeezed size in this node = %d\n", current->squeezed_size_);
-
       found = FindKeyInInnerNode(current, level, key, value, s);
     } else if (level == max_level) {
       shared_lock<RWSpinLock> read_lk(current->vptr_lock_);
