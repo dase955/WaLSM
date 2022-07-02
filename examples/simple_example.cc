@@ -35,26 +35,26 @@ class KeyGenerator {
     prefix_ = prefix;
   }
 
-  virtual int Next() = 0;
+  virtual uint64_t Next() = 0;
 
   virtual ~KeyGenerator() {}
 
   virtual void Prepare() {
-    // Do nothing;
+      // Do nothing;
   };
 
   // TODO
   std::string NextKey() {
     std::string s = std::to_string(Next());
-    return prefix_ + std::string(9 - s.length(), '0') + s;
+    return prefix_ + s;
   }
 
-  protected:
-   int record_count_;
+ protected:
+  int record_count_;
 
-   int sample_range_;
+  int sample_range_;
 
-   std::string prefix_ = "user";
+  std::string prefix_ = "user";
 };
 
 class YCSBZipfianGenerator : public KeyGenerator{
@@ -77,7 +77,7 @@ class YCSBZipfianGenerator : public KeyGenerator{
     return sum;
   }
 
-  int Next() {
+  uint64_t Next() {
     double u = rand_double(rng);
     double uz = u * zetan_;
 
@@ -166,7 +166,7 @@ class CustomZipfianGenerator : public KeyGenerator {
     CheckFreq(records_);
   }
 
-  int Next() override {
+  uint64_t Next() override {
     return records_[cur_index_++];
   }
 
@@ -240,9 +240,9 @@ class CustomZipfianGenerator : public KeyGenerator {
 class YCSBLoadGenerator : public KeyGenerator {
  public:
   YCSBLoadGenerator(int record_count, int sample_range)
-  : KeyGenerator(record_count, sample_range) {};
+      : KeyGenerator(record_count, sample_range) {};
 
-  int Next() override {
+  uint64_t Next() override {
     return fnvhash64(cur_index_++);
   }
 
@@ -318,14 +318,15 @@ class Inserter {
     }
 
     while (insert_per_thread--) {
-      auto begin_time = std::chrono::steady_clock::now();
+      [[maybe_unused]] auto begin_time = std::chrono::steady_clock::now();
       auto key = key_generator_->NextKey();
       auto value = GenerateValueFromKey(key);
       auto status = db_->Put(WriteOptions(), key, value);
-      auto end_time = std::chrono::steady_clock::now();
+      [[maybe_unused]] auto end_time = std::chrono::steady_clock::now();
 
       ++completed_count_;
       if (!status.ok()) {
+        assert(false);
         ++failed_count_;
       }
     }
