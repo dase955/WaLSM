@@ -323,23 +323,19 @@ class VersionStorageInfo {
     std::atomic<uint64_t>* queries;
     std::vector<QKey>* q_keys;
 
-    FilePartition(int level, Slice smallest, bool is_last)
+    FilePartition(int level, Slice smallest, bool is_last_)
         : level_(level),
           level_size(level, 0),
           smallest_(smallest),
           largest_(""),
           files_(new std::vector<FileMetaData*>[level]),
           data_size_(0),
-          is_last(is_last),
+          is_last(is_last_),
           is_tier(level, true),
           is_compaction_work(level, false),
           search_counter(new std::atomic<uint64_t>[level]),
           queries(new std::atomic<uint64_t>[level]),
-          q_keys(new std::vector<QKey>[level]){
-              if (level > 0) {
-                is_tier[1] = false;
-              }
-          };
+          q_keys(new std::vector<QKey>[level]) { };
 
     FilePartition(const FilePartition* another)
         : level_(another->level_),

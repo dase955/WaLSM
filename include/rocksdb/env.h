@@ -137,8 +137,8 @@ struct EnvOptions {
   // If not nullptr, write rate limiting is enabled for flush and compaction
   RateLimiter* rate_limiter = nullptr;
 
-  // split threshold, default 512M
-  uint64_t split_threshold = 3 * 1024 * 1024 * 1024L;
+  // split threshold, default 1.5gb
+  uint64_t split_threshold = 1536 * 1024 * 1024L;
 };
 
 class Env {

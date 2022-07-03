@@ -254,7 +254,7 @@ bool UniversalCompactionPicker::NeedsCompaction(
   }
   for (auto& kv : vstorage->partitions_map_) {
     auto* partition = kv.second;
-    uint64_t base_size = 128 * 1024 * 1024L;
+    uint64_t base_size = 64 * 1024 * 1024L;
     for (int i = 1; i < vstorage->num_levels() - 1; i++) {
       if (partition->level_size[i] >= base_size) {
         return true;
@@ -406,9 +406,10 @@ Compaction* UniversalCompactionBuilder::PickCompaction() {
     c = PickCompactionForSizeMarked();
   }
 
-  if (c == nullptr && sorted_runs_.size() >=
-      static_cast<size_t>(
-          mutable_cf_options_.level0_file_num_compaction_trigger)) {
+  if (c == nullptr &&
+      sorted_runs_.size() >=
+          static_cast<size_t>(
+              mutable_cf_options_.level0_file_num_compaction_trigger)) {
     c = PickCompactionForL0();
   }
 
@@ -488,13 +489,24 @@ Compaction* UniversalCompactionBuilder::PickCompactionForL0() {
       inputs[i].level = start_level + static_cast<int>(i);
     }
 
+    std::string l0_smallest = "", l0_largest = "";
     for (size_t i = 0; i < sorted_runs_.size(); i++) {
       auto& picking_sr = sorted_runs_[i];
       FileMetaData* picking_file = picking_sr.file;
       if (sorted_runs_[i].level == 0 && !sorted_runs_[i].being_compacted) {
         estimated_total_size += sorted_runs_[i].size;
         inputs[0].files.push_back(picking_file);
+        // update L0 compact range
+        if (l0_smallest.empty() ||
+            picking_file->smallest.user_key().compare(l0_smallest) < 0) {
+          l0_smallest = picking_file->smallest.user_key().ToString();
+        }
+        if (l0_largest.empty() ||
+            picking_file->largest.user_key().compare(l0_largest) > 0) {
+          l0_largest = picking_file->largest.user_key().ToString();
+        }
       }
+
       char file_num_buf[256];
       picking_sr.DumpSizeInfo(file_num_buf, sizeof(file_num_buf), i);
       ROCKS_LOG_BUFFER(log_buffer_, "[%s] Universal: Picking %s",
@@ -510,13 +522,18 @@ Compaction* UniversalCompactionBuilder::PickCompactionForL0() {
             to_add.clear();
             break;
           }
-          to_add.push_back(f);
+          // check if overlap
+          if (!l0_smallest.empty() && !l0_largest.empty() &&
+              f->largest.user_key().compare(l0_smallest) >= 0 &&
+              f->smallest.user_key().compare(l0_largest) <= 0) {
+            to_add.push_back(f);
+          }
         }
 
         for (FileMetaData* f : to_add) {
           auto& input_files = inputs[output_level].files;
-          if (std::find(input_files.begin(), input_files.end(), f)
-              == input_files.end()) {
+          if (std::find(input_files.begin(), input_files.end(), f) ==
+              input_files.end()) {
             input_files.push_back(f);
           }
         }
@@ -543,7 +560,7 @@ Compaction* UniversalCompactionBuilder::PickCompactionForL0() {
 
 Compaction* UniversalCompactionBuilder::PickCompactionForSizeMarked() {
   for (auto& kv : vstorage_->partitions_map_) {
-    uint64_t base_size = 128 * 1024 * 1024L;
+    uint64_t base_size = 64 * 1024 * 1024L;
     auto* partition = kv.second;
     int target_level = -1;
     for (int level = 1; level < vstorage_->num_levels() - 1; level++) {

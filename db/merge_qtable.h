@@ -31,7 +31,7 @@ const uint64_t READ_PENALTY_ROUND = 1e9L;
 
 struct QValue {
   double q_k, q_m;
-  QValue(double q_keep, double q_merge) : q_k(q_keep), q_m(q_merge) {}
+  QValue(double q_keep_, double q_merge_) : q_k(q_keep_), q_m(q_merge_) {}
 };
 
 struct QKey {
