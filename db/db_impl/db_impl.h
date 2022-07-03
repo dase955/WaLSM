@@ -1861,6 +1861,8 @@ class DBImpl : public DB {
 
   Status DisableFileDeletionsWithLock();
 
+  void Reset() override;
+
   // table_cache_ provides its own synchronization
   std::shared_ptr<Cache> table_cache_;
 

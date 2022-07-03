@@ -31,7 +31,8 @@ enum GroupOperator {
   kOperatorSplit,
   kOperatorMerge,
   kOperatorLevelDown,
-  kOperationChooseCompaction
+  kOperationChooseCompaction,
+  kOperationFlushAll,
 };
 
 struct GroupOperation {

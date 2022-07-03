@@ -86,6 +86,8 @@ class GlobalMemtable {
 
   ~GlobalMemtable();
 
+  void Reset();
+
   void Recovery();
 
   InnerNode* RecoverNonLeaf(InnerNode* parent, int level, HeatGroup*& group);
@@ -128,6 +130,8 @@ class GlobalMemtable {
                        autovector<KVStruct>* data);
 
   InnerNode* root_;
+
+  InnerNode* tail_;
 
   // TODO: Use prefixes to fast search inner nodes
   std::unordered_map<std::string, InnerNode*> prefixes_;

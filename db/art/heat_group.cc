@@ -199,9 +199,6 @@ HeatGroupManager::HeatGroupManager(const DBOptions& options) {
   HeatGroup::layer_ts_interval_ = options.layer_ts_interval;
   HeatGroup::force_decay_waterline_ = options.timestamp_waterline;
 
-  auto coeff = options.heat_update_coeff;
-
-  // Do some pre calculation
   for (size_t i = 0; i < MAX_LAYERS + 2; ++i) {
     auto head = new HeatGroup();
     auto tail = new HeatGroup();
@@ -210,6 +207,9 @@ HeatGroupManager::HeatGroupManager(const DBOptions& options) {
     group_queue_.heads_[i] = head;
     group_queue_.tails_[i] = tail;
   }
+
+  // Do some pre calculation
+  auto coeff = options.heat_update_coeff;
 
   LayerHeatBound[0] = 0.0;
   for (size_t i = 1; i < MAX_LAYERS + 1; ++i) {
@@ -222,6 +222,23 @@ HeatGroupManager::HeatGroupManager(const DBOptions& options) {
     HeatGroup::decay_factor_[i] =
         1.0f / (float)std::pow(coeff, i * HeatGroup::layer_ts_interval_);
   }
+}
+
+void HeatGroupManager::Reset() {
+  StopThread();
+  group_operations_.clear();
+  for (size_t level = 0; level < MAX_LAYERS + 2; ++level) {
+    auto group = group_queue_.heads_[level]->next;
+    while (group != group_queue_.tails_[level]) {
+      auto next_group = group->next;
+      delete group->first_node_;
+      delete group;
+      group = next_group;
+    }
+    group_queue_.heads_[level]->next = group_queue_.tails_[level];
+    group_queue_.tails_[level]->prev = group_queue_.heads_[level];
+  }
+  StartThread();
 }
 
 void HeatGroupManager::BGWork() {
@@ -251,9 +268,10 @@ void HeatGroupManager::BGWork() {
       case kOperationChooseCompaction:
         ChooseCompaction((Compactor*)operation.arg, 4);
         break;
+      case kOperationFlushAll:
+        ChooseFirstGroup((Compactor*)operation.arg);
+        break;
     }
-
-
   }
 }
 
@@ -577,6 +595,30 @@ void HeatGroupManager::ChooseCompaction(
   }
 
   compactor->Notify(chosen_groups);
+}
+
+void HeatGroupManager::ChooseFirstGroup(Compactor* compactor) {
+  HeatGroup* group = nullptr;
+  for (int level = BASE_LAYER; level < 7; ++level) {
+    if (group_queue_.heads[level]->next != group_queue_.tails[level]) {
+      group = group_queue_.heads[level]->next;
+      break;
+    }
+  }
+
+  assert(!group);
+  while (group->prev_seq) {
+    group = group->prev_seq;
+  }
+
+  auto first_group = group;
+  while (group) {
+    group->is_removed = true;
+    group = group->next_seq;
+  }
+
+  std::vector<HeatGroup*> groups{first_group};
+  compactor->Notify(groups);
 }
 
 } // namespace ROCKSDB_NAMESPACE

@@ -64,11 +64,6 @@ int SearchVptr(
 
 auto RecordPrefixSize = WriteBatchInternal::kRecordPrefixSize;
 
-bool VLogManager::RecentWritten(uint64_t vptr) {
-  GetActualVptr(vptr);
-  return fetch_time - write_time_[vptr >> 20] <= 1024;
-}
-
 void VLogManager::PopFreeSegment() {
   while (free_segments_.size() < 36) {
     std::this_thread::sleep_for(std::chrono::milliseconds(1));
@@ -78,9 +73,6 @@ void VLogManager::PopFreeSegment() {
   header_ = (VLogSegmentHeader*)cur_segment_;
   segment_remain_ = vlog_segment_size_ - header_->offset_;
   assert(header_->offset_ < vlog_segment_size_);
-
-  int idx = (cur_segment_ - pmemptr_) / vlog_segment_size_;
-  write_time_[idx] = ++fetch_time;
 }
 
 char* VLogManager::GetSegmentFromFreeQueue() {
@@ -110,11 +102,6 @@ VLogManager::VLogManager(const DBOptions& options, bool recovery)
       vlog_bitmap_size_(vlog_header_size_ - sizeof(VLogSegmentHeader)),
       force_gc_ratio_((size_t)
                           (options.vlog_force_gc_ratio_ * vlog_segment_num_)){
-  write_time_ = new int[vlog_segment_num_];
-  for (size_t i = 0; i < vlog_segment_num_; ++i) {
-    write_time_[i] = 0;
-  }
-
   pmemptr_ = GetMappedAddress("vlog");
   recovery ? Recover() : Initialize();
 
@@ -155,6 +142,24 @@ void VLogManager::Recover() {
     free_segments_.emplace_back(cur_ptr);
     cur_ptr += vlog_segment_size_;
   }
+}
+
+void VLogManager::Reset() {
+  StopThread();
+
+  free_segments_.clear();
+  used_segments_.clear();
+  gc_pages_.clear();
+
+  Initialize();
+
+  NVM_BARRIER;
+
+  segment_for_gc_ = GetSegmentFromFreeQueue();
+
+  PopFreeSegment();
+
+  StartThread();
 }
 
 void VLogManager::Initialize() {

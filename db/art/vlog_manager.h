@@ -62,6 +62,8 @@ class VLogManager : public BackgroundThread {
 
   void Recover();
 
+  void Reset();
+
   void SetMemtable(GlobalMemtable* mem);
 
   RecordIndex GetFirstIndex(size_t wal_size) const;
@@ -87,8 +89,6 @@ class VLogManager : public BackgroundThread {
 
   float Estimate();
 
-  bool RecentWritten(uint64_t vptr);
-
  private:
   void BGWork() override;
 
@@ -113,8 +113,6 @@ class VLogManager : public BackgroundThread {
   uint32_t segment_remain_;
 
   GlobalMemtable* mem_;
-
-  int* write_time_;
 
   TQueueConcurrent<char*> free_segments_;
 

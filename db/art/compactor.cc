@@ -379,6 +379,78 @@ void Compactor::BGWork() {
   }
 }
 
+void Compactor::Reset(){
+  StopThread();
+
+  std::unique_lock<std::mutex> lock{mutex_};
+  group_manager_->AddOperation(nullptr, kOperationFlushAll, false, this);
+  cond_var_.wait(lock);
+
+  std::vector<std::vector<HeatGroup*>> compaction_groups;
+  auto cur = chosen_groups_[0];
+  while (cur) {
+    std::vector<HeatGroup*> compaction_group;
+    int size_in_job = 0;
+    while (size_in_job < HeatGroup::group_min_size_ && cur) {
+      size_in_job += cur->group_size_.load(std::memory_order_relaxed);
+      compaction_group.push_back(cur);
+      cur = cur->next_seq;
+    }
+
+    compaction_groups.push_back(compaction_group);
+  }
+
+  int idx = 0;
+  for (auto& compaction_group : compaction_groups) {
+    SingleCompactionJob* job = chosen_jobs_[idx];
+    job->Reset();
+
+    for (auto& heat_group : compaction_group) {
+      auto node = heat_group->first_node_->next_node_;
+      while (node != heat_group->last_node_->next_node_) {
+        if (NOT_LEAF(node) || !node->heat_group_) {
+          node = node->next_node_;
+          continue;
+        }
+
+        job->nvm_nodes_and_sizes.emplace_back(
+            node->nvm_node_, GET_SIZE(node->nvm_node_->meta.header));
+        job->oldest_key_time_ =
+            std::min(job->oldest_key_time_, node->oldest_key_time_);
+        MEMCPY(node->nvm_node_->temp_buffer, node->buffer_,
+               SIZE_TO_BYTES(GET_NODE_BUFFER_SIZE(node->status_)),
+               PMEM_F_MEM_NODRAIN | PMEM_F_MEM_NONTEMPORAL);
+
+        node = node->next_node_;
+      }
+    }
+
+    if (++idx == 4) {
+      db_impl_->SyncCallFlush(chosen_jobs_);
+      idx = 0;
+    }
+  }
+
+  if (idx > 0) {
+    std::vector<SingleCompactionJob*> last_jobs;
+    for (int i = 0; i < idx; ++i) {
+      last_jobs.push_back(chosen_jobs_[i]);
+    }
+    db_impl_->SyncCallFlush(last_jobs);
+  }
+
+  MemTotalSize.store(0);
+  SqueezedSize.store(0);
+  CompactedSize.store(0);
+  SqueezedSizeInCompaction.store(0);
+  BackupRead.store(0);
+  for (auto job : chosen_jobs_) {
+    job->Reset();
+  }
+
+  StartThread();
+}
+
 void Compactor::CompactionPreprocess(SingleCompactionJob* job) {
   auto chosen_group = job->group_;
   InnerNode* start_node = chosen_group->first_node_;

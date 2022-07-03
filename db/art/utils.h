@@ -180,6 +180,7 @@ class BackgroundThread {
   virtual ~BackgroundThread() = default;
 
   void StartThread() {
+    thread_stop_ = false;
     background_thread_ = std::thread(&BackgroundThread::BGWork, this);
   }
 

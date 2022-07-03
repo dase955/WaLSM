@@ -180,6 +180,14 @@ InnerNode* GlobalMemtable::RecoverNonLeaf(InnerNode* parent, int level,
   return nullptr;
 }
 
+void GlobalMemtable::Reset() {
+  uint64_t inode_vptrs[262144] = {0};
+  int count = 0;
+  DeleteInnerNode(root_, inode_vptrs, count);
+  tail_ = root_ = nullptr;
+  InitFirstLevel();
+}
+
 void GlobalMemtable::Recovery() {
   root_ = RecoverInnerNode(GetNodeAllocator()->GetHead());
   SET_ART_FULL(root_);
@@ -219,59 +227,28 @@ void GlobalMemtable::Recovery() {
 
 void GlobalMemtable::InitFirstLevel() {
   root_ = AllocateLeafNode(0, 0, nullptr);
-  auto tail = AllocateLeafNode(1, 0, nullptr);
-  SET_NON_GROUP_START(tail);
+  tail_ = AllocateLeafNode(1, 0, nullptr);
+  SET_NON_GROUP_START(tail_);
 
-  tail->parent_node_ = root_;
-  SET_TAG(tail->nvm_node_->meta.header, DUMMY_TAG);
+  tail_->parent_node_ = root_;
+  SET_TAG(tail_->nvm_node_->meta.header, DUMMY_TAG);
   FLUSH(tail->nvm_node_, CACHE_LINE_SIZE);
   SET_NON_LEAF(root_);
   SET_ART_FULL(root_);
 
   // First level
-  root_->support_node_ = tail;
+  root_->support_node_ = tail_;
   root_->art = AllocateArtNode(kNode256);
   auto art256 = (ArtNode256*)root_->art;
   art256->header_.num_children_ = 256;
   art256->header_.art_type_ = kNode256;
 
-  /*std::string ascii(
-      "\t\n !\"#$%&'()*+,-./0123456789:;<=>?@"
-      "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
-      "[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~");
-  std::unordered_set<int> used_ascii;
-  used_ascii.insert(0);
-  used_ascii.insert(LAST_CHAR);
-  for (auto& c : ascii) {
-    used_ascii.insert((int)c);
-  }
-
-  auto pre_allocate_children = used_ascii.size();*/
-
-  InnerNode* next_inner_node = tail;
-  /* for (int first_char = LAST_CHAR; first_char >= 0; --first_char) {
-    auto inner_node = AllocateLeafNode(
-        1, static_cast<unsigned char>(first_char), next_inner_node);
-    auto group_start_node = AllocateLeafNode(
-        0, 0, inner_node);
-
-    auto heat_group = new HeatGroup();
-    SET_GROUP_START(group_start_node->status_);
-    heat_group->first_node_ = group_start_node;
-    heat_group->last_node_ = inner_node;
-    heat_group->group_manager_ = group_manager_;
-    inner_node->heat_group_ = heat_group;
-    group_start_node->heat_group_ = heat_group;
-    group_manager_->InsertIntoLayer(heat_group, BASE_LAYER);
-
-    art256->children_[first_char] = inner_node;
-    next_inner_node = group_start_node;
-
-    FLUSH(inner_node->nvm_node_, CACHE_LINE_SIZE);
-  } */
-
-  HeatGroup* last_group = new HeatGroup(tail);
+  auto dummy_node = AllocateLeafNode(1, 0, nullptr);
+  SET_NON_GROUP_START(dummy_node);
+  HeatGroup* last_group = new HeatGroup(dummy_node);
   group_manager_->InsertIntoLayer(last_group, TEMP_LAYER);
+  dummy_node->next_node_ = tail_;
+  InnerNode* next_inner_node = dummy_node;
 
   for (int first_char = LAST_CHAR; first_char >= 0;) {
     auto heat_group = new HeatGroup();

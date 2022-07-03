@@ -64,6 +64,8 @@ class Compactor : public BackgroundThread {
 
   ~Compactor() noexcept override;
 
+  void Reset();
+
   void SetGroupManager(HeatGroupManager* group_manager);
 
   void SetVLogManager(VLogManager* vlog_manager);

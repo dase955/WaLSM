@@ -67,6 +67,15 @@ NodeAllocator::NodeAllocator(const DBOptions& options, bool recovery)
   delete[] non_free_pages;
 }
 
+void NodeAllocator::Reset() {
+  num_free_ = total_size_ / (int64_t)PAGE_SIZE;
+  char* cur_ptr = pmemptr_;
+  for (int i = 0; i < num_free_; ++i) {
+    free_nodes_.emplace_back(cur_ptr);
+    cur_ptr += PAGE_SIZE;
+  }
+}
+
 NVMNode* NodeAllocator::AllocateNode() {
   char* ptr = free_nodes_.pop_front();
   memset(ptr, 0, 4096);

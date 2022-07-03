@@ -274,6 +274,7 @@ DBImpl::DBImpl(const DBOptions& options, const std::string& dbname,
   preserve_deletes_seqnum_.store(0);
 
   Timestamps::factor = options.timestamp_factor;
+  ResetTimestamp();
 
   // Use init time as start time.
   GetStartTime();
@@ -324,6 +325,15 @@ Status DBImpl::Resume() {
   Status s = error_handler_.RecoverFromBGError(true);
   mutex_.Lock();
   return s;
+}
+
+void DBImpl::Reset() {
+  compactor_->Reset();
+  group_manager_->Reset();     // ok
+  GetNodeAllocator()->Reset(); // ok
+  global_memtable_->Reset();   // ok
+  vlog_manager_->Reset();      // ok
+  ResetTimestamp();            // ok
 }
 
 // This function implements the guts of recovery from a background error. It
