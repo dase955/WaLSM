@@ -232,7 +232,7 @@ void GlobalMemtable::InitFirstLevel() {
 
   tail_->parent_node_ = root_;
   SET_TAG(tail_->nvm_node_->meta.header, DUMMY_TAG);
-  FLUSH(tail->nvm_node_, CACHE_LINE_SIZE);
+  FLUSH(tail_->nvm_node_, CACHE_LINE_SIZE);
   SET_NON_LEAF(root_);
   SET_ART_FULL(root_);
 

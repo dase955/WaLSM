@@ -1,6 +1,24 @@
-sudo rm -rf /tmp/db_test_art
-sudo rm -f /mnt/chen/nodememory
-sudo rm -f /tmp/run_ops_art
-sudo rm -f /tmp/debug_art.txt
-sudo rm -f /tmp/compaction_art.csv
-sudo taskset -c 0-17,36-53 ./simple_example
+#!/bin/bash
+
+Cleanup() {
+    rm -f /home/crh/compaction_art.csv
+    rm -f /home/crh/debug_art.txt
+    rm -f /home/crh/run_ops_art
+    rm -rf /home/crh/db_test_art
+    rm -f /mnt/pmem1/crh/nodememory
+}
+
+#Cleanup
+#./zipf_example 1.0 > 1.txt
+
+#Cleanup
+#./zipf_example 0.75 > 075.txt
+
+Cleanup
+./zipf_example 0.5 > 05.txt
+
+#Cleanup
+#./zipf_example 0.25 > 025.txt
+
+#Cleanup
+#./zipf_example 0.0 > 0.txt

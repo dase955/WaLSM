@@ -431,6 +431,8 @@ class WorkloadRunner {
           &WorkloadRunner::Insert, this, i, load_key_generator_);
     }
 
+    printf("Load opearation count = %d\n", load_key_generator_->GetOperationCount());
+
     auto ops_thread = std::thread(
         &WorkloadRunner::StatisticsThread, this,
         load_key_generator_->GetOperationCount());
@@ -449,6 +451,8 @@ class WorkloadRunner {
     }
 
     completed_count_.store(0, std::memory_order_relaxed);
+
+    printf("Run opearation count = %d\n", run_key_generator_->GetOperationCount());
 
     for (int i = 0; i < num_threads_; ++i) {
       work_threads_[i] = std::thread(
@@ -499,19 +503,16 @@ class WorkloadRunner {
       auto value = GenerateValueFromKey(key);
 
       switch (type) {
-        case kRead:
+        case kWrite:
           s = db_->Put(WriteOptions(), key, value);
           break;
-        case kWrite:
+        case kRead:
           s = db_->Get(ReadOptions(), key, &ret);
           break;
       }
 
       ++completed_count_;
-      if (!s.ok()) {
-        assert(false);
-        ++failed_count_;
-      }
+      assert(s.ok() || s.IsNotFound());
     }
   }
 
@@ -583,7 +584,16 @@ void ParseOptions(Options& options) {
   printf("options.max_rewrite_count = %d\n", options.max_rewrite_count);
 }
 
-void DoTest(std::string test_name) {
+int main(int argc, char* argv[]) {
+  setbuf(stdout, NULL);
+
+  float read_ratio = 0.5f;
+  if (argc == 2) {
+    read_ratio = atof(argv[1]);
+  }
+
+  printf("Read ratio = %.2f\n", read_ratio);
+
   int thread_num = 8;
   int load_count = 80000000;
   int run_count = 320000000;
@@ -595,17 +605,17 @@ void DoTest(std::string test_name) {
   options.use_direct_reads = true;
   options.enable_pipelined_write = true;
   options.compression = rocksdb::kNoCompression;
-  options.IncreaseParallelism(16);
 
-  std::string db_path = "/home/crh/db_test_" + test_name;
-  std::string ops_path =  "/home/crh/run_ops_" + test_name;
+  std::string db_path = "/home/crh/db_test_art";
+  std::string ops_path =  "/home/crh/run_ops_art";
 
   DB* db;
   DB::Open(options, db_path, &db);
 
   auto load_generator = new YCSBLoadGenerator(load_count, sample_range);
-  auto run_generator = new ZipfianGenerator(load_count, sample_range, 0.98);
-  run_generator->SetOperationCount(320000000);
+  auto run_generator = new ZipfianGenerator(run_count, sample_range, 0.98);
+  run_generator->SetOperationCount(120000000);
+  run_generator->SetReadRatio(read_ratio);
 
   WorkloadRunner runner(thread_num, db);
   runner.SetLoadGenerator(load_generator);
@@ -616,10 +626,4 @@ void DoTest(std::string test_name) {
   db->Close();
 
   delete db;
-}
-
-int main(int argc, char* argv[]) {
-  DoTest("art");
-
-  return 0;
 }
