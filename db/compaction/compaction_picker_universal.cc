@@ -413,11 +413,11 @@ Compaction* UniversalCompactionBuilder::PickCompaction() {
     c = PickCompactionForL0();
   }
 
-  if (mutable_cf_options_.compaction_options_universal.allow_trivial_move ==
-          true &&
-      c->compaction_reason() != CompactionReason::kPeriodicCompaction) {
-    c->set_is_trivial_move(false);
-  }
+  //  if (mutable_cf_options_.compaction_options_universal.allow_trivial_move ==
+  //          true &&
+  //      c->compaction_reason() != CompactionReason::kPeriodicCompaction) {
+  //    c->set_is_trivial_move(false);
+  //  }
 
   // update statistics
   if (c != nullptr) {
@@ -572,6 +572,7 @@ Compaction* UniversalCompactionBuilder::PickCompactionForSizeMarked() {
 
     if (target_level != -1) {
       const int output_level = target_level + 1;
+      bool is_trivial = false;
       std::vector<CompactionInputFiles> inputs(vstorage_->num_levels());
       for (int i = 0; i < vstorage_->num_levels(); i++) {
         inputs[i].level = i;
@@ -585,9 +586,13 @@ Compaction* UniversalCompactionBuilder::PickCompactionForSizeMarked() {
         }
       }
 
-      // too few files to compact
-      if (inputs[target_level].files.size() <= 1) {
+      // no compaction available
+      if (inputs[target_level].files.size() == 0) {
         continue;
+      }
+
+      if (inputs[target_level].files.size() == 1) {
+        is_trivial = true;
       }
 
       // if target level is level compaction ...
@@ -608,7 +613,7 @@ Compaction* UniversalCompactionBuilder::PickCompactionForSizeMarked() {
 
       uint32_t path_id =
           GetPathId(ioptions_, mutable_cf_options_, estimated_total_size);
-      return new Compaction(
+      Compaction* ret = new Compaction(
           vstorage_, ioptions_, mutable_cf_options_, mutable_db_options_,
           std::move(inputs), output_level, LLONG_MAX, LLONG_MAX, path_id,
           GetCompressionType(ioptions_, vstorage_, mutable_cf_options_,
@@ -618,6 +623,8 @@ Compaction* UniversalCompactionBuilder::PickCompactionForSizeMarked() {
           /* max_subcompactions */ 0, /* grandparents */ {},
           /* is manual */ false, 100.0, false /* deletion_compaction */,
           CompactionReason::kUniversalSizeRatio);
+      ret->set_is_trivial_move(is_trivial);
+      return ret;
     }
   }
   return nullptr;
