@@ -803,7 +803,7 @@ Status CompactionJob::Install(const MutableCFOptions& mutable_cf_options) {
 
   UpdateCompactionJobStats(stats);
 
-  auto stream = event_logger_->LogToBuffer(log_buffer_);
+  auto stream = event_logger_->LogToBuffer(log_buffer_, 1024 * 10);
   stream << "job" << job_id_ << "event"
          << "compaction_finished"
          << "compaction_time_micros" << stats.micros
@@ -838,6 +838,8 @@ Status CompactionJob::Install(const MutableCFOptions& mutable_cf_options) {
     stream.StartArray();
     for (int i = 1; i < partition->level_; i++) {
       stream << partition->files_[i].size();
+      stream << (partition->is_tier[i] ? "tier" : "level");
+      stream << (partition->is_compaction_work[i] ? "work" : "pend");
     }
     stream.EndArray();
   }
