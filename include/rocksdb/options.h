@@ -512,7 +512,7 @@ struct DBOptions {
   // If it is non empty, the log files will be in kept the specified dir.
   // When destroying the db,
   //   all log files in wal_dir and the dir itself is deleted
-  std::string wal_dir = "/mnt/chen/rocksdb_log";
+  std::string wal_dir = "/mnt/pmem1/crh/rocksdb_log";
 
   // The periodicity when obsolete files get deleted. The default
   // value is 6 hours. The files that get out of scope by compaction
@@ -1167,7 +1167,7 @@ struct DBOptions {
   // Default: false
   bool allow_data_in_errors = false;
 
-  std::string nvm_path = "/mnt/chen/rocksdb_l0";
+  std::string nvm_path = "/mnt/pmem1/crh/rocksdb_l0";
 };
 
 // Options to control the behavior of a database (passed to DB::Open)
