@@ -242,6 +242,7 @@ void HeatGroupManager::Reset() {
 }
 
 void HeatGroupManager::BGWork() {
+  Compactor* compactor = nullptr;
   while (!thread_stop_) {
     if (group_operations_.size() == 0) {
       // TryMergeBaseLayerGroups();
@@ -266,7 +267,8 @@ void HeatGroupManager::BGWork() {
         ForceGroupLevelDown();
         break;
       case kOperationChooseCompaction:
-        ChooseCompaction((Compactor*)operation.arg, 4);
+        compactor = (Compactor*)operation.arg;
+        ChooseCompaction(compactor, compactor->GetNumParallelCompaction());
         break;
       case kOperationFlushAll:
         ChooseFirstGroup((Compactor*)operation.arg);

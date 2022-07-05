@@ -76,6 +76,10 @@ class Compactor : public BackgroundThread {
 
   void Notify(std::vector<HeatGroup*>& heat_groups);
 
+  int GetNumParallelCompaction() const {
+    return num_parallel_compaction_;
+  }
+
   static int64_t compaction_threshold_;
 
   static size_t max_rewrite_count;
