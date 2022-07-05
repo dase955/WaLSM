@@ -24,63 +24,35 @@ struct ArtNode;
 #define likely(x)    __builtin_expect(!!(x), 1)
 #define unlikely(x)  __builtin_expect(!!(x), 0)
 
-inline uint64_t HashOnly(const char* key, size_t n) {
-  assert(n < 256);
-  uint32_t prefix = 0;
-  ((uint8_t*)&prefix)[0] = (uint8_t)(n & 255);
-  return (static_cast<uint64_t>(prefix) << 32) + Hash(key, n, 397);
-}
-
-inline uint64_t HashAndPrefix(const char* key, size_t n, size_t level) {
-  assert(n < 256);
-  assert(level > 0);
-  level -= (level - 1) % 3;
-  uint32_t prefix = 0;
-  memcpy((char*)&prefix + 1, key + level,
-         std::max(level, std::min(n, level + 3)) - level);
-  ((uint8_t*)&prefix)[0] = (uint8_t)(n & 255);
-  return (static_cast<uint64_t>(prefix) << 32) + Hash(key, n, 397);
-}
-
-// Maybe this function name is misleading,
-// but it just modifies prefix part in hash.
-inline void Rehash(const char* key, size_t n, uint64_t& hash, size_t level) {
-  assert(level > 0);
-  level -= (level - 1) % 3;
-  memset((uint8_t*)&hash + 5, 0, 3);
-  memcpy((uint8_t*)&hash + 5, key + level,
-         std::max(level, std::min(n, level + 3)) - level);
-}
-
 /////////////////////////////////////////////////////
 
 #ifdef ART_LITTLE_ENDIAN
 struct KVStruct {
   union {
-    uint64_t hash_;
+    uint64_t hash;
     struct {
-      char padding[4];
-      uint8_t key_length_;
-      char prefixes_[3];
+      uint32_t actual_hash;
+      uint8_t  key_length;
+      char     prefixes[3];
     };
   };
   union {
-    uint64_t vptr_;
+    uint64_t vptr;
     struct {
-      char padding2[5];
-      uint8_t  insert_times;
-      uint16_t kv_size_;
+      uint64_t actual_vptr  : 40;
+      uint64_t insert_times : 8;
+      uint64_t kv_size      : 16;
     };
   };
 
   KVStruct() = default;
 
-  KVStruct(uint64_t hash, uint64_t vptr) : hash_(hash), vptr_(vptr) {};
+  KVStruct(uint64_t hash_, uint64_t vptr_) : hash(hash_), vptr(vptr_) {};
 };
 
 inline char GetPrefix(const KVStruct& kvInfo, size_t level) {
   assert(level > 0);
-  return kvInfo.prefixes_[(level - 1) % 3];
+  return kvInfo.prefixes[(level - 1) % 3];
 }
 
 inline void GetActualVptr(uint64_t& vptr) {
@@ -119,7 +91,7 @@ inline void GetActualVptr(uint64_t& vptr) {
   vptr >>= 16;
 }
 
-inline void UpdateActualVptr(uint64_t old_vptr, uint64_t& new_vptr) {
+inline void UpdateVptrInfo(uint64_t old_vptr, uint64_t& new_vptr) {
   new_vptr <<= 16;
   new_vptr |= (old_vptr & 0x000000000000ffff);
 }
@@ -130,6 +102,36 @@ inline void UpdateInsertTimes(uint64_t& vptr, uint64_t insert_times) {
 #endif
 
 /////////////////////////////////////////////////////
+
+inline void HashOnly(KVStruct& s, Slice& key) {
+  assert(key.size() < 256);
+  memset(s.prefixes, 0, 3);
+  s.key_length = key.size();
+  s.actual_hash = Hash(key.data(), key.size(), 397);
+}
+
+template<typename T>
+inline uint64_t HashAndPrefix(T& key, size_t level) {
+  KVStruct s{};
+  s.key_length = key.size();
+  s.actual_hash = Hash(key.data(), key.size(), 397);
+  level -= (level - 1) % 3;
+  memcpy(s.prefixes, key.data() + level, std::max(level, std::min(key.size(), level + 3)) - level);
+  return s.hash;
+}
+
+template uint64_t HashAndPrefix<std::string>(std::string&, size_t);
+template uint64_t HashAndPrefix<Slice>(Slice&, size_t);
+
+// Maybe this function name is misleading,
+// but it just modifies prefix part in hash.
+inline void Rehash(KVStruct& s, Slice& key, size_t level) {
+  assert(level > 0);
+  level -= (level - 1) % 3;
+  memset(s.prefixes, 0, 3);
+  memcpy(s.prefixes, key.data() + level,
+         std::max(level, std::min(key.size(), level + 3)) - level);
+}
 
 inline bool ActualVptrSame(uint64_t& vptr1, uint64_t& vptr2) {
   return !((vptr1 ^ vptr2) & 0x000000ffffffffff);

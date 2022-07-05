@@ -128,7 +128,7 @@ class ScrambledZipfianGenerator {
 };
 
 int thread_num = 8;
-int total_count = 20000000;
+int total_count = 40000000;
 int count_per_thread = total_count / thread_num;
 std::atomic<int64_t> counter{0};
 std::vector<uint64_t> written(total_count);

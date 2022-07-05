@@ -41,7 +41,6 @@ struct SingleCompactionJob {
   std::vector<InnerNode*>  candidate_parents;
   std::vector<ArtNode*>    removed_arts;
   std::vector<uint64_t>    rewrite_data;
-  std::vector<int>         rewrite_times;
 
   std::vector<std::string> keys_in_node;
   autovector<RecordIndex>* compacted_indexes;
@@ -49,7 +48,6 @@ struct SingleCompactionJob {
 
   void Reset() {
     rewrite_data.clear();
-    rewrite_times.clear();
     candidates.clear();
     candidates_removed.clear();
     candidate_parents.clear();

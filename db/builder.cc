@@ -358,7 +358,7 @@ struct CompactionRec {
   uint64_t     seq_num;
   uint64_t     vptr;
   RecordIndex  record_index;
-  int          insert_times;
+  KVStruct     s;
 
   CompactionRec() = default;
 
@@ -381,6 +381,8 @@ int64_t ReadAndBuild(SingleCompactionJob* job,
 
   int64_t out_kv_size = 0;
 
+  KVStruct tmp_struct;
+
   for (auto& pair : job->nvm_nodes_and_sizes) {
     auto nvm_node = pair.first;
     int data_size = pair.second;
@@ -388,21 +390,18 @@ int64_t ReadAndBuild(SingleCompactionJob* job,
 
     size_t count = 0;
     for (int i = -16; i < data_size; ++i) {
-      auto vptr = data[i * 2 + 1];
-      auto insert_times = GetInsertTimes(vptr);
-
-      GetActualVptr(vptr);
-      if (!vptr) {
+      tmp_struct.vptr = data[i * 2 + 1];
+      if (!tmp_struct.actual_vptr) {
         continue;
       }
 
-      auto& kv = read_records[count];
+      auto& record = read_records[count];
       type = job->vlog_manager_->GetKeyValue(
-          vptr, keys[count], kv.value, seq_num, kv.record_index);
-      kv.seq_num = (seq_num << 8) | type;
-      kv.key = &keys[count++];
-      kv.vptr = vptr;
-      kv.insert_times = insert_times;
+          tmp_struct.actual_vptr, keys[count],
+          record.value, seq_num, record.record_index);
+      record.seq_num = (seq_num << 8) | type;
+      record.key = &keys[count++];
+      record.s = KVStruct{data[i * 2], data[i * 2 + 1]};
     }
 
     if (count == 0) {
@@ -413,25 +412,24 @@ int64_t ReadAndBuild(SingleCompactionJob* job,
 
     keys[count] = "";
     read_records[count].key = &keys[count];
-
     int insert_times = 0;
+
     for (size_t i = 1; i <= count; ++i) {
-      auto& last_record = read_records[i - 1];
       auto& record = read_records[i];
-      insert_times += last_record.insert_times;
+      auto& last_record = read_records[i - 1];
+      insert_times += last_record.s.insert_times;
 
       if (*record.key == *last_record.key) {
-        job->compacted_indexes[last_record.vptr >> 20]
-            .push_back(
-            last_record.record_index);
+        job->compacted_indexes[last_record.s.actual_vptr >> 20]
+            .push_back(last_record.record_index);
       } else {
         if (insert_times > 2) {
-          job->rewrite_data.push_back(last_record.vptr);
-          job->rewrite_times.push_back(std::min(insert_times, 254));
+          last_record.s.insert_times = std::min(insert_times, 254);
+          uint64_t vptr = last_record.s.vptr;
+          job->rewrite_data.push_back(vptr);
         } else {
-          job->compacted_indexes[last_record.vptr >> 20]
-              .push_back(
-              last_record.record_index);
+          job->compacted_indexes[last_record.s.actual_vptr >> 20]
+              .push_back(last_record.record_index);
 
           auto& key = last_record.key;
           PutFixed64(key, last_record.seq_num);

@@ -183,14 +183,14 @@ class ScrambledZipfianGenerator {
 };
 
 int thread_num = 8;
-int total_count = 6000000;
+int total_count = 10000000;
 int count_per_thread = total_count / thread_num;
 std::atomic<int64_t> counter{0};
 std::vector<uint64_t> written(total_count);
 
 std::string NumToKey(uint64_t key_num) {
   std::string s = std::to_string(key_num);
-  return "usertable:user" + s;
+  return "user" + s;
 }
 
 std::string GenerateValueFromKey(std::string& key) {
@@ -303,7 +303,7 @@ void DoTest(std::string test_name) {
   options.IncreaseParallelism(16);
 
   DB* db;
-  DB::Open(options, "/tmp/tmp_data/db_test", &db);
+  DB::Open(options, "/tmp/tmp_data/db_test_art", &db);
 
   std::thread read_threads[thread_num];
   std::thread write_threads[thread_num];

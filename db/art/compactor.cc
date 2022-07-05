@@ -219,17 +219,17 @@ void Compactor::Notify(std::vector<HeatGroup*>& heat_groups) {
 std::atomic<int> total_rewrite{0};
 
 void Compactor::RewriteData(SingleCompactionJob* job) {
-  job->keys_in_node[0].clear();
-
   total_rewrite.fetch_add(job->rewrite_data.size());
-  for (size_t idx = 0; idx < job->rewrite_data.size(); ++idx) {
-    auto vptr = job->rewrite_data[idx];
+  for (auto& vptr : job->rewrite_data) {
+    KVStruct s{0, vptr};
+    assert(s.insert_times > 1);
+    uint64_t actual_vptr = s.actual_vptr;
 
     auto header = (VLogSegmentHeader*)(
         vlog_manager_->pmemptr_ +
-        vlog_manager_->vlog_segment_size_ * (vptr >> 20));
+        vlog_manager_->vlog_segment_size_ * (actual_vptr >> 20));
 
-    char* record_start = vlog_manager_->pmemptr_ + vptr;
+    char* record_start = vlog_manager_->pmemptr_ + actual_vptr;
     Slice slice(record_start, 1 << 20);
     ValueType type = *((ValueType*)record_start);
     slice.remove_prefix(WriteBatchInternal::kRecordPrefixSize);
@@ -249,16 +249,12 @@ void Compactor::RewriteData(SingleCompactionJob* job) {
     std::lock_guard<SpinMutex> status_lk(header->lock.mutex_);
     if (unlikely(header->status_ == kSegmentGC)) {
       std::string record(record_start, kv_size);
-      vlog_manager_->WriteToNewSegment(record, vptr);
+      vlog_manager_->WriteToNewSegment(record, actual_vptr);
+      s.actual_vptr = actual_vptr;
     }
 
-    auto hash = HashOnly(key.data(), key.size());
-    KVStruct kv_info(hash, vptr);
-    kv_info.kv_size_ = kv_size;
-    kv_info.insert_times = job->rewrite_times[idx];
-    assert((kv_info.vptr_ & 0x000000ffffffffff) == vptr);
-    assert(kv_info.insert_times > 1);
-    global_memtable_->Put(key, kv_info, false);
+    HashOnly(s, key);
+    global_memtable_->Put(key, s, false);
   }
 }
 
@@ -385,7 +381,7 @@ void Compactor::BGWork() {
   }
 }
 
-void Compactor::Reset(){
+void Compactor::Reset() {
   StopThread();
 
   while (BackupRead.load(std::memory_order_acquire)) {
