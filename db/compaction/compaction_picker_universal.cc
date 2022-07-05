@@ -383,16 +383,16 @@ Compaction* UniversalCompactionBuilder::PickCompaction() {
   score_ = vstorage_->GetL0CompactionScore();
   sorted_runs_ = CalculateSortedRuns(*vstorage_);
 
-  if (sorted_runs_.empty() ||
-      (vstorage_->FilesMarkedForCompaction().empty() &&
-       sorted_runs_.size() < (unsigned int)mutable_cf_options_
-                                 .level0_file_num_compaction_trigger)) {
-    ROCKS_LOG_BUFFER(log_buffer_, "[%s] Universal: nothing to do\n",
-                     cf_name_.c_str());
-    TEST_SYNC_POINT_CALLBACK(
-        "UniversalCompactionBuilder::PickCompaction:Return", nullptr);
-    return nullptr;
-  }
+  //  if (sorted_runs_.empty() ||
+  //      (vstorage_->FilesMarkedForCompaction().empty() &&
+  //       sorted_runs_.size() < (unsigned int)mutable_cf_options_
+  //                                 .level0_file_num_compaction_trigger)) {
+  //    ROCKS_LOG_BUFFER(log_buffer_, "[%s] Universal: nothing to do\n",
+  //                     cf_name_.c_str());
+  //    TEST_SYNC_POINT_CALLBACK(
+  //        "UniversalCompactionBuilder::PickCompaction:Return", nullptr);
+  //    return nullptr;
+  //  }
 
   VersionStorageInfo::LevelSummaryStorage tmp;
   ROCKS_LOG_BUFFER_MAX_SZ(
@@ -467,13 +467,20 @@ uint32_t UniversalCompactionBuilder::GetPathId(
 
 // For L0 sorted runs number compaction trigger
 Compaction* UniversalCompactionBuilder::PickCompactionForL0() {
-  assert(!sorted_runs_.empty());
-
+  auto& l0_files = vstorage_->LevelFiles(0);
+  if (l0_files.empty()) {
+    return nullptr;
+  }
   int num_sr_not_compacted = 0;
-  for (size_t i = 0; i < sorted_runs_.size(); i++) {
-    if (sorted_runs_[i].level == 0 && !sorted_runs_[i].being_compacted) {
+  for (size_t i = 0; i < l0_files.size(); i++) {
+    if (!l0_files[i]->being_compacted) {
       num_sr_not_compacted++;
     }
+  }
+
+  if (num_sr_not_compacted <
+      mutable_cf_options_.level0_file_num_compaction_trigger) {
+    return nullptr;
   }
 
   if (num_sr_not_compacted >=
@@ -487,10 +494,6 @@ Compaction* UniversalCompactionBuilder::PickCompactionForL0() {
       inputs[i].level = start_level + static_cast<int>(i);
     }
 
-    auto& l0_files = vstorage_->LevelFiles(start_level);
-    if (l0_files.empty()) {
-      return nullptr;
-    }
     for (size_t i = 0; i < l0_files.size(); i++) {
       auto* picking_file = l0_files[i];
       if (!picking_file->being_compacted) {
