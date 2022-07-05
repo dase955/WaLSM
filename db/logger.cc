@@ -7,7 +7,7 @@
 
 namespace ROCKSDB_NAMESPACE {
 
-const std::string compaction_log = "/tmp/compaction.csv";
+const std::string compaction_log = "/home/crh/compaction_nvm_l0.csv";
 
 void init_log_file() {
   FILE* fp = fopen(compaction_log.c_str(), "w");

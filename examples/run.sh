@@ -1,9 +1,5 @@
 #!/bin/bash
-make simple_example -j8
-sudo rm -f /tmp/compaction_art.csv
-sudo rm -rf /mnt/chen/rocksdb_l0
-sudo rm -rf /mnt/chen/rocksdb_log
-sudo rm -rf /tmp/db_test_nvm_l0
-sudo rm -f /tmp/run_ops_nvm_l0
-sudo rm -f /tmp/debug_art.txt
-sudo taskset -c 0-17 ./simple_example.cc
+rm -r /mnt/pmem1/crh/rocksdb_log
+rm -r /mnt/chen/rocksdb_l0
+rm -r /home/crh/db_test_nvm_l0
+rm -f /home/crh/compaction_nvm_l0.csv
