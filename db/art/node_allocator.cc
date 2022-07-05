@@ -68,6 +68,8 @@ NodeAllocator::NodeAllocator(const DBOptions& options, bool recovery)
 }
 
 void NodeAllocator::Reset() {
+  waiting_nodes_.clear();
+  free_nodes_.clear();
   num_free_ = total_size_ / (int64_t)PAGE_SIZE;
   char* cur_ptr = pmemptr_;
   for (int i = 0; i < num_free_; ++i) {

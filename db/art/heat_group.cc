@@ -608,7 +608,7 @@ void HeatGroupManager::ChooseFirstGroup(Compactor* compactor) {
     }
   }
 
-  assert(!group);
+  assert(group);
   while (group->prev_seq) {
     group = group->prev_seq;
   }

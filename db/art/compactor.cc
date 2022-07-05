@@ -269,10 +269,6 @@ void Compactor::BGWork() {
                                         HeatGroup::group_min_size_;
 
   while (true) {
-    if (thread_stop_) {
-      break;
-    }
-
     std::this_thread::sleep_for(std::chrono::milliseconds(5));
 
     vlog_manager_->FreeQueue();
@@ -283,6 +279,10 @@ void Compactor::BGWork() {
       }
     }
     chosen_jobs_.clear();
+
+    if (thread_stop_) {
+      break;
+    }
 
     auto cur_mem_size = MemTotalSize.load(std::memory_order_relaxed);
     if (cur_mem_size < choose_threshold) {
@@ -382,6 +382,10 @@ void Compactor::BGWork() {
 void Compactor::Reset(){
   StopThread();
 
+  while (BackupRead.load(std::memory_order_acquire)) {
+    std::this_thread::yield();
+  }
+
   std::unique_lock<std::mutex> lock{mutex_};
   group_manager_->AddOperation(nullptr, kOperationFlushAll, false, this);
   cond_var_.wait(lock);
@@ -402,7 +406,7 @@ void Compactor::Reset(){
 
   int idx = 0;
   for (auto& compaction_group : compaction_groups) {
-    SingleCompactionJob* job = chosen_jobs_[idx];
+    SingleCompactionJob* job = compaction_jobs_[idx];
     job->Reset();
 
     for (auto& heat_group : compaction_group) {
@@ -426,7 +430,7 @@ void Compactor::Reset(){
     }
 
     if (++idx == 4) {
-      db_impl_->SyncCallFlush(chosen_jobs_);
+      db_impl_->SyncCallFlush(compaction_jobs_);
       idx = 0;
     }
   }
@@ -434,7 +438,7 @@ void Compactor::Reset(){
   if (idx > 0) {
     std::vector<SingleCompactionJob*> last_jobs;
     for (int i = 0; i < idx; ++i) {
-      last_jobs.push_back(chosen_jobs_[i]);
+      last_jobs.push_back(compaction_jobs_[i]);
     }
     db_impl_->SyncCallFlush(last_jobs);
   }
@@ -443,8 +447,8 @@ void Compactor::Reset(){
   SqueezedSize.store(0);
   CompactedSize.store(0);
   SqueezedSizeInCompaction.store(0);
-  BackupRead.store(0);
-  for (auto job : chosen_jobs_) {
+  chosen_jobs_.clear();
+  for (auto job : compaction_jobs_) {
     job->Reset();
   }
 
