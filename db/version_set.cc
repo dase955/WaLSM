@@ -136,14 +136,14 @@ class FilePicker {
         r->Prepare(ikey);
       }
     }
-    for (unsigned int i = 0; i < num_levels; i++) {
-      if (!files[i].empty()) {
-        sort(files[i].begin(), files[i].end(),
-             [&](FileMetaData* f1, FileMetaData* f2) {
-               return f1->fd.GetNumber() > f2->fd.GetNumber();
-             });
-      }
-    }
+    //    for (unsigned int i = 0; i < num_levels; i++) {
+    //      if (!files[i].empty()) {
+    //        sort(files[i].begin(), files[i].end(),
+    //             [&](FileMetaData* f1, FileMetaData* f2) {
+    //               return f1->fd.GetNumber() > f2->fd.GetNumber();
+    //             });
+    //      }
+    //    }
   }
 
   int GetCurrentLevel() const { return curr_level_; }
@@ -166,6 +166,10 @@ class FilePicker {
     is_hit_file_last_in_level_ =
         curr_index_in_curr_level_ == curr_file_level_.size() - 1;
     curr_index_in_curr_level_++;
+    if (user_key_.compare(ret->largest.user_key()) > 0 ||
+        user_key_.compare(ret->smallest.user_key()) < 0) {
+      return GetNextFile();
+    }
     return ret;
   }
 
