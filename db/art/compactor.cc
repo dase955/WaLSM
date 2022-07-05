@@ -145,7 +145,8 @@ void ProcessNodes(InnerNode* parent, std::vector<InnerNode*>& children,
   std::lock_guard<OptLock> opt_lk(parent->opt_lock_);
   std::lock_guard<SharedMutex> write_lk(parent->share_mutex_);
 
-  if (children.size() == parent->art->num_children_ && parent->heat_group_ == job->group_) {
+  if (children.size() == parent->art->num_children_ &&
+      parent->heat_group_ == job->group_) {
     RemoveChildren(parent, children.back());
     job->candidate_parents.push_back(parent);
     for (auto child : children) {
@@ -166,8 +167,6 @@ void ProcessNodes(InnerNode* parent, std::vector<InnerNode*>& children,
 ////////////////////////////////////////////////////////////
 
 int64_t Compactor::compaction_threshold_;
-
-size_t Compactor::max_rewrite_count;
 
 Compactor::Compactor(const DBOptions& options)
     : group_manager_(nullptr), vlog_manager_(nullptr),
@@ -318,7 +317,13 @@ void Compactor::BGWork() {
     }
     SingleCompactionJob::thread_pool->Join();
 
+    auto preprocess_done_time = GetStartTime();
+    float preprocess_time = (preprocess_done_time - start_time) * 1e-6;
+
     db_impl_->SyncCallFlush(chosen_jobs_);
+
+    auto flush_done_time = GetStartTime();
+    float flush_time = (flush_done_time - preprocess_done_time) * 1e-6;
 
     uint64_t total_out_size = 0;
     SingleCompactionJob::thread_pool->SetJobCount(chosen_jobs_.size());
@@ -334,6 +339,7 @@ void Compactor::BGWork() {
     }
 
     auto end_time = GetStartTime();
+    float postprocess_time = (end_time - flush_done_time) * 1e-6;
 
     // Use sfence after all vlog are modified
     NVM_BARRIER;
@@ -356,11 +362,13 @@ void Compactor::BGWork() {
     total_rewrite.store(0, std::memory_order_relaxed);
 
     RECORD_DEBUG("free pages: "
-        "%zu, %zu(%.2f), size: %.2fM, %.2fM, %.2fM; squeezed in groups %.2fM, rewrite count: %d\n",
+        "[%zu, %zu(%.2f)], size: [%.2fM, %.2fM, %.2fM]; group squeezed %.2fM, rewrite: %d, "
+        "time: [%.2fs, %.2fs, %.2fs]\n",
         GetNodeAllocator()->GetNumFreePages(),
         vlog_manager_->free_segments_.size(), vlog_manager_->Estimate(),
         mem_total_size, compacted_size, total_squeezed_size,
-        squeezed_in_compaction, rewrite_count);
+        squeezed_in_compaction, rewrite_count,
+        preprocess_time, flush_time, postprocess_time);
 
     SqueezedSizeInCompaction.store(0);
 

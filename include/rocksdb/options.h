@@ -1222,7 +1222,7 @@ struct DBOptions {
   int max_rewrite_count = 600;
 
   // Path for nvm file, don't pass directory.
-  std::string nvm_path = "/mnt/pmem1/crh/nodememory";
+  std::string nvm_path = "/tmp/nodememory";
 };
 
 // Options to control the behavior of a database (passed to DB::Open)

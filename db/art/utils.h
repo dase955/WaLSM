@@ -52,8 +52,6 @@ inline void Rehash(const char* key, size_t n, uint64_t& hash, size_t level) {
          std::max(level, std::min(n, level + 3)) - level);
 }
 
-int EstimateDistinctCount(const uint8_t hll[64]);
-
 /////////////////////////////////////////////////////
 
 #ifdef ART_LITTLE_ENDIAN
@@ -89,7 +87,7 @@ inline void GetActualVptr(uint64_t& vptr) {
   vptr &= 0x000000ffffffffff;
 }
 
-inline void UpdateActualVptr(uint64_t old_vptr, uint64_t& new_vptr) {
+inline void UpdateVptrInfo(uint64_t old_vptr, uint64_t& new_vptr) {
   new_vptr |= (old_vptr & 0xffffff0000000000);
 }
 
@@ -133,12 +131,11 @@ inline void UpdateInsertTimes(uint64_t& vptr, uint64_t insert_times) {
 
 /////////////////////////////////////////////////////
 
-// Allocate art node and insert inner nodes.
-// Inner nodes should be in order.
-ArtNode* AllocateArtAfterSplit(
-    const std::vector<InnerNode*>& inserted_nodes,
-    const std::vector<unsigned char>& c,
-    InnerNode* first_node_in_art);
+inline bool ActualVptrSame(uint64_t& vptr1, uint64_t& vptr2) {
+  return !((vptr1 ^ vptr2) & 0x000000ffffffffff);
+}
+
+int EstimateDistinctCount(const uint8_t hll[64]);
 
 /////////////////////////////////////////////////////
 // NVMNode

@@ -377,7 +377,7 @@ int64_t ReadAndBuild(SingleCompactionJob* job,
   ValueType type;
   SequenceNumber seq_num;
   std::vector<std::string>& keys = job->keys_in_node;
-  std::vector<CompactionRec> kvs(241);
+  std::vector<CompactionRec> read_records(241);
 
   int64_t out_kv_size = 0;
 
@@ -396,7 +396,7 @@ int64_t ReadAndBuild(SingleCompactionJob* job,
         continue;
       }
 
-      auto& kv = kvs[count];
+      auto& kv = read_records[count];
       type = job->vlog_manager_->GetKeyValue(
           vptr, keys[count], kv.value, seq_num, kv.record_index);
       kv.seq_num = (seq_num << 8) | type;
@@ -409,42 +409,39 @@ int64_t ReadAndBuild(SingleCompactionJob* job,
       continue;
     }
 
-    std::stable_sort(kvs.begin(), kvs.begin() + count);
+    std::stable_sort(read_records.begin(), read_records.begin() + count);
 
     keys[count] = "";
-    kvs[count].key = &keys[count];
+    read_records[count].key = &keys[count];
 
-    int cur_count = 1;
-    auto& last_kv = kvs.front();
-    int insert_times = last_kv.insert_times;
-
+    int insert_times = 0;
     for (size_t i = 1; i <= count; ++i) {
-      auto& kv = kvs[i];
+      auto& last_record = read_records[i - 1];
+      auto& record = read_records[i];
+      insert_times += last_record.insert_times;
 
-      if (*kv.key == *last_kv.key) {
-        job->compacted_indexes[last_kv.vptr >> 20]
-            .push_back(last_kv.record_index);
-        insert_times += kv.insert_times;
-        ++cur_count;
+      if (*record.key == *last_record.key) {
+        job->compacted_indexes[last_record.vptr >> 20]
+            .push_back(
+            last_record.record_index);
       } else {
         if (insert_times > 2) {
-          job->rewrite_data.push_back(last_kv.vptr);
+          job->rewrite_data.push_back(last_record.vptr);
           job->rewrite_times.push_back(std::min(insert_times, 254));
         } else {
-          job->compacted_indexes[last_kv.vptr >> 20]
-              .push_back(last_kv.record_index);
+          job->compacted_indexes[last_record.vptr >> 20]
+              .push_back(
+              last_record.record_index);
 
-          auto& key = last_kv.key;
-          PutFixed64(key, last_kv.seq_num);
-          builder->Add(*key, last_kv.value);
+          auto& key = last_record.key;
+          PutFixed64(key, last_record.seq_num);
+          builder->Add(*key, last_record.value);
           meta->UpdateBoundaries(
-              *key, last_kv.value, last_kv.seq_num, kTypeValue);
-          out_kv_size += (last_kv.value.size() + key->size());
+              *key, last_record.value, last_record.seq_num, kTypeValue);
+          out_kv_size += (last_record.value.size() + key->size());
         }
-        cur_count = 1;
-        insert_times = kv.insert_times;
+        insert_times = 0;
       }
-      last_kv = kvs[i];
     }
   }
 

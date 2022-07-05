@@ -37,16 +37,18 @@ struct VLogSegmentHeader {
 
 struct GCData {
   std::string record;
-  uint64_t    vptr;
+  uint64_t    actual_vptr;
   Slice       key;
 
   GCData() = default;
 
   GCData(uint32_t key_start, uint32_t key_length,
-         uint64_t vptr_, std::string& record_)
-      : record(std::move(record_)), vptr(vptr_),
+         uint64_t actual_vptr_, std::string& record_)
+      : record(std::move(record_)),
+        actual_vptr(actual_vptr_),
         key(record.data() + key_start, key_length) {};
 };
+
 
 class GlobalMemtable;
 

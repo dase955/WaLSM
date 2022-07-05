@@ -69,585 +69,251 @@
 
 namespace ROCKSDB_NAMESPACE {
 
-enum Operation {
-  kRead,
-  kWrite,
-};
-
-class BaseKeyGenerator {
+class ZipfianGenerator {
  public:
-  BaseKeyGenerator(int record_count, uint64_t sample_range)
-      : interval_length_(sample_range / 100),
-        record_count_(record_count),
-        operation_count_(record_count),
-        sample_range_(sample_range) {
-    InitializeIntervals();
-  };
+  ZipfianGenerator(long min, long max, double zipfianconstant_, double zetan_) {
+    items = max - min + 1;
+    base = min;
+    this->zipfianconstant = zipfianconstant_;
 
-  virtual ~BaseKeyGenerator() {}
+    theta = this->zipfianconstant;
 
-  virtual void Prepare() = 0;
+    zeta2theta = zeta(2, theta);
 
-  virtual std::vector<uint64_t>& GetRecords() = 0;
+    alpha = 1.0 / (1.0 - theta);
+    this->zetan = zetan_;
+    eta = (1 - std::pow(2.0 / items, 1 - theta)) / (1 - zeta2theta / this->zetan);
 
-  void SetOperationCount(int operation_count) {
-    if (operation_count > record_count_) {
-      printf("Error: operation count must less than record count\n");
-      abort();
-    }
-    operation_count_ = operation_count;
+    std::random_device rd;
+    rng = std::default_random_engine{rd()};
+
+    nextValue();
   }
 
-  int GetOperationCount() const {
-    return operation_count_;
+  double zeta(long n, double thetaVal) {
+    return zetastatic(n, thetaVal);
   }
 
-  virtual Operation Next(std::string& key) = 0;
-
-  virtual std::string NextReadKey() = 0;
-
-  virtual std::string NextWriteKey() = 0;
-
-  virtual void AddWrittenKey(uint64_t v) = 0;
-
-  void SetReadRatio(double read_ratio) {
-    read_ratio_ = read_ratio;
+  static double zetastatic(long n, double theta) {
+    return zetastatic(0, n, theta, 0);
   }
 
-  void SetPrefix(std::string& prefix) {
-    prefix_ = prefix;
-  }
+  static double zetastatic(long st, long n, double theta, double initialsum) {
+    double sum = initialsum;
+    for (long i = st; i < n; i++) {
 
- protected:
-  void InitializeIntervals() {
-    for (int i = 0; i < 100; ++i) {
-      intervals_[i] = interval_length_ * i;
+      sum += 1 / (std::pow(i + 1, theta));
     }
 
-    std::random_device shuffle_rd;
-    std::vector<int> r(100);
-    std::iota(r.begin(), r.end(), 0);
-    std::shuffle(r.begin(), r.end(), shuffle_rd);
-    for (int i = 0; i < 10; ++i) {
-      hot_read_intervals_.push_back(r[i]);
-      hot_write_intervals_.push_back(r[i]);
+    return sum;
+  }
+
+  long nextLong(long itemcount) {
+    double u = rand_double(rng);
+    double uz = u * zetan;
+
+    if (uz < 1.0) {
+      return base;
     }
-    for (int i = 10; i < 20; ++i) {
-      hot_read_intervals_.push_back(r[i]);
+
+    if (uz < 1.0 + std::pow(0.5, theta)) {
+      return base + 1;
     }
-    for (int i = 20; i < 30; ++i) {
-      hot_write_intervals_.push_back(r[i]);
-    }
+
+    return base + (long) ((itemcount) * std::pow(eta * u - eta + 1, alpha));
   }
 
-  double read_ratio_ = 0.5;
-
-  uint64_t intervals_[100];
-
-  std::vector<int> hot_read_intervals_;
-
-  std::vector<int> hot_write_intervals_;
-
-  std::vector<uint64_t> hot_keys_written_;
-
-  std::vector<uint64_t> cold_keys_written_;
-
-  uint64_t interval_length_;
-
-  int record_count_;
-
-  int operation_count_;
-
-  uint64_t sample_range_;
-
-  std::string prefix_ = "user";
-};
-
-class YCSBLoadGenerator : public BaseKeyGenerator {
- public:
-  YCSBLoadGenerator(int record_count, uint64_t sample_range)
-      : BaseKeyGenerator(record_count, sample_range) {};
-
-  void Prepare() override {
-    if (records_.empty()) {
-      records_.resize(record_count_);
-      for (int i = 0; i < record_count_; ++i) {
-        records_[i] = fnvhash64(i);
-      }
-    }
-    cur_index_.store(0, std::memory_order_relaxed);
-  }
-
-  Operation Next(std::string& key) override {
-    key = NextWriteKey();
-    return kWrite;
-  }
-
-  std::string NextReadKey() override {
-    printf("Why you do read operation in YCSBLoadGenerator?\n");
-    abort();
-    return "";
-  }
-
-  std::string NextWriteKey() override {
-    auto s = std::to_string(records_[cur_index_++]);
-    return prefix_ + std::string(19 - s.length(), '0') + s;
-  }
-
-  void AddWrittenKey(uint64_t v) override {
-    printf("There is not need to add key in YCSBLoadGenerator?\n");
-  }
-
-  std::vector<uint64_t>& GetRecords() override {
-    return records_;
+  long nextValue() {
+    return nextLong(items);
   }
 
  private:
-  static uint64_t fnvhash64(int64_t val) {
-    //from http://en.wikipedia.org/wiki/Fowler_Noll_Vo_hash
-    static int64_t FNV_OFFSET_BASIS_64 = 0xCBF29CE484222325LL;
-    static int64_t FNV_PRIME_64 = 1099511628211L;
+  long items;
 
-    int64_t hashval = FNV_OFFSET_BASIS_64;
+  long base;
 
-    for (int i = 0; i < 8; i++) {
-      int64_t octet = val & 0x00ff;
-      val = val >> 8;
+  double zipfianconstant;
 
-      hashval = hashval ^ octet;
-      hashval = hashval * FNV_PRIME_64;
-      //hashval = hashval ^ octet;
-    }
-    return hashval > 0 ? hashval : -hashval;
-  }
-
-  std::vector<uint64_t> records_;
-
-  std::atomic<int> cur_index_{0};
-};
-
-class ZipfianGenerator : public BaseKeyGenerator {
- public:
-  explicit ZipfianGenerator(int record_count,
-                   uint64_t sample_range = 9000000000000000000UL,
-                   double alpha = 0.98)
-      : BaseKeyGenerator(record_count, sample_range), alpha_(alpha) {
-    std::random_device rd;
-    std::random_device rd2;
-    rng_ = std::default_random_engine{rd()};
-    rng2_ = std::default_random_engine{rd2()};
-
-    write_records_.resize(record_count);
-    hot_keys_written_.reserve(record_count * 2);
-    cold_keys_written_.reserve(record_count * 2);
-  }
-
-  void Prepare() override {
-    write_index_.store(0, std::memory_order_relaxed);
-    double c = 0.0;
-
-    uint64_t zipf_sample_range = 1000000000;
-
-    for (size_t i = 1; i <= zipf_sample_range; i++) {
-      c = c + (1.0 / pow((double)i, alpha_));
-    }
-    c = 1.0 / c;
-
-    double* sum_probs = new double[zipf_sample_range + 1];
-    sum_probs[0] = 0;
-    for (size_t i = 1; i <= zipf_sample_range; ++i) {
-      sum_probs[i] = sum_probs[i - 1] + c / pow((double)i, alpha_);
-    }
-
-    std::random_device rd;
-    std::default_random_engine rng = std::default_random_engine{rd()};
-    std::uniform_real_distribution<> rand_val{0.0, 1.0};
-
-    printf("Generate samples\n");
-
-    std::unordered_map<uint64_t, int> freqs;
-    std::vector<uint64_t> records;
-    records.resize(record_count_);
-    for (int i = 0; i < record_count_; ++i) {
-      uint64_t res = 0;
-      double z;
-      do {
-        z = rand_val(rng);
-      } while ((z == 0) || (z == 1));
-
-      uint64_t low = 1;
-      uint64_t high = zipf_sample_range;
-      uint64_t mid;
-      do {
-        mid = (low + high) / 2;
-        if (sum_probs[mid] >= z && sum_probs[mid - 1] < z) {
-          res = mid;
-          break;
-        } else if (sum_probs[mid] >= z) {
-          high = mid - 1;
-        } else {
-          low = mid + 1;
-        }
-      } while (low <= high);
-
-      ++freqs[res];
-      records[i] = res;
-    }
-
-    CheckFreq(records);
-
-    GenerateWriteSamples(records, freqs);
-    delete[] sum_probs;
-
-    CheckFreq(write_records_);
-  }
-
-  Operation Next(std::string& key) override {
-    if (rand_double(rng_) < read_ratio_) {
-      key = NextReadKey();
-      return kRead;
-    } else {
-      key = NextWriteKey();
-      return kWrite;
-    }
-  }
-
-  std::string NextReadKey() override {
-    static std::uniform_int_distribution<uint64_t> rand1(
-        0, hot_keys_written_.size() - 1);
-    static std::uniform_int_distribution<uint64_t> rand2(
-        0, cold_keys_written_.size() - 1);
-
-    uint64_t v;
-    if (rand_double(rng_) < 0.2) {
-      v = hot_keys_written_[rand1(rng2_)];
-    } else {
-      v = cold_keys_written_[rand2(rng2_)];
-    }
-
-    auto s = std::to_string(v);
-    return prefix_ + std::string(19 - s.length(), '0') + s;
-  }
-
-  std::string NextWriteKey() override {
-    auto s = std::to_string(write_records_[write_index_++]);
-    return prefix_ + std::string(19 - s.length(), '0') + s;
-  }
-
-  void AddWrittenKey(uint64_t v) override {
-    int i = std::min(v / interval_length_, 99ul);
-    if (hot_read_intervals_[i]) {
-      hot_keys_written_.push_back(v);
-    } else {
-      cold_keys_written_.push_back(v);
-    }
-  }
-
-  std::vector<uint64_t>& GetRecords() override {
-    return write_records_;
-  }
-
- private:
-  static uint64_t fnvhash64(int64_t val) {
-    //from http://en.wikipedia.org/wiki/Fowler_Noll_Vo_hash
-    static int64_t FNV_OFFSET_BASIS_64 = 0xCBF29CE484222325LL;
-    static int64_t FNV_PRIME_64 = 1099511628211L;
-
-    int64_t hashval = FNV_OFFSET_BASIS_64;
-
-    for (int i = 0; i < 8; i++) {
-      int64_t octet = val & 0x00ff;
-      val = val >> 8;
-
-      hashval = hashval ^ octet;
-      hashval = hashval * FNV_PRIME_64;
-      //hashval = hashval ^ octet;
-    }
-    return hashval > 0 ? hashval : -hashval;
-  }
-
-  void GenerateWriteSamples(
-      std::vector<uint64_t>& records,
-      std::unordered_map<uint64_t, int>& freqs) {
-    std::unordered_map<uint64_t, uint64_t> modified;
-
-    std::random_device rd;
-    std::default_random_engine rng = std::default_random_engine{rd()};
-    std::uniform_int_distribution<uint64_t> dist(0, sample_range_ - 1);
-
-    auto check_func = [&](uint64_t val) {
-      for (auto i : hot_write_intervals_) {
-        if (val >= intervals_[i] && val < intervals_[i] + interval_length_) {
-          return false;
-        }
-      }
-      return true;
-    };
-
-    std::unordered_set<uint64_t> sampled;
-    uint64_t mod = interval_length_ * 20;
-
-    int cur = 0;
-    for (auto& pair : freqs) {
-      uint64_t old_value = pair.first;
-      uint64_t new_value;
-
-      if (pair.second == 1) {
-        new_value = dist(rng);
-        while (!check_func(new_value)) {
-          new_value = dist(rng);
-        }
-      } else {
-        new_value = fnvhash64(old_value) % mod;
-        while (sampled.find(new_value) != sampled.end()) {
-          new_value = fnvhash64(new_value) % mod;
-        }
-
-        int i = hot_write_intervals_[new_value / interval_length_];
-        new_value = intervals_[i] + (new_value % interval_length_);
-        sampled.emplace(new_value);
-      }
-
-      modified[old_value] = new_value;
-      AddWrittenKey(new_value);
-    }
-
-    for (int i = 0; i < record_count_; ++i) {
-      write_records_[i] = modified[records[i]];
-    }
-  }
-
-  static void CheckFreq(std::vector<uint64_t>& samples) {
-    std::cout << "Check Freq start" << std::endl;
-
-    std::unordered_map<uint64_t, int> freqs;
-    for (auto& value : samples) {
-      ++freqs[value];
-    }
-
-    int cold_count = 0;
-    for (auto& pair : freqs) {
-      cold_count += (pair.second == 1);
-    }
-
-    int hot_count = freqs.size() - cold_count;
-    float hot_freq = (samples.size() - cold_count) / (float)samples.size() * 100.f;
-    printf("Sample generated. hot count = %d(%.2f), cold count = %d\n",
-           hot_count, hot_freq, cold_count);
-    std::cout << "Check Freq end" << std::endl;
-  }
-
-  double alpha_;
-
-  std::vector<uint64_t> write_records_;
-
-  std::atomic<int> write_index_{0};
+  double alpha, zetan, eta, theta, zeta2theta;
 
   std::uniform_real_distribution<> rand_double{0.0, 1.0};
 
-  std::default_random_engine rng_;
-
-  std::default_random_engine rng2_;
+  std::default_random_engine rng;
 };
 
-class WorkloadRunner {
+class ScrambledZipfianGenerator {
  public:
-  WorkloadRunner(int num_threads, DB* db)
-      : num_threads_(num_threads), db_(db) {
-    work_threads_ = new std::thread[num_threads];
+  ScrambledZipfianGenerator(long min_, long max_) {
+    this->min = min_;
+    this->max = max_;
+    itemcount = this->max - this->min + 1;
+    gen = new ZipfianGenerator(0, ITEM_COUNT, 0.99, ZETAN);
   }
 
-  void SetLoadGenerator(BaseKeyGenerator* generator) {
-    load_key_generator_ = generator;
+  ~ScrambledZipfianGenerator() {
+    delete gen;
   }
 
-  void SetRunGenerator(BaseKeyGenerator* generator) {
-    run_key_generator_ = generator;
-  }
-
-  void Load() {
-    load_key_generator_->Prepare();
-    completed_count_.store(0, std::memory_order_relaxed);
-
-    for (int i = 0; i < num_threads_; ++i) {
-      work_threads_[i] = std::thread(
-          &WorkloadRunner::Insert, this, i, load_key_generator_);
-    }
-
-    auto ops_thread = std::thread(
-        &WorkloadRunner::StatisticsThread, this,
-        load_key_generator_->GetOperationCount());
-    ops_thread.join();
-
-    for (int i = 0; i < num_threads_; ++i) {
-      work_threads_[i].join();
-    }
-  }
-
-  void Run() {
-    run_key_generator_->Prepare();
-
-    for (auto& v : load_key_generator_->GetRecords()) {
-      run_key_generator_->AddWrittenKey(v);
-    }
-
-    completed_count_.store(0, std::memory_order_relaxed);
-
-    for (int i = 0; i < num_threads_; ++i) {
-      work_threads_[i] = std::thread(
-          &WorkloadRunner::Insert, this, i, run_key_generator_);
-    }
-
-    auto ops_thread = std::thread(
-        &WorkloadRunner::StatisticsThread, this,
-        run_key_generator_->GetOperationCount());
-    ops_thread.join();
-
-    for (int i = 0; i < num_threads_; ++i) {
-      work_threads_[i].join();
-    }
-  }
-
-  void SetMetricInterval(int interval) {
-    interval_ = interval;
-  }
-
-  static std::string GenerateValueFromKey(std::string& key) {
-    int repeat_times = 1024UL / key.length();
-    size_t len = key.length() * repeat_times;
-    std::string value;
-    value.reserve(1024);
-    while (repeat_times--) {
-      value += key;
-    }
-    value += key.substr(0, 1024 - value.length());
-    return value;
+  long nextValue() {
+    long ret = gen->nextValue();
+    return min + fnvhash64(ret) % itemcount;
   }
 
  private:
-  // TODO: need latency statistics
-  void Insert(int thread_id, BaseKeyGenerator* generator) {
-    int operation_count = generator->GetOperationCount();
-    int operation_per_thread = operation_count / num_threads_;
-    if (thread_id == 0) {
-      operation_per_thread += (operation_count % num_threads_);
+  static long fnvhash64(long val) {
+    //from http://en.wikipedia.org/wiki/Fowler_Noll_Vo_hash
+    long hashval = 0xCBF29CE484222325L;
+
+    for (int i = 0; i < 8; i++) {
+      long octet = val & 0x00ff;
+      val = val >> 8;
+
+      hashval = hashval ^ octet;
+      hashval = hashval * 1099511628211L;
+      //hashval = hashval ^ octet;
     }
-
-    std::string key;
-    std::string ret;
-    Status s;
-
-    while (operation_per_thread--) {
-      auto type = generator->Next(key);
-      auto value = GenerateValueFromKey(key);
-
-      switch (type) {
-        case kRead:
-          s = db_->Put(WriteOptions(), key, value);
-          break;
-        case kWrite:
-          s = db_->Get(ReadOptions(), key, &ret);
-          break;
-      }
-
-      ++completed_count_;
-      if (!s.ok()) {
-        assert(false);
-        ++failed_count_;
-      }
-    }
+    return std::fabs(hashval);
   }
 
-  void StatisticsThread(int operation_counts) {
-    int prev_completed = 0;
-    int seconds = 0;
-    while (prev_completed < operation_counts) {
-      int new_completed = completed_count_.load(std::memory_order_relaxed);
-      int ops = (new_completed - prev_completed) / interval_;
-      printf("[%d sec] %d operations; %d current ops/sec\n",
-             seconds, new_completed, ops);
+  double ZETAN = 26.46902820178302;
+  long ITEM_COUNT = 10000000000L;
 
-      prev_completed = new_completed;
-      std::this_thread::sleep_for(std::chrono::seconds(interval_));
-      seconds += interval_;
-    }
-  }
-
-  int interval_ = 5;
-
-  int num_threads_ = 16;
-
-  std::thread* work_threads_;
-
-  std::thread ops_thread_;
-
-  std::atomic<int> completed_count_{0};
-
-  std::atomic<int> failed_count_{0};
-
-  BaseKeyGenerator* load_key_generator_ = nullptr;
-
-  BaseKeyGenerator* run_key_generator_ = nullptr;
-
-  DB* db_;
+  ZipfianGenerator* gen;
+  long min, max, itemcount;
 };
 
-void ParseOptions(Options& options) {
+int thread_num = 8;
+int total_count = 32000000;
+int count_per_thread = total_count / thread_num;
+std::atomic<int64_t> counter{0};
+std::vector<uint64_t> written(total_count);
+
+std::string NumToKey(uint64_t key_num) {
+  std::string s = std::to_string(key_num);
+  return "user" + std::string(9 - s.length(), '0') + s;
+}
+
+std::string GenerateValueFromKey(std::string& key) {
+  int repeat_times = 1024UL / key.length();
+  size_t len = key.length() * repeat_times;
+  std::string value;
+  value.reserve(1024);
+  while (repeat_times--) {
+    value += key;
+  }
+  value += key.substr(0, 1024 - value.length());
+  return value;
+}
+
+unsigned long fnvhash64(int64_t val) {
+  //from http://en.wikipedia.org/wiki/Fowler_Noll_Vo_hash
+  static int64_t FNV_OFFSET_BASIS_64 = 0xCBF29CE484222325LL;
+  static int64_t FNV_PRIME_64 = 1099511628211L;
+
+  int64_t hashval = FNV_OFFSET_BASIS_64;
+
+  for (int i = 0; i < 8; i++) {
+    int64_t octet = val & 0x00ff;
+    val = val >> 8;
+
+    hashval = hashval ^ octet;
+    hashval = hashval * FNV_PRIME_64;
+    //hashval = hashval ^ octet;
+  }
+  return hashval > 0 ? hashval : -hashval;
+}
+
+void ZipfianPutThread(DB *db) {
+  ScrambledZipfianGenerator zipf(0, 1000000000);
+  for (int i = 0; i < count_per_thread; ++i) {
+    auto key_num = zipf.nextValue();
+    std::string key = NumToKey(key_num);
+    std::string value = GenerateValueFromKey(key);
+    assert(db->Put(WriteOptions(), key, value).ok());
+    written[counter.fetch_add(1, std::memory_order_relaxed)] = key_num;
+  }
+}
+
+void UniformPutThread(DB *db) {
+  for (int i = 0; i < count_per_thread; ++i) {
+    auto c = counter++;
+    auto key_num = fnvhash64(c);
+    std::string key = NumToKey(key_num);
+    std::string value = GenerateValueFromKey(key);
+    assert(db->Put(WriteOptions(), key, value).ok());
+    written[c] = key_num;
+  }
+}
+
+void GetThread(DB *db) {
+  std::random_device rd;
+  std::default_random_engine rng{rd()};
+
+  while (true) {
+    int cur_counter = counter.load(std::memory_order_relaxed);
+    if (cur_counter > total_count - 128) {
+      break;
+    }
+
+    if (cur_counter <= 128) {
+      continue;
+    }
+
+    std::uniform_int_distribution<long> dist {1, cur_counter - 128};
+    auto c = dist(rng);
+
+    std::string res;
+    std::string key = NumToKey(written[c]);
+    std::string expected = GenerateValueFromKey(key);
+
+    auto status = db->Get(ReadOptions(), key, &res);
+    assert(!status.ok() || res == expected);
+    if (!status.ok()) {
+      printf("%s Error\n", key.c_str());
+    }
+  }
+}
+
+void DoTest(std::string test_name) {
+  Options options;
   options.create_if_missing = true;
   options.use_direct_io_for_flush_and_compaction = true;
   options.use_direct_reads = true;
   options.enable_pipelined_write = true;
-  options.OptimizeLevelStyleCompaction();
-
-  std::ifstream option_file("options.txt", std::ios::in);
-  std::string line;
-  while (getline(option_file, line)) {
-    if (line.substr(0, 16) == "timestamp_factor") {
-      options.timestamp_factor = std::atoi(line.substr(17).c_str());
-    } else if (line.substr(0, 17) == "layer_ts_interval") {
-      options.layer_ts_interval = std::atoi(line.substr(18).c_str());
-      options.timestamp_waterline = options.layer_ts_interval * 10;
-    } else if (line.substr(0, 14) == "group_min_size") {
-      options.group_min_size = std::atoi(line.substr(15).c_str()) << 10;
-    } else if (line.substr(0, 21) == "group_split_threshold") {
-      options.group_split_threshold = std::atoi(line.substr(22).c_str()) << 20;
-    } else if (line.substr(0, 17) == "max_rewrite_count") {
-      options.max_rewrite_count = std::atoi(line.substr(18).c_str());
-    }
-  }
-
-  printf("Parse option done.\n");
-  printf("options.timestamp_factor = %d\n", options.timestamp_factor);
-  printf("options.layer_ts_interval = %d\n", options.layer_ts_interval);
-  printf("options.timestamp_waterline = %d\n", options.timestamp_waterline);
-  printf("options.group_min_size = %.2fk\n", options.group_min_size / 1048576.f);
-  printf("options.group_split_threshold = %dM\n",
-         options.group_split_threshold / 1048576);
-  printf("options.max_rewrite_count = %d\n", options.max_rewrite_count);
-}
-
-void DoTest(std::string test_name) {
-  int thread_num = 8;
-  int load_count = 800000000;
-  int run_count = 320000000;
-  uint64_t sample_range = 9000000000000000000;
-
-  Options options;
-  ParseOptions(options);
-
-  std::string db_path = "/tmp/db_test_" + test_name;
-  std::string ops_path =  "/tmp/run_ops_" + test_name;
+  options.nvm_path = "/tmp/nodememory";
+  options.compression = rocksdb::kNoCompression;
 
   DB* db;
-  DB::Open(options, db_path, &db);
+  DB::Open(options, "/tmp/tmp_data/db_test_art", &db);
 
-  WorkloadRunner runner(thread_num, db);
-  runner.SetLoadGenerator(
-      new YCSBLoadGenerator(load_count, sample_range));
-  runner.SetRunGenerator(
-      new ZipfianGenerator(load_count, sample_range, 0.98));
-  runner.Load();
-  runner.Run();
+  std::thread read_threads[thread_num];
+  std::thread write_threads[thread_num];
+  for (int i = 0; i < thread_num; ++i) {
+    write_threads[i] = std::thread(ZipfianPutThread, db);
+    read_threads[i] = std::thread(GetThread, db);
+  }
+
+  for (auto & thread : read_threads) {
+    thread.join();
+  }
+
+  for (auto & thread : write_threads) {
+    thread.join();
+  }
+
+  std::cout << "Start test get" << std::endl;
+  for (int i = 0; i < total_count; i += 4) {
+    std::string res;
+    std::string key = NumToKey(written[i]);
+    std::string expected = GenerateValueFromKey(key);
+
+    auto status = db->Get(ReadOptions(), key, &res);
+    assert(!status.ok() || res == expected);
+    if (!status.ok()) {
+      std::cout << key << " Error!" << std::endl;
+    }
+  }
+  std::cout << "Test get done" << std::endl;
 
   db->Close();
 
@@ -662,114 +328,9 @@ class DBTest3 : public DBTestBase {
 };
 
 TEST_F(DBTest3, MockEnvTest) {
-  int thread_num = 8;
-  int load_count = 800000000;
-  int run_count = 320000000;
-  uint64_t sample_range = 9000000000000000000;
-
-  auto g2 = new ZipfianGenerator(run_count, sample_range, 0.98);
-  g2->Prepare();
-
-  return;
-
-  DB* db;
-
-  Options options;
-  options.create_if_missing = true;
-  options.enable_pipelined_write = true;
-  options.compression = kNoCompression;
-  options.compaction_style = kCompactionStyleLevel;
-  options.nvm_path = "/mnt/pmem1/crh/nodememory";
-
-  //options.OptimizeLevelStyleCompaction();
-
-  ASSERT_OK(DB::Open(options, "/home/crh/db_test", &db));
-
-
-
-  db->Close();
-
-  delete db;
+  setbuf(stdout, NULL);
+  DoTest("art");
 }
-
-/*
-TEST_F(DBTest3, MockEnvTest2) {
-  Options options;
-  options.create_if_missing = true;
-  options.enable_pipelined_write = true;
-
-  options.compaction_threshold = 1024 << 20;
-  options.vlog_force_gc_ratio_ = 0.5;
-  options.OptimizeLevelStyleCompaction();
-
-  DB* db;
-
-  ASSERT_OK(DB::Open(options, "/tmp/db_test", &db));
-  
-  std::cout << "Start test get" << std::endl;
-  for (int i = 0; i < total_count; i += 4) {
-    std::string key = next_key(i);
-    std::string res;
-    std::string expected = repeat(key);
-    auto status = db->Get(ReadOptions(), key, &res);
-    ASSERT_TRUE(!status.ok() || res == expected );
-    if (!status.ok()) {
-      std::cout << key << " Error!" << std::endl;
-    }
-  }
-  std::cout << "Test get done" << std::endl;
-
-  db->Close();
-  delete db;
-}
-
-TEST_F(DBTest3, MockEnvTest3) {
-  Options options;
-  options.create_if_missing = true;
-  options.enable_pipelined_write = true;
-
-  options.compaction_threshold = 1024 << 20;
-  options.vlog_force_gc_ratio_ = 0.5;
-  options.OptimizeLevelStyleCompaction();
-
-  DB* db;
-
-  ASSERT_OK(DB::Open(options, "/tmp/db_test", &db));
-
-  std::thread read_threads[thread_num];
-  std::thread write_threads[thread_num];
-  std::vector<std::string> sampled_keys[thread_num];
-  for (int i = 0; i < thread_num; ++i) {
-    write_threads[i] = std::thread(PutThread, db);
-    read_threads[i] = std::thread(GetThread, db);
-  }
-
-  for (auto & thread : read_threads) {
-    thread.join();
-  }
-
-  for (auto & thread : write_threads) {
-    thread.join();
-  }
-
-  std::cout << "Start test get" << std::endl;
-  for (int i = 0; i < total_count; i += 4) {
-    std::string key = next_key(i);
-    std::string res;
-    std::string expected = repeat(key);
-    auto status = db->Get(ReadOptions(), key, &res);
-    ASSERT_TRUE(!status.ok() || res == expected );
-    if (!status.ok()) {
-      std::cout << key << " Error!" << std::endl;
-    }
-  }
-  std::cout << "Test get done" << std::endl;
-
-  db->Close();
-
-  delete db;
-}
-*/
 
 }  // namespace ROCKSDB_NAMESPACE
 

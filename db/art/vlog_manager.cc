@@ -27,7 +27,7 @@ int SearchVptr(
 
   int buffer_size = GET_NODE_BUFFER_SIZE(inner_node->status_);
   for (int i = 0; i < buffer_size; ++i) {
-    if ((inner_node->buffer_[i * 2 + 1] & 0x000000ffffffffff) == vptr) {
+    if (ActualVptrSame(inner_node->buffer_[i * 2 + 1], vptr)) {
       vptr = inner_node->buffer_[i * 2 + 1];
       return -i - 2;
     }
@@ -50,7 +50,7 @@ int SearchVptr(
       int found = 31 - __builtin_clz(res);
       res -= (1 << found);
       int index = found + base;
-      if ((index < size) && (vptr == (data[index * 2 + 1] & 0x000000ffffffffff))) {
+      if ((index < size) && ActualVptrSame(vptr, data[index * 2 + 1])) {
         vptr = data[index * 2 + 1];
         return index;
       }
@@ -344,7 +344,7 @@ void VLogManager::BGWork() {
     }
 
     for (auto segment : segments) {
-      auto* header_gc = (VLogSegmentHeader*)segment;
+      auto header_gc = (VLogSegmentHeader*)segment;
       std::lock_guard<SpinMutex> status_lk(header_gc->lock.mutex_);
       header_gc->status_ = kSegmentGC;
       PERSIST(segment, 8);
@@ -386,9 +386,9 @@ void VLogManager::BGWork() {
         while (index < data_count &&
                gc_data[index].key.compare(vptr_key) == 0) {
           cur_data = gc_data[index++];
-          if ((inner_node->vptr_ & 0x000000ffffffffff) == cur_data.vptr) {
+          if (ActualVptrSame(cur_data.actual_vptr, inner_node->vptr_)) {
             WriteToNewSegment(cur_data.record, new_vptr);
-            UpdateActualVptr(inner_node->vptr_, new_vptr);
+            UpdateVptrInfo(inner_node->vptr_, new_vptr);
             inner_node->vptr_ = new_vptr;
             // inner_node->hash_ = new_hash;
           }
@@ -416,10 +416,10 @@ void VLogManager::BGWork() {
 
           auto hash = (uint8_t)Hash(check_data.key.data(), check_data.key.size(), 397);
           auto found_index = SearchVptr(
-              inner_node, hash, rows, check_data.vptr);
+              inner_node, hash, rows, check_data.actual_vptr);
           if (found_index != -1) {
             WriteToNewSegment(check_data.record, new_vptr);
-            UpdateActualVptr(check_data.vptr, new_vptr);
+            UpdateVptrInfo(check_data.actual_vptr, new_vptr);
 
             if (found_index >= 0) {
               nvm_node->data[found_index * 2 + 1] = new_vptr;

@@ -297,7 +297,6 @@ DBImpl::DBImpl(const DBOptions& options, const std::string& dbname,
       vlog_manager_, group_manager_, env_, recovery);
 
   Compactor::compaction_threshold_ = options.compaction_threshold;
-  Compactor::max_rewrite_count = options.max_rewrite_count;
 
   compactor_->SetDB(this);
   compactor_->SetGroupManager(group_manager_);

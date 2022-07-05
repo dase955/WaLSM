@@ -82,8 +82,6 @@ class Compactor : public BackgroundThread {
 
   static int64_t compaction_threshold_;
 
-  static size_t max_rewrite_count;
-
  private:
   void BGWork() override;
 
