@@ -1756,6 +1756,13 @@ void Version::Get(const ReadOptions& read_options, const LookupKey& k,
     switch (get_context.State()) {
       case GetContext::kNotFound:
         // Keep searching in other files
+        if (fp.GetHitFileLevel() == 0) {
+          RecordTick(db_statistics_, GET_MISS_L0);
+        } else if (fp.GetHitFileLevel() == 1) {
+          RecordTick(db_statistics_, GET_MISS_L1);
+        } else if (fp.GetHitFileLevel() >= 2) {
+          RecordTick(db_statistics_, GET_MISS_L2_AND_UP);
+        }
         break;
       case GetContext::kMerge:
         // TODO: update per-level perfcontext user_key_return_count for kMerge
