@@ -562,6 +562,19 @@ void CompactionJob::GenSubcompactionBoundaries() {
 }
 
 void CompactionJob::CalculateStatistics() {
+  bool need_calculate = false;
+  auto c = compact_->compaction;
+  for (size_t which = 0; which < c->num_input_levels(); which++) {
+    if (c->input_levels(which)->num_files != 0 && c->level(which) == 0) {
+      need_calculate = true;
+    }
+  }
+
+  // If there is no l0 files, just return
+  if (!need_calculate) {
+    return;
+  }
+
   CompactionRangeDelAggregator range_del_agg(
       &compact_->compaction->column_family_data()->internal_comparator(),
       existing_snapshots_);
@@ -590,9 +603,11 @@ void CompactionJob::CalculateStatistics() {
     input->Next();
   }
 
-  RECORD_INFO("Flush L0: %.2fMB, %.3lfs, %.3lf\n",
+  RECORD_INFO("Flush to base: %.2fMB, %.3lfs, %.3lf\n",
               output_raw_size / 1048576.0,
               0.0, 0.0);
+
+  input.reset();
 }
 
 Status CompactionJob::Run() {
@@ -608,13 +623,13 @@ Status CompactionJob::Run() {
 
   // Launch a thread for each of subcompactions 1...num_threads-1
   std::vector<port::Thread> thread_pool;
+  if (db_options_.calculate_statistics) {
+    thread_pool.reserve(num_threads);
+    thread_pool.emplace_back(&CompactionJob::CalculateStatistics, this);
+  } else {
+    thread_pool.reserve(num_threads - 1);
+  }
 
-#ifdef CALCULATE_STATISTICS
-  thread_pool.reserve(num_threads);
-  thread_pool.emplace_back(&CompactionJob::CalculateStatistics, this);
-#else
-  thread_pool.reserve(num_threads - 1);
-#endif
   for (size_t i = 1; i < compact_->sub_compact_states.size(); i++) {
     thread_pool.emplace_back(&CompactionJob::ProcessKeyValueCompaction, this,
                              &compact_->sub_compact_states[i]);
@@ -771,7 +786,6 @@ Status CompactionJob::Run() {
 }
 
 Status CompactionJob::Install(const MutableCFOptions& mutable_cf_options) {
-  static int compaction_num = 0;
   AutoThreadOperationStageUpdater stage_updater(
       ThreadStatus::STAGE_COMPACTION_INSTALL);
   db_mutex_->AssertHeld();
@@ -791,6 +805,7 @@ Status CompactionJob::Install(const MutableCFOptions& mutable_cf_options) {
   const auto& stats = compaction_stats_;
 
   double read_write_amp = 0.0;
+  double read_amp = 0.0;
   double write_amp = 0.0;
   double bytes_read_per_sec = 0;
   double bytes_written_per_sec = 0;
@@ -801,6 +816,9 @@ Status CompactionJob::Install(const MutableCFOptions& mutable_cf_options) {
                      static_cast<double>(stats.bytes_read_non_output_levels);
     write_amp = stats.bytes_written /
                 static_cast<double>(stats.bytes_read_non_output_levels);
+    read_amp = (stats.bytes_read_output_level +
+                stats.bytes_read_non_output_levels) /
+               static_cast<double>(stats.bytes_read_non_output_levels);
   }
   if (stats.micros > 0) {
     bytes_read_per_sec =
@@ -810,12 +828,9 @@ Status CompactionJob::Install(const MutableCFOptions& mutable_cf_options) {
         stats.bytes_written / static_cast<double>(stats.micros);
   }
 
-  uint64_t read_all = stats.bytes_read_non_output_levels +
-                      stats.bytes_read_output_level;
-  RECORD_INFO("%ld, %.2fMB, %.2fMB, %.5fs, %.3fs, %ld\n",
-              ++compaction_num,
-              read_all / 1048576.0,
-              stats.bytes_written / 1048576.0,
+  RECORD_INFO("Compaction: %.2fMB, %.3lf, %.3lf, %.5fs, %.3fs, %ld\n",
+              stats.bytes_written / 1048576.0f,
+              read_amp, write_amp,
               stats.micros * 1e-6,
               (GetStartTime() - stats.micros) * 1e-6,
               compact_->compaction->output_level());

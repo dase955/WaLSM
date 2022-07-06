@@ -370,6 +370,8 @@ struct DBOptions {
   DBOptions* IncreaseParallelism(int total_threads = 16);
 #endif  // ROCKSDB_LITE
 
+  bool calculate_statistics = true;
+
   // If true, the database will be created if it is missing.
   // Default: false
   bool create_if_missing = false;
