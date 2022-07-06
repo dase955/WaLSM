@@ -344,11 +344,9 @@ void Compactor::BGWork() {
     // Use sfence after all vlog are modified
     NVM_BARRIER;
 
-    RECORD_INFO("%ld, %.2fMB, %.2fMB, %.3lf, %.3lf, %.5fs, %.3fs, %ld\n",
-                0, total_out_size / 1048576.0,
-                total_out_size / 1048576.0, 1.0, 1.0,
-                (end_time - start_time) * 1e-6, start_time * 1e-6,
-                0);
+    RECORD_INFO("Flush to base: %.2fMB, %.3lfs, %.3lf\n",
+                total_out_size / 1048576.0,
+                (end_time - start_time) * 1e-6, start_time * 1e-6);
 
     auto squeezed_in_compaction =
         (float)SqueezedSizeInCompaction.load(std::memory_order_relaxed) / 1048576.0f;

@@ -376,9 +376,6 @@ bool HeatGroupManager::MergeNextGroup(HeatGroup* group, HeatGroup* next_group) {
   RemoveFromQueue(next_group);
   next_group->is_removed = true;
 
-  //RECORD_INFO("Merge %p to %p, size after merge = %d\n", next_group, group,
-  //       group->group_size_.load(std::memory_order_relaxed));
-
   // Free dummy node
   GetNodeAllocator()->DeallocateNode(next_start_node->nvm_node_);
   delete next_start_node;

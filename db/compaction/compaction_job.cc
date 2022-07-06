@@ -732,8 +732,6 @@ Status CompactionJob::Run() {
 }
 
 Status CompactionJob::Install(const MutableCFOptions& mutable_cf_options) {
-  static std::atomic<int> CompactionCount{1};
-
   AutoThreadOperationStageUpdater stage_updater(
       ThreadStatus::STAGE_COMPACTION_INSTALL);
   db_mutex_->AssertHeld();
@@ -754,6 +752,7 @@ Status CompactionJob::Install(const MutableCFOptions& mutable_cf_options) {
 
   double read_write_amp = 0.0;
   double write_amp = 0.0;
+  double read_amp = 0.0;
   double bytes_read_per_sec = 0;
   double bytes_written_per_sec = 0;
 
@@ -762,6 +761,9 @@ Status CompactionJob::Install(const MutableCFOptions& mutable_cf_options) {
                       stats.bytes_read_non_output_levels) /
                      static_cast<double>(stats.bytes_read_non_output_levels);
     write_amp = stats.bytes_written /
+                static_cast<double>(stats.bytes_read_non_output_levels);
+    read_amp = (stats.bytes_read_output_level +
+                stats.bytes_read_non_output_levels) /
                 static_cast<double>(stats.bytes_read_non_output_levels);
   }
   if (stats.micros > 0) {
@@ -772,14 +774,9 @@ Status CompactionJob::Install(const MutableCFOptions& mutable_cf_options) {
         stats.bytes_written / static_cast<double>(stats.micros);
   }
 
-  uint64_t read_all = stats.bytes_read_non_output_levels +
-                      stats.bytes_read_output_level;
-  RECORD_INFO("%ld, %.2fMB, %.2fMB, %.3lf, %.3lf, %.5fs, %.3fs, %ld\n",
-              CompactionCount++,
-              read_all / 1048576.0,
-              stats.bytes_written / 1048576.0,
-              read_write_amp,
-              write_amp,
+  RECORD_INFO("Compaction: %.2fMB, %.3lf, %.3lf, %.5fs, %.3fs, %ld\n",
+              stats.bytes_written / 1048576.0f,
+              read_amp, write_amp,
               stats.micros * 1e-6,
               (GetStartTime() - stats.micros) * 1e-6,
               compact_->compaction->output_level());

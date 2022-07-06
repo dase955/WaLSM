@@ -14,6 +14,7 @@
 #include <algorithm>
 #include <vector>
 
+#include "db/art/logger.h"
 #include "db/builder.h"
 #include "db/db_iter.h"
 #include "db/dbformat.h"
@@ -207,13 +208,9 @@ void NVMFlushJob::Build() {
                  s.ToString().c_str(),
                  meta_.marked_for_compaction ? " (needs compaction)" : "");
 
-  /*printf("[%s] [JOB %d] Level-0 flush table #%" PRIu64 ": %" PRIu64
-         " bytes %s"
-         "%s\n",
-         cfd_->GetName().c_str(), job_context_->job_id,
-         meta_.fd.GetNumber(), meta_.fd.GetFileSize(),
-         s.ToString().c_str(),
-         meta_.marked_for_compaction ? " (needs compaction)" : "");*/
+  RECORD_INFO("Flush l0: %.2fMB, %.3lfs, %.3lf\n",
+              meta_.fd.file_size / 1048576.0,
+              0.0, 0.0);
 
   if (s.ok() && output_file_directory_ != nullptr && sync_output_directory_) {
     s = output_file_directory_->Fsync(IOOptions(), nullptr);
