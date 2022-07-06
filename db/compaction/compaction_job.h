@@ -96,6 +96,8 @@ class CompactionJob {
   // subcompaction results
   Status Run();
 
+  void CalculateStatistics();
+
   // REQUIRED: mutex held
   // Add compaction input/output to the current version
   Status Install(const MutableCFOptions& mutable_cf_options);

@@ -561,6 +561,40 @@ void CompactionJob::GenSubcompactionBoundaries() {
   }
 }
 
+void CompactionJob::CalculateStatistics() {
+  CompactionRangeDelAggregator range_del_agg(
+      &compact_->compaction->column_family_data()->internal_comparator(),
+      existing_snapshots_);
+
+  ReadOptions read_options;
+  read_options.verify_checksums = true;
+  read_options.fill_cache = false;
+  read_options.total_order_seek = true;
+
+  std::unique_ptr<InternalIterator> input(
+      versions_->MakeL0InputIterator(read_options, compact_->compaction,
+                                     &range_del_agg, file_options_for_read_));
+
+  input->SeekToFirst();
+  Slice last_slice = input->user_key();
+  std::string last_user_key;
+  size_t output_raw_size = 0;
+  while (input->Valid()) {
+    Slice cur_user_key = input->user_key();
+    auto res = cur_user_key.compare(last_user_key);
+    assert(res >= 0);
+    if (cur_user_key.compare(last_user_key) > 0) {
+      output_raw_size += (input->key().size() + input->value().size());
+      last_user_key = std::string(cur_user_key.data(), cur_user_key.size());
+    }
+    input->Next();
+  }
+
+  RECORD_INFO("Flush L0: %.2fMB, %.3lfs, %.3lf\n",
+              output_raw_size / 1048576.0,
+              0.0, 0.0);
+}
+
 Status CompactionJob::Run() {
   AutoThreadOperationStageUpdater stage_updater(
       ThreadStatus::STAGE_COMPACTION_RUN);
@@ -574,7 +608,13 @@ Status CompactionJob::Run() {
 
   // Launch a thread for each of subcompactions 1...num_threads-1
   std::vector<port::Thread> thread_pool;
+
+#ifdef CALCULATE_STATISTICS
+  thread_pool.reserve(num_threads);
+  thread_pool.emplace_back(&CompactionJob::CalculateStatistics, this);
+#else
   thread_pool.reserve(num_threads - 1);
+#endif
   for (size_t i = 1; i < compact_->sub_compact_states.size(); i++) {
     thread_pool.emplace_back(&CompactionJob::ProcessKeyValueCompaction, this,
                              &compact_->sub_compact_states[i]);

@@ -2900,6 +2900,11 @@ Status DBImpl::BackgroundCompaction(bool* made_progress,
       }
     }
 
+    RECORD_INFO("Trivial move: %.2fMB, %.3fs, %ld\n",
+                moved_bytes / 1048576.0,
+                GetStartTime() * 1e-6,
+                c->output_level());
+
     status = versions_->LogAndApply(c->column_family_data(),
                                     *c->mutable_cf_options(), c->edit(),
                                     &mutex_, directories_.GetDbDir());

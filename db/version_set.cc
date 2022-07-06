@@ -5771,6 +5771,47 @@ InternalIterator* VersionSet::MakeInputIterator(
   return result;
 }
 
+InternalIterator* VersionSet::MakeL0InputIterator(
+    const ReadOptions& read_options, const Compaction* c,
+    RangeDelAggregator* range_del_agg,
+    const FileOptions& file_options_compactions) {
+  auto cfd = c->column_family_data();
+  // Level-0 files have to be merged together.  For other levels,
+  // we will make a concatenating iterator per level.
+  // TODO(opt): use concatenating iterator for level-0 if there is no overlap
+  const size_t space = c->input_levels(0)->num_files;
+  InternalIterator** list = new InternalIterator* [space];
+  size_t num = 0;
+  for (size_t which = 0; which < c->num_input_levels(); which++) {
+    if (c->input_levels(which)->num_files != 0) {
+      if (c->level(which) == 0) {
+        const LevelFilesBrief* flevel = c->input_levels(which);
+        for (size_t i = 0; i < flevel->num_files; i++) {
+          list[num++] = cfd->table_cache()->NewIterator(
+              read_options, file_options_compactions,
+              cfd->internal_comparator(), *flevel->files[i].file_metadata,
+              range_del_agg, c->mutable_cf_options()->prefix_extractor.get(),
+              /*table_reader_ptr=*/nullptr,
+              /*file_read_hist=*/nullptr, TableReaderCaller::kCompaction,
+              /*arena=*/nullptr,
+              /*skip_filters=*/false,
+              /*level=*/static_cast<int>(c->level(which)),
+              MaxFileSizeForL0MetaPin(*c->mutable_cf_options()),
+              /*smallest_compaction_key=*/nullptr,
+              /*largest_compaction_key=*/nullptr,
+              /*allow_unprepared_value=*/false);
+        }
+      }
+    }
+  }
+  assert(num <= space);
+  InternalIterator* result =
+      NewMergingIterator(&c->column_family_data()->internal_comparator(), list,
+                         static_cast<int>(num));
+  delete[] list;
+  return result;
+}
+
 // verify that the files listed in this compaction are present
 // in the current version
 bool VersionSet::VerifyCompactionFileConsistency(Compaction* c) {
