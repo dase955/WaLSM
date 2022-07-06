@@ -149,6 +149,15 @@ class FilePicker {
   int GetCurrentLevel() const { return curr_level_; }
 
   FileMetaData* GetNextFile() {
+    FileMetaData* f = getNextHitFile();
+    while (f != nullptr && (user_key_.compare(f->largest.user_key()) > 0 ||
+                            user_key_.compare(f->smallest.user_key()) < 0)) {
+      f = getNextHitFile();
+    }
+    return f;
+  }
+
+  FileMetaData* getNextHitFile() {
     if (curr_index_in_curr_level_ >= curr_file_level_.size()) {
       pickNextLevel();
       curr_index_in_curr_level_ = 0;
@@ -166,10 +175,6 @@ class FilePicker {
     is_hit_file_last_in_level_ =
         curr_index_in_curr_level_ == curr_file_level_.size() - 1;
     curr_index_in_curr_level_++;
-    if (user_key_.compare(ret->largest.user_key()) > 0 ||
-        user_key_.compare(ret->smallest.user_key()) < 0) {
-      return GetNextFile();
-    }
     return ret;
   }
 
@@ -2461,8 +2466,9 @@ void VersionStorageInfo::TryUpdateQValues() {
       if (fp->is_compaction_work[i] && fp->queries[i] >= gap &&
           fp->search_counter[i] > 0) {
         uint64_t penalty = fp->search_counter[i] / fp->queries[i];
-        uint64_t state = q_table_->genQState(fp->level_size[i], penalty,
-                                             fp->files_[i].size());
+        uint64_t state =
+            q_table_->genQState(fp->level_size[i], penalty,
+                                fp->is_tier[i] ? fp->files_[i].size() : 1);
         QKey key(state, penalty, 0, true);
         key.reward = penalty + (fp->is_tier[i] ? 1 : -1) *
                                    (fp->level_size[i] / (128 * 1024));

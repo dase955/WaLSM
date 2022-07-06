@@ -428,6 +428,7 @@ Compaction* UniversalCompactionBuilder::PickCompaction() {
 
   TEST_SYNC_POINT_CALLBACK("UniversalCompactionBuilder::PickCompaction:Return",
                            c);
+
   return c;
 }
 
@@ -543,7 +544,7 @@ Compaction* UniversalCompactionBuilder::PickCompactionForL0() {
         GetPathId(ioptions_, mutable_cf_options_, estimated_total_size);
     return new Compaction(
         vstorage_, ioptions_, mutable_cf_options_, mutable_db_options_,
-        std::move(inputs), output_level, LLONG_MAX, LLONG_MAX, path_id,
+        std::move(inputs), output_level, mutable_cf_options_.target_file_size_base, LLONG_MAX, path_id,
         GetCompressionType(ioptions_, vstorage_, mutable_cf_options_,
                            output_level, 1, true /* enable_compression */),
         GetCompressionOptions(mutable_cf_options_, vstorage_, output_level,
@@ -613,7 +614,7 @@ Compaction* UniversalCompactionBuilder::PickCompactionForSizeMarked() {
           GetPathId(ioptions_, mutable_cf_options_, estimated_total_size);
       Compaction* ret = new Compaction(
           vstorage_, ioptions_, mutable_cf_options_, mutable_db_options_,
-          std::move(inputs), output_level, LLONG_MAX, LLONG_MAX, path_id,
+          std::move(inputs), output_level, mutable_cf_options_.target_file_size_base, LLONG_MAX, path_id,
           GetCompressionType(ioptions_, vstorage_, mutable_cf_options_,
                              output_level, 1, true /* enable_compression */),
           GetCompressionOptions(mutable_cf_options_, vstorage_, output_level,

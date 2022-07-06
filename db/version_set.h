@@ -407,7 +407,7 @@ class VersionStorageInfo {
       InternalKey ismallest(smallest_, kMaxSequenceNumber, kTypeValue),
           ilargest(largest_, kMaxSequenceNumber, kTypeValue);
       const Slice ssmallest = ismallest.Encode(), slargest = ilargest.Encode();
-      for (int i = level_ - 1; i >= 0; i--) {
+      for (int i = 1; i < level_; i--) {
         for (FileMetaData* f : files_[i]) {
           if (f->fd.table_reader != nullptr) {
             middleKey =
