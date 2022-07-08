@@ -564,7 +564,16 @@ Compaction* UniversalCompactionBuilder::PickCompactionForSizeMarked() {
     int target_level = -1;
     for (int level = 1; level < vstorage_->num_levels() - 1; level++) {
       if (partition->level_size[level] >= base_size) {
-        target_level = level;
+        bool being_compacted = false;
+        for (FileMetaData* f : partition->files_[level+1]) {
+          if (f->being_compacted) {
+            being_compacted = true;
+            break;
+          }
+        }
+        if (!being_compacted) {
+          target_level = level;
+        }
       }
       base_size *= 4;
     }
@@ -598,13 +607,6 @@ Compaction* UniversalCompactionBuilder::PickCompactionForSizeMarked() {
       if (!partition->is_tier[output_level]) {
         std::vector<FileMetaData*> to_add;
         for (FileMetaData* f : partition->files_[output_level]) {
-          if (f->being_compacted) {
-            to_add.clear();
-            break;
-          }
-          to_add.push_back(f);
-        }
-        for (FileMetaData* f : to_add) {
           inputs[output_level].files.push_back(f);
         }
       }
