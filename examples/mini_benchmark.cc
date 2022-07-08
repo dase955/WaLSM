@@ -1,73 +1,31 @@
-//  Copyright (c) 2011-present, Facebook, Inc.  All rights reserved.
-//  This source code is licensed under both the GPLv2 (found in the
-//  COPYING file in the root directory) and Apache 2.0 License
-//  (found in the LICENSE.Apache file in the root directory).
+
 //
-// Copyright (c) 2011 The LevelDB Authors. All rights reserved.
-// Use of this source code is governed by a BSD-style license that can be
-// found in the LICENSE file. See the AUTHORS file for names of contributors.
+// Created by joechen on 22-7-8.
+// Update/Read workload
+//
 
-// Introduction of SyncPoint effectively disabled building and running this test
-// in Release build.
-// which is a pity, it is a good test
-#include <fcntl.h>
-#include <algorithm>
-#include <set>
-#include <thread>
-#include <unordered_set>
-#include <utility>
-#ifndef OS_WIN
-#include <unistd.h>
-#endif
-#ifdef OS_SOLARIS
-#include <alloca.h>
-#endif
+#include <cstdio>
+#include <string>
+#include <cstdint>
+#include <iostream>
+#include <fstream>
 
-#include "cache/lru_cache.h"
-#include "db/blob/blob_index.h"
-#include "db/db_impl/db_impl.h"
-#include "db/db_test_util.h"
-#include "db/dbformat.h"
-#include "db/job_context.h"
-#include "db/version_set.h"
-#include "db/write_batch_internal.h"
-#include "env/mock_env.h"
-#include "file/filename.h"
-#include "memtable/hash_linklist_rep.h"
-#include "monitoring/thread_status_util.h"
-#include "port/port.h"
-#include "port/stack_trace.h"
-#include "rocksdb/cache.h"
-#include "rocksdb/compaction_filter.h"
-#include "rocksdb/convenience.h"
 #include "rocksdb/db.h"
-#include "rocksdb/env.h"
-#include "rocksdb/experimental.h"
-#include "rocksdb/filter_policy.h"
-#include "rocksdb/options.h"
-#include "rocksdb/perf_context.h"
 #include "rocksdb/slice.h"
-#include "rocksdb/slice_transform.h"
-#include "rocksdb/snapshot.h"
-#include "rocksdb/table.h"
-#include "rocksdb/table_properties.h"
-#include "rocksdb/thread_status.h"
-#include "rocksdb/utilities/checkpoint.h"
-#include "rocksdb/utilities/optimistic_transaction_db.h"
-#include "rocksdb/utilities/write_batch_with_index.h"
-#include "table/mock_table.h"
-#include "table/scoped_arena_iterator.h"
-#include "test_util/sync_point.h"
-#include "test_util/testharness.h"
-#include "test_util/testutil.h"
-#include "util/compression.h"
-#include "util/mutexlock.h"
-#include "util/random.h"
-#include "util/rate_limiter.h"
-#include "util/string_util.h"
-#include "utilities/merge_operators.h"
+#include "rocksdb/options.h"
 
-namespace ROCKSDB_NAMESPACE {
+#include <time.h>
+#include <sys/time.h>
+
+#include <unordered_set>
+#include <algorithm>
+#include <mutex>
+#include <random>
+#include <thread>
+#include <cmath>
+#include <time.h>
+
+using namespace rocksdb;
 
 enum Operation {
   kRead,
@@ -205,7 +163,7 @@ class KeyGenerator {
 
     std::random_device rd;
     std::default_random_engine rng = std::default_random_engine{rd()};
-    std::uniform_int_distribution<uint64_t> dist(0, sample_range_ - 1);
+    std::uniform_int_distribution<uint64_t> dist(sample_range_);
 
     if (hot_load_data.size() < hot_data.size()) {
       int to_add = hot_data.size() - hot_load_data.size();
@@ -361,9 +319,9 @@ class KeyGenerator {
 
   double read_ratio_ = 0.5;
 
-  int hot_read_intervals_[101];
+  uint64_t hot_read_intervals_[101];
 
-  int hot_write_intervals_[101];
+  uint64_t hot_write_intervals_[101];
 
   uint64_t interval_length_;
 
@@ -396,26 +354,163 @@ class KeyGenerator {
   std::string prefix_ = "user";
 };
 
-// Note that whole DBTest and its child classes disable fsync on files
-// and directories for speed.
-// If fsync needs to be covered in a test, put it in other places.
-class DBTest3 : public DBTestBase {
+class WorkloadRunner {
  public:
-  DBTest3() : DBTestBase("/db_test3", /*env_do_fsync=*/false) {}
+  WorkloadRunner(int num_threads, DB* db)
+      : num_threads_(num_threads), db_(db) {
+    work_threads_ = new std::thread[num_threads];
+  }
+
+  void SetKeyGenerator(KeyGenerator* generator) {
+    key_generator_ = generator;
+  }
+
+  void Load() {
+    completed_count_.store(0, std::memory_order_relaxed);
+
+    for (int i = 0; i < num_threads_; ++i) {
+      work_threads_[i] = std::thread(
+          &WorkloadRunner::LoadPhase, this, i);
+    }
+
+    printf("Load opearation count = %d\n", key_generator_->GetLoadOperations());
+
+    auto ops_thread = std::thread(
+        &WorkloadRunner::StatisticsThread, this,
+        key_generator_->GetLoadOperations());
+    ops_thread.join();
+
+    for (int i = 0; i < num_threads_; ++i) {
+      work_threads_[i].join();
+    }
+  }
+
+  void Run() {
+    completed_count_.store(0, std::memory_order_relaxed);
+    printf("Run opearation count = %d\n", key_generator_->GetRunOperations());
+
+    for (int i = 0; i < num_threads_; ++i) {
+      work_threads_[i] = std::thread(
+          &WorkloadRunner::RunPhase, this, i);
+    }
+
+    auto ops_thread = std::thread(
+        &WorkloadRunner::StatisticsThread, this,
+        key_generator_->GetRunOperations());
+    ops_thread.join();
+
+    for (int i = 0; i < num_threads_; ++i) {
+      work_threads_[i].join();
+    }
+  }
+
+  void SetMetricInterval(int interval) {
+    interval_ = interval;
+  }
+
+  static std::string GenerateValueFromKey(std::string& key) {
+    int repeat_times = 1024UL / key.length();
+    size_t len = key.length() * repeat_times;
+    std::string value;
+    value.reserve(1024);
+    while (repeat_times--) {
+      value += key;
+    }
+    value += key.substr(0, 1024 - value.length());
+    return value;
+  }
+
+ private:
+  // TODO: need latency statistics
+  void LoadPhase(int thread_id) {
+    int operation_count = key_generator_->GetLoadOperations();
+    int operation_per_thread = operation_count / num_threads_;
+    if (thread_id == 0) {
+      operation_per_thread += (operation_count % num_threads_);
+    }
+
+    Status s;
+
+    while (operation_per_thread--) {
+      auto key = key_generator_->NextLoadKey();
+      auto value = GenerateValueFromKey(key);
+      s = db_->Put(WriteOptions(), key, value);
+      ++completed_count_;
+      assert(s.ok() || s.IsNotFound());
+    }
+  }
+
+  void RunPhase(int thread_id) {
+    int operation_count = key_generator_->GetRunOperations();
+    int operation_per_thread = operation_count / num_threads_;
+    if (thread_id == 0) {
+      operation_per_thread += (operation_count % num_threads_);
+    }
+
+    std::string key;
+    std::string ret;
+    Status s;
+
+    while (operation_per_thread--) {
+      auto type = key_generator_->Next(key);
+      auto value = GenerateValueFromKey(key);
+
+      switch (type) {
+        case kWrite:
+          s = db_->Put(WriteOptions(), key, value);
+          break;
+        case kRead:
+          s = db_->Get(ReadOptions(), key, &ret);
+          break;
+      }
+
+      ++completed_count_;
+      assert(s.ok() || s.IsNotFound());
+    }
+  }
+
+  void StatisticsThread(int operation_counts) {
+    int prev_completed = 0;
+    int seconds = 0;
+    while (prev_completed < operation_counts) {
+      int new_completed = completed_count_.load(std::memory_order_relaxed);
+      int ops = (new_completed - prev_completed) / interval_;
+      printf("[%d sec] %d operations; %d current ops/sec\n",
+             seconds, new_completed, ops);
+
+      prev_completed = new_completed;
+      std::this_thread::sleep_for(std::chrono::seconds(interval_));
+      seconds += interval_;
+    }
+  }
+
+  int interval_ = 5;
+
+  int num_threads_ = 16;
+
+  std::thread* work_threads_;
+
+  std::thread ops_thread_;
+
+  std::atomic<int> completed_count_{0};
+
+  std::atomic<int> failed_count_{0};
+
+  KeyGenerator* key_generator_ = nullptr;
+
+  DB* db_;
 };
 
-std::string repeat(std::string& str) {
-  int repeat_times = 1024UL / str.length();
-  size_t len = str.length() * repeat_times;
-  std::string ret;
-  ret.reserve(len);
-  while (repeat_times--) {
-    ret += str;
-  }
-  return ret;
-}
+int main(int argc, char* argv[]) {
+  setbuf(stdout, NULL);
 
-TEST_F(DBTest3, MockEnvTest) {
+  float read_ratio = 0.5f;
+  if (argc == 2) {
+    read_ratio = atof(argv[1]);
+  }
+
+  printf("Read ratio = %.2f\n", read_ratio);
+
   int thread_num = 8;
   int load_count = 80000000;
   int run_count = 320000000;
@@ -427,104 +522,22 @@ TEST_F(DBTest3, MockEnvTest) {
   options.use_direct_reads = true;
   options.enable_pipelined_write = true;
   options.compression = rocksdb::kNoCompression;
+  options.nvm_path = "/mnt/pmem1/crh/nodememory";
 
   std::string db_path = "/home/crh/db_test_nvm_l0";
 
-  auto gen = new KeyGenerator(load_count, run_count, sample_range);
-}
-
-/*
-TEST_F(DBTest3, MockEnvTest2) {
-  Options options;
-  options.create_if_missing = true;
-  options.enable_pipelined_write = true;
-
-  options.compaction_threshold = 1024 << 20;
-  options.vlog_force_gc_ratio_ = 0.5;
-  options.OptimizeLevelStyleCompaction();
-
   DB* db;
+  DB::Open(options, db_path, &db);
 
-  ASSERT_OK(DB::Open(options, "/tmp/db_test", &db));
+  auto gen = new KeyGenerator(load_count, run_count, sample_range, 0.98);
+  gen->SetOperationCount(120000000);
 
-  std::cout << "Start test get" << std::endl;
-  for (int i = 0; i < total_count; i += 4) {
-    std::string key = next_key(i);
-    std::string res;
-    std::string expected = repeat(key);
-    auto status = db->Get(ReadOptions(), key, &res);
-    ASSERT_TRUE(!status.ok() || res == expected );
-    if (!status.ok()) {
-      std::cout << key << " Error!" << std::endl;
-    }
-  }
-  std::cout << "Test get done" << std::endl;
-
-  db->Close();
-  delete db;
-}
-
-TEST_F(DBTest3, MockEnvTest3) {
-  Options options;
-  options.create_if_missing = true;
-  options.enable_pipelined_write = true;
-
-  options.compaction_threshold = 1024 << 20;
-  options.vlog_force_gc_ratio_ = 0.5;
-  options.OptimizeLevelStyleCompaction();
-
-  DB* db;
-
-  ASSERT_OK(DB::Open(options, "/tmp/db_test", &db));
-
-  std::thread read_threads[thread_num];
-  std::thread write_threads[thread_num];
-  std::vector<std::string> sampled_keys[thread_num];
-  for (int i = 0; i < thread_num; ++i) {
-    write_threads[i] = std::thread(PutThread, db);
-    read_threads[i] = std::thread(GetThread, db);
-  }
-
-  for (auto & thread : read_threads) {
-    thread.join();
-  }
-
-  for (auto & thread : write_threads) {
-    thread.join();
-  }
-
-  std::cout << "Start test get" << std::endl;
-  for (int i = 0; i < total_count; i += 4) {
-    std::string key = next_key(i);
-    std::string res;
-    std::string expected = repeat(key);
-    auto status = db->Get(ReadOptions(), key, &res);
-    ASSERT_TRUE(!status.ok() || res == expected );
-    if (!status.ok()) {
-      std::cout << key << " Error!" << std::endl;
-    }
-  }
-  std::cout << "Test get done" << std::endl;
+  WorkloadRunner runner(thread_num, db);
+  runner.SetKeyGenerator(gen);
+  runner.Load();
+  runner.Run();
 
   db->Close();
 
   delete db;
-}
-*/
-
-}  // namespace ROCKSDB_NAMESPACE
-
-#ifdef ROCKSDB_UNITTESTS_WITH_CUSTOM_OBJECTS_FROM_STATIC_LIBS
-extern "C" {
-void RegisterCustomObjects(int argc, char** argv);
-}
-#else
-void RegisterCustomObjects(int /*argc*/, char** /*argv*/) {}
-#endif  // !ROCKSDB_UNITTESTS_WITH_CUSTOM_OBJECTS_FROM_STATIC_LIBS
-
-int main(int argc, char** argv) {
-  ROCKSDB_NAMESPACE::port::InstallStackTraceHandler();
-  ::testing::InitGoogleTest(&argc, argv);
-  RegisterCustomObjects(argc, argv);
-  return RUN_ALL_TESTS();
 }

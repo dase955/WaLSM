@@ -397,7 +397,7 @@ int main(int argc, char* argv[]) {
 
   int thread_num = 8;
   int total_count = 320000000;
-  int sample_range = 1000000000;
+  int64_t sample_range = 10000000000;
 
   Options options;
 

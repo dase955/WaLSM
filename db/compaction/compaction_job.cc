@@ -589,14 +589,13 @@ void CompactionJob::CalculateStatistics() {
                                      &range_del_agg, file_options_for_read_));
 
   input->SeekToFirst();
-  Slice last_slice = input->user_key();
   std::string last_user_key;
   size_t output_raw_size = 0;
   while (input->Valid()) {
     Slice cur_user_key = input->user_key();
     auto res = cur_user_key.compare(last_user_key);
     assert(res >= 0);
-    if (cur_user_key.compare(last_user_key) > 0) {
+    if (res > 0) {
       output_raw_size += (input->key().size() + input->value().size());
       last_user_key = std::string(cur_user_key.data(), cur_user_key.size());
     }
