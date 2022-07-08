@@ -413,9 +413,7 @@ class VersionStorageInfo {
       const Slice ssmallest = ismallest.Encode(), slargest = ilargest.Encode();
       for (int i = 1; i < level_; i++) {
         for (FileMetaData* f : files_[i]) {
-          if (f != nullptr && f->largest.user_key().compare(slargest) > 0 &&
-              f->smallest.user_key().compare(ssmallest) < 0 &&
-              f->fd.table_reader != nullptr) {
+          if (f != nullptr && f->fd.table_reader != nullptr) {
             middleKey =
                 f->fd.table_reader->ApproximateMiddleKey(ssmallest, slargest);
             if (!middleKey.empty()) {
