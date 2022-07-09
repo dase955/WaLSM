@@ -16,7 +16,7 @@ namespace ROCKSDB_NAMESPACE {
 
 #define RECORD_DEBUG(format, ...) WriteDebug(format, ##__VA_ARGS__)
 
-extern void InitLogFile();
+void SetLogPath(const std::string& path);
 
 extern void WriteLog(const char* format, ...);
 
