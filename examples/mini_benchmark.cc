@@ -541,7 +541,12 @@ void wa_test(double alpha) {
   options.compression = rocksdb::kNoCompression;
   options.nvm_path = "/mnt/chen/rocksdb_l0";
   options.wal_dir = "/mnt/chen/rocksdb_log";
+
   options.max_bytes_for_level_base = 8ULL << 30; // 8G L1
+  options.min_write_buffer_number_to_merge = 2;
+  options.max_write_buffer_number = 6;
+  options.level0_file_num_compaction_trigger = 80;
+
   options.IncreaseParallelism(16);
 
   std::string db_path = "/tmp/tmp_data/db_test_nvm_l0";
@@ -585,6 +590,11 @@ void simple_test(float read_ratio) {
   options.enable_pipelined_write = true;
   options.compression = rocksdb::kNoCompression;
   options.IncreaseParallelism(16);
+
+  options.max_bytes_for_level_base = 8ULL << 30; // 8G L1
+  options.min_write_buffer_number_to_merge = 2;
+  options.max_write_buffer_number = 6;
+  options.level0_file_num_compaction_trigger = 80;
 
   std::string db_path = "/home/crh/db_test_nvm_l0";
 
