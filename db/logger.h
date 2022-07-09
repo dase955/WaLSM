@@ -14,9 +14,11 @@ namespace ROCKSDB_NAMESPACE {
 
 #define RECORD_INFO(format, ...) write_log(format, ##__VA_ARGS__)
 
-extern void init_log_file();
+extern void InitLogFile();
 
 extern void write_log(const char* format, ...);
+
+void SetLogPath(const std::string& path);
 
 inline uint64_t GetNowMicros() {
   struct timeval tv;

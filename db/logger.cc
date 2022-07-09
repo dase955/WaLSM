@@ -7,16 +7,23 @@
 
 namespace ROCKSDB_NAMESPACE {
 
-const std::string compaction_log = "/home/crh/compaction_nvm_l0.csv";
+std::string log_path = "/tmp";
 
-void init_log_file() {
+std::string compaction_filename = "compaction_nvm_l0.csv";
+
+std::string compaction_log = "/tmp/compaction_nvm_l0.csv";
+
+void SetLogPath(const std::string& path) {
+  log_path = path;
+  compaction_log = log_path + "/" + compaction_filename;
+}
+
+void InitLogFile() {
   FILE* fp = fopen(compaction_log.c_str(), "w");
   if (fp == nullptr) {
     printf("log failed\n");
   }
   fclose(fp);
-  RECORD_INFO("compaction, read(MB), write(MB)"
-      ", time(s), start(s), is_level0\n");
 }
 
 std::mutex m;

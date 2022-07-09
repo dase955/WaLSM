@@ -271,8 +271,9 @@ DBImpl::DBImpl(const DBOptions& options, const std::string& dbname,
   preserve_deletes_seqnum_.store(0);
 
   // Use init time as start time.
+  SetLogPath(dbname);
   GetStartTime();
-  init_log_file();
+  InitLogFile();
 }
 
 Status DBImpl::Resume() {

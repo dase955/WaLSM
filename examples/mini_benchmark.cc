@@ -136,9 +136,10 @@ class KeyGenerator {
 
     // Generate load records
     load_index_.store(0, std::memory_order_relaxed);
+    update_index_.store(0, std::memory_order_relaxed);
     load_records_.resize(load_record_count_);
     for (int i = 0; i < load_record_count_; ++i) {
-      load_records_[i] = fnvhash64(i);
+      load_records_[i] = fnvhash64(i) % sample_range_;
     }
 
     // Generate zipfian data and map them to load records.
@@ -163,7 +164,7 @@ class KeyGenerator {
 
     std::random_device rd;
     std::default_random_engine rng = std::default_random_engine{rd()};
-    std::uniform_int_distribution<uint64_t> dist(sample_range_);
+    std::uniform_int_distribution<uint64_t> dist(0, sample_range_);
 
     if (hot_load_data.size() < hot_data.size()) {
       int to_add = hot_data.size() - hot_load_data.size();
@@ -218,6 +219,8 @@ class KeyGenerator {
     printf("Change load_record_count from %d to %d\n",
            load_record_count_, (int)load_records_.size());
     load_record_count_ = load_records_.size();
+
+    CheckFreq(run_records_);
   }
 
   static uint64_t fnvhash64(int64_t val) {
@@ -501,15 +504,44 @@ class WorkloadRunner {
   DB* db_;
 };
 
-int main(int argc, char* argv[]) {
+void wa_test(double alpha) {
   setbuf(stdout, NULL);
 
-  float read_ratio = 0.5f;
-  if (argc == 2) {
-    read_ratio = atof(argv[1]);
-  }
+  int thread_num = 8;
+  int load_count = 80000000;
+  int run_count = 320000000;
+  uint64_t sample_range = 9000000000000000000;
 
-  printf("Read ratio = %.2f\n", read_ratio);
+  Options options;
+  options.create_if_missing = true;
+  options.use_direct_io_for_flush_and_compaction = true;
+  options.use_direct_reads = true;
+  options.enable_pipelined_write = true;
+  options.compression = rocksdb::kNoCompression;
+    options.nvm_path = "/mnt/chen/nodememory";
+  options.IncreaseParallelism(16);
+
+  std::string db_path = "/tmp/tmp_data/db_test_nvm_l0";
+
+  DB* db;
+  DB::Open(options, db_path, &db);
+
+  auto gen = new KeyGenerator(load_count, run_count, sample_range, alpha);
+  gen->SetReadRatio(5e-324);
+
+  WorkloadRunner runner(thread_num, db);
+  runner.SetKeyGenerator(gen);
+  runner.SetMetricInterval(2);
+  runner.Load();
+  runner.Run();
+
+  db->Close();
+
+  delete db;
+}
+
+void simple_test(float read_ratio) {
+  setbuf(stdout, NULL);
 
   int thread_num = 8;
   int load_count = 80000000;
@@ -523,6 +555,7 @@ int main(int argc, char* argv[]) {
   options.enable_pipelined_write = true;
   options.compression = rocksdb::kNoCompression;
   options.nvm_path = "/mnt/pmem1/crh/nodememory";
+  options.IncreaseParallelism(16);
 
   std::string db_path = "/home/crh/db_test_nvm_l0";
 
@@ -531,13 +564,26 @@ int main(int argc, char* argv[]) {
 
   auto gen = new KeyGenerator(load_count, run_count, sample_range, 0.98);
   gen->SetOperationCount(120000000);
+  gen->SetReadRatio(read_ratio);
 
   WorkloadRunner runner(thread_num, db);
   runner.SetKeyGenerator(gen);
+  runner.SetMetricInterval(2);
   runner.Load();
   runner.Run();
 
   db->Close();
 
   delete db;
+}
+
+int main(int argc, char* argv[]) {
+  setbuf(stdout, NULL);
+
+  float parameter = 0.98f;
+  if (argc == 2) {
+    parameter = atof(argv[1]);
+  }
+
+  wa_test(parameter);
 }
