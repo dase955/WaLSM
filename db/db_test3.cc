@@ -282,6 +282,7 @@ void DoTest(std::string test_name) {
   options.enable_pipelined_write = true;
   options.nvm_path = "/tmp/nodememory";
   options.compression = rocksdb::kNoCompression;
+  options.IncreaseParallelism(16);
 
   DB* db;
   DB::Open(options, "/tmp/tmp_data/db_test_art", &db);

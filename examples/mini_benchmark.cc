@@ -139,7 +139,7 @@ class KeyGenerator {
     update_index_.store(0, std::memory_order_relaxed);
     load_records_.resize(load_record_count_);
     for (int i = 0; i < load_record_count_; ++i) {
-      load_records_[i] = fnvhash64(i);
+      load_records_[i] = fnvhash64(i) % sample_range_;
     }
 
     // Generate zipfian data and map them to load records.
@@ -219,6 +219,8 @@ class KeyGenerator {
     printf("Change load_record_count from %d to %d\n",
            load_record_count_, (int)load_records_.size());
     load_record_count_ = load_records_.size();
+
+    CheckFreq(run_records_);
   }
 
   static uint64_t fnvhash64(int64_t val) {
@@ -524,6 +526,7 @@ int main(int argc, char* argv[]) {
   options.enable_pipelined_write = true;
   options.compression = rocksdb::kNoCompression;
   options.nvm_path = "/mnt/pmem1/crh/nodememory";
+  options.IncreaseParallelism(16);
 
   std::string db_path = "/home/crh/db_test_nvm_l0";
 
@@ -536,6 +539,7 @@ int main(int argc, char* argv[]) {
 
   WorkloadRunner runner(thread_num, db);
   runner.SetKeyGenerator(gen);
+  runner.SetMetricInterval(2);
   runner.Load();
   runner.Run();
 

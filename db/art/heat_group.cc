@@ -238,6 +238,7 @@ void HeatGroupManager::Reset() {
     group_queue_.heads_[level]->next = group_queue_.tails_[level];
     group_queue_.tails_[level]->prev = group_queue_.heads_[level];
   }
+  group_queue_.total_layers = 1;
   StartThread();
 }
 
