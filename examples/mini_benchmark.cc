@@ -164,7 +164,7 @@ class KeyGenerator {
 
     std::random_device rd;
     std::default_random_engine rng = std::default_random_engine{rd()};
-    std::uniform_int_distribution<uint64_t> dist(sample_range_);
+    std::uniform_int_distribution<uint64_t> dist(0, sample_range_ - 1);
 
     if (hot_load_data.size() < hot_data.size()) {
       int to_add = hot_data.size() - hot_load_data.size();
