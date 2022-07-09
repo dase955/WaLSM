@@ -246,11 +246,10 @@ Status DBImpl::FlushMemTableToOutputFile(
   auto end_time = GetStartTime();
 
   auto out_size = file_meta.raw_key_size + file_meta.raw_value_size;
-  RECORD_INFO("%ld, %.2fMB, %.2fMB, %.5fs, %.3fs, %ld\n",
-              0, out_size / 1048576.0,
+  RECORD_INFO("Flush l0, %.2fMB, %.5fs, %.3fs\n",
               out_size / 1048576.0,
-              (end_time - start_time) * 1e-6, start_time * 1e-6,
-              0);
+              (end_time - start_time) * 1e-6,
+              start_time * 1e-6);
 
   if (!s.ok() && !s.IsShutdownInProgress() && !s.IsColumnFamilyDropped()) {
     if (!io_s.ok() && !io_s.IsShutdownInProgress() &&

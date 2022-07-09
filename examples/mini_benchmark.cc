@@ -9,21 +9,18 @@
 #include <cstdint>
 #include <iostream>
 #include <fstream>
-
-#include "rocksdb/db.h"
-#include "rocksdb/slice.h"
-#include "rocksdb/options.h"
+#include <unistd.h>
 
 #include <time.h>
-#include <sys/time.h>
-
-#include <unordered_set>
 #include <algorithm>
 #include <mutex>
 #include <random>
 #include <thread>
 #include <cmath>
-#include <time.h>
+
+#include "rocksdb/db.h"
+#include "rocksdb/slice.h"
+#include "rocksdb/options.h"
 
 using namespace rocksdb;
 
@@ -32,9 +29,13 @@ enum Operation {
   kWrite,
 };
 
-void CheckFreq(std::vector<uint64_t>& samples) {
-  std::cout << "Check Freq start" << std::endl;
+void DeleteDirectory(const std::string& dir) {
+  if (rmdir(dir.c_str()) == -1) {
+    std::cerr << "Error: " << strerror(errno) << std::endl;
+  }
+}
 
+void CheckFreq(std::vector<uint64_t>& samples) {
   std::unordered_map<uint64_t, int> freqs;
   for (auto& value : samples) {
     ++freqs[value];
@@ -47,8 +48,8 @@ void CheckFreq(std::vector<uint64_t>& samples) {
 
   int hot_count = freqs.size() - cold_count;
   float hot_freq = (samples.size() - cold_count) / (float)samples.size() * 100.f;
-  printf("Sample generated. hot count = %d(%.2f), cold count = %d\n",
-         hot_count, hot_freq, cold_count);
+  printf("Update: hot count = %d(%.2f%%), cold count = %d(%.2f%%)\n",
+         hot_count, hot_freq, cold_count, 100.f - hot_freq);
 }
 
 class KeyGenerator {
@@ -164,7 +165,7 @@ class KeyGenerator {
 
     std::random_device rd;
     std::default_random_engine rng = std::default_random_engine{rd()};
-    std::uniform_int_distribution<uint64_t> dist(0, sample_range_);
+    std::uniform_int_distribution<uint64_t> dist(0, sample_range_ - 1);
 
     if (hot_load_data.size() < hot_data.size()) {
       int to_add = hot_data.size() - hot_load_data.size();
@@ -219,6 +220,12 @@ class KeyGenerator {
     printf("Change load_record_count from %d to %d\n",
            load_record_count_, (int)load_records_.size());
     load_record_count_ = load_records_.size();
+
+    float hot_read_ratio = (float)(hot_read_records_.size()) * 100.f/
+                           (hot_read_records_.size() + cold_read_records_.size());
+    printf("Read: hot count = %d(%.2f%%), cold count = %d(%.2f%%)\n",
+           (int)hot_read_records_.size(), hot_read_ratio,
+           (int)cold_read_records_.size(), 100.f - hot_read_ratio);
 
     CheckFreq(run_records_);
   }
@@ -518,13 +525,22 @@ void wa_test(double alpha) {
   options.use_direct_reads = true;
   options.enable_pipelined_write = true;
   options.compression = rocksdb::kNoCompression;
-    options.nvm_path = "/mnt/chen/nodememory";
+  options.nvm_path = "/mnt/chen/rocksdb_l0";
+  options.wal_dir = "/mnt/chen/rocksdb_log";
   options.IncreaseParallelism(16);
 
   std::string db_path = "/tmp/tmp_data/db_test_nvm_l0";
 
+  //DeleteDirectory(options.nvm_path);
+  //DeleteDirectory(options.wal_dir);
+  //DeleteDirectory(db_path);
+
   DB* db;
-  DB::Open(options, db_path, &db);
+  auto status = DB::Open(options, db_path, &db);
+  if (!status.ok()) {
+    printf("Open db error\n");
+    return;
+  }
 
   auto gen = new KeyGenerator(load_count, run_count, sample_range, alpha);
   gen->SetReadRatio(5e-324);
@@ -532,7 +548,6 @@ void wa_test(double alpha) {
   WorkloadRunner runner(thread_num, db);
   runner.SetKeyGenerator(gen);
   runner.SetMetricInterval(2);
-  runner.Load();
   runner.Run();
 
   db->Close();
@@ -554,10 +569,13 @@ void simple_test(float read_ratio) {
   options.use_direct_reads = true;
   options.enable_pipelined_write = true;
   options.compression = rocksdb::kNoCompression;
-  options.nvm_path = "/mnt/pmem1/crh/nodememory";
   options.IncreaseParallelism(16);
 
   std::string db_path = "/home/crh/db_test_nvm_l0";
+
+  //DeleteDirectory(options.nvm_path);
+  //DeleteDirectory(options.wal_dir);
+  //DeleteDirectory(db_path);
 
   DB* db;
   DB::Open(options, db_path, &db);
