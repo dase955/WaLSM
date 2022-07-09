@@ -591,6 +591,7 @@ void CompactionJob::CalculateStatistics() {
   input->SeekToFirst();
   std::string last_user_key;
   size_t output_raw_size = 0;
+  size_t output_total_size = 0;
   while (input->Valid()) {
     Slice cur_user_key = input->user_key();
     auto res = cur_user_key.compare(last_user_key);
@@ -599,11 +600,13 @@ void CompactionJob::CalculateStatistics() {
       output_raw_size += (input->key().size() + input->value().size());
       last_user_key = std::string(cur_user_key.data(), cur_user_key.size());
     }
+    output_total_size += (input->key().size() + input->value().size());
     input->Next();
   }
 
-  RECORD_INFO("Flush to base: %.2fMB, %.3lfs, %.3lf\n",
+  RECORD_INFO("Flush to base: %.2fMB, %.2fMB, %.3lfs, %.3lf\n",
               output_raw_size / 1048576.0,
+              output_total_size / 1048576.0,
               0.0, 0.0);
 
   input.reset();

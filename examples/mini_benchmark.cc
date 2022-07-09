@@ -128,6 +128,20 @@ class KeyGenerator {
     for (int i = 20; i < 30; ++i) {
       hot_write_intervals_[r[i]] = 1;
     }
+
+    printf("Hot write intervals:\n");
+    for (int i = 0; i < 101; ++i) {
+      if (hot_write_intervals_[i]) {
+        printf("[%19zu, %19zu)\n", i * interval_length_, (i + 1) * interval_length_);
+      }
+    }
+
+    printf("Hot write intervals:\n");
+    for (int i = 0; i < 101; ++i) {
+      if (hot_read_intervals_[i]) {
+        printf("[%19zu, %19zu)\n", i * interval_length_, (i + 1) * interval_length_);
+      }
+    }
   }
 
   void Prepare() {
@@ -329,9 +343,9 @@ class KeyGenerator {
 
   double read_ratio_ = 0.5;
 
-  uint64_t hot_read_intervals_[101];
+  int hot_read_intervals_[101];
 
-  uint64_t hot_write_intervals_[101];
+  int hot_write_intervals_[101];
 
   uint64_t interval_length_;
 
@@ -527,6 +541,7 @@ void wa_test(double alpha) {
   options.compression = rocksdb::kNoCompression;
   options.nvm_path = "/mnt/chen/rocksdb_l0";
   options.wal_dir = "/mnt/chen/rocksdb_log";
+  options.max_bytes_for_level_base = 8ULL << 30; // 8G L1
   options.IncreaseParallelism(16);
 
   std::string db_path = "/tmp/tmp_data/db_test_nvm_l0";
