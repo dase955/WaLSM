@@ -5,14 +5,12 @@
 //
 
 #include <time.h>
-#include <unistd.h>
 
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <fstream>
-#include <iostream>
 #include <mutex>
 #include <random>
 #include <string>
@@ -22,18 +20,9 @@
 #include "rocksdb/options.h"
 #include "rocksdb/slice.h"
 
+#include "utils.h"
+
 using namespace rocksdb;
-
-enum Operation {
-  kRead,
-  kWrite,
-};
-
-void DeleteDirectory(const std::string& dir) {
-  if (rmdir(dir.c_str()) == -1) {
-    std::cerr << "Error: " << strerror(errno) << std::endl;
-  }
-}
 
 void CheckFreq(std::vector<uint64_t>& samples) {
   std::unordered_map<uint64_t, int> freqs;
@@ -113,7 +102,7 @@ class KeyGenerator {
     memset(hot_write_intervals_, 0, sizeof(int) * 101);
     for (int i = 0; i < 20; i++) {
       hot_read_intervals_[i] = 1;
-      hot_write_intervals_[i+80] = 1;
+      hot_write_intervals_[i + 80] = 1;
     }
     //    for (int i = 0; i < 10; ++i) {
     //      hot_read_intervals_[r[i]] = 1;
@@ -129,7 +118,7 @@ class KeyGenerator {
     printf("Hot write intervals:\n");
     for (int i = 0; i < 101; ++i) {
       if (hot_write_intervals_[i]) {
-        printf("[%19llu, %19llu)\n", i * interval_length_,
+        printf("[%19lu, %19lu)\n", i * interval_length_,
                (i + 1) * interval_length_);
       }
     }
@@ -137,7 +126,7 @@ class KeyGenerator {
     printf("Hot write intervals:\n");
     for (int i = 0; i < 101; ++i) {
       if (hot_read_intervals_[i]) {
-        printf("[%19llu, %19llu)\n", i * interval_length_,
+        printf("[%19lu, %19lu)\n", i * interval_length_,
                (i + 1) * interval_length_);
       }
     }
@@ -386,6 +375,8 @@ class WorkloadRunner {
  public:
   WorkloadRunner(int num_threads, DB* db) : num_threads_(num_threads), db_(db) {
     work_threads_ = new std::thread[num_threads];
+    thread_read_stats_ = new HistogramStat[num_threads];
+    thread_write_stats_ = new HistogramStat[num_threads];
   }
 
   void SetKeyGenerator(KeyGenerator* generator) { key_generator_ = generator; }
@@ -406,6 +397,18 @@ class WorkloadRunner {
     for (int i = 0; i < num_threads_; ++i) {
       work_threads_[i].join();
     }
+
+    HistogramStat total_write_stat;
+    for (int i = 0; i < num_threads_; ++i) {
+      total_write_stat.Merge(thread_write_stats_[i]);
+    }
+
+    printf("Load done. Write Statistics: \n"
+        "Avg(us): %.2lf\nMin(us): %zu\nMax(us): %zu\n"
+        "90th(us): %.2lf\n99th(us): %.2lfn\n99.9th(us): %.2lf\n",
+        total_write_stat.Median(), total_write_stat.max(), total_write_stat.max(),
+        total_write_stat.Percentile(90), total_write_stat.Percentile(99),
+        total_write_stat.Percentile(99.9));
   }
 
   void Run() {
@@ -423,6 +426,29 @@ class WorkloadRunner {
     for (int i = 0; i < num_threads_; ++i) {
       work_threads_[i].join();
     }
+
+    printf("Run phase done, failed count = %d\n",
+           failed_count_.load(std::memory_order_relaxed));
+
+    HistogramStat total_write_stat;
+    HistogramStat total_read_stat;
+    for (int i = 0; i < num_threads_; ++i) {
+      total_write_stat.Merge(thread_write_stats_[i]);
+      total_read_stat.Merge(thread_read_stats_[i]);
+    }
+
+    printf("Write Statistics: \n"
+        "Avg(us): %.1lf\nMin(us): %zu\nMax(us): %zu\n"
+        "90th(us): %.1lf\n99th(us): %.1lfn\n99.9th(us): %.1lf\n",
+        total_write_stat.Median(), total_write_stat.max(), total_write_stat.max(),
+        total_write_stat.Percentile(90), total_write_stat.Percentile(99),
+        total_write_stat.Percentile(99.9));
+    printf("Read Statistics: \n"
+        "Avg(us): %.1lf\nMin(us): %zu\nMax(us): %zu\n"
+        "90th(us): %.1lf\n99th(us): %.1lfn\n99.9th(us): %.1lf\n",
+        total_read_stat.Median(), total_read_stat.max(), total_read_stat.max(),
+        total_read_stat.Percentile(90), total_read_stat.Percentile(99),
+        total_read_stat.Percentile(99.9));
   }
 
   void SetMetricInterval(int interval) { interval_ = interval; }
@@ -449,11 +475,18 @@ class WorkloadRunner {
     }
 
     Status s;
+    decltype(std::chrono::steady_clock::now()) start_time, end_time;
+    uint64_t latency = 0;
 
     while (operation_per_thread--) {
       auto key = key_generator_->NextLoadKey();
       auto value = GenerateValueFromKey(key);
+      start_time = std::chrono::steady_clock::now();
       s = db_->Put(WriteOptions(), key, value);
+      end_time = std::chrono::steady_clock::now();
+      latency = std::chrono::duration_cast<std::chrono::microseconds>
+                (end_time - start_time).count();
+      thread_write_stats_[thread_id].Add(latency);
       ++completed_count_;
       assert(s.ok() || s.IsNotFound());
     }
@@ -470,20 +503,36 @@ class WorkloadRunner {
     std::string ret;
     Status s;
 
+    decltype(std::chrono::steady_clock::now()) start_time, end_time;
+    uint64_t latency = 0;
+
     while (operation_per_thread--) {
       auto type = key_generator_->Next(key);
       auto value = GenerateValueFromKey(key);
 
       switch (type) {
         case kWrite:
+          start_time = std::chrono::steady_clock::now();
           s = db_->Put(WriteOptions(), key, value);
+          end_time = std::chrono::steady_clock::now();
+          latency = std::chrono::duration_cast<std::chrono::microseconds>
+              (end_time - start_time).count();
+          thread_write_stats_[thread_id].Add(latency);
           break;
         case kRead:
+          start_time = std::chrono::steady_clock::now();
           s = db_->Get(ReadOptions(), key, &ret);
+          end_time = std::chrono::steady_clock::now();
+          latency = std::chrono::duration_cast<std::chrono::microseconds>
+                    (end_time - start_time).count();
+          thread_read_stats_[thread_id].Add(latency);
           break;
       }
 
       ++completed_count_;
+      if (s.IsNotFound()) {
+        ++failed_count_;
+      }
       assert(s.ok() || s.IsNotFound());
     }
   }
@@ -518,6 +567,9 @@ class WorkloadRunner {
   KeyGenerator* key_generator_ = nullptr;
 
   DB* db_;
+
+  HistogramStat* thread_write_stats_;
+  HistogramStat* thread_read_stats_;
 };
 
 int main(int argc, char* argv[]) {
@@ -547,6 +599,8 @@ int main(int argc, char* argv[]) {
   std::remove(options.nvm_path.c_str());
 
   std::string db_path = "/home/crh/db_test_nvm_l0";
+  RemoveDirectory(db_path.c_str());
+  std::remove(options.nvm_path.c_str());
 
   DB* db;
   DB::Open(options, db_path, &db);

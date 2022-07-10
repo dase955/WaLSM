@@ -208,9 +208,9 @@ void NVMFlushJob::Build() {
                  s.ToString().c_str(),
                  meta_.marked_for_compaction ? " (needs compaction)" : "");
 
-  RECORD_INFO("Flush l0: %.2fMB, %.3lfs, %.3lf\n",
+  RECORD_INFO("Flush l0: %.2fMB, %.3lfs, %.3lfs\n",
               meta_.fd.file_size / 1048576.0,
-              0.0, 0.0);
+              0.0, GetStartTime() * 1e-6);
 
   if (s.ok() && output_file_directory_ != nullptr && sync_output_directory_) {
     s = output_file_directory_->Fsync(IOOptions(), nullptr);
