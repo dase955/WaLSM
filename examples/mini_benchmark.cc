@@ -4,23 +4,23 @@
 // Update/Read workload
 //
 
-#include <cstdio>
-#include <string>
-#include <cstdint>
-#include <iostream>
-#include <fstream>
-
 #include <time.h>
-#include <algorithm>
-#include <mutex>
-#include <random>
-#include <thread>
-#include <cmath>
 #include <unistd.h>
 
+#include <algorithm>
+#include <cmath>
+#include <cstdint>
+#include <cstdio>
+#include <fstream>
+#include <iostream>
+#include <mutex>
+#include <random>
+#include <string>
+#include <thread>
+
 #include "rocksdb/db.h"
-#include "rocksdb/slice.h"
 #include "rocksdb/options.h"
+#include "rocksdb/slice.h"
 
 using namespace rocksdb;
 
@@ -47,9 +47,10 @@ void CheckFreq(std::vector<uint64_t>& samples) {
   }
 
   int hot_count = freqs.size() - cold_count;
-  float hot_freq = (samples.size() - cold_count) / (float)samples.size() * 100.f;
-  printf("Update: hot count = %d(%.2f%%), cold count = %d(%.2f%%)\n",
-         hot_count, hot_freq, cold_count, 100.f - hot_freq);
+  float hot_freq =
+      (samples.size() - cold_count) / (float)samples.size() * 100.f;
+  printf("Update: hot count = %d(%.2f%%), cold count = %d(%.2f%%)\n", hot_count,
+         hot_freq, cold_count, 100.f - hot_freq);
 }
 
 class KeyGenerator {
@@ -79,21 +80,13 @@ class KeyGenerator {
     run_operation_count_ = run_operation_count;
   }
 
-  void SetReadRatio(double read_ratio) {
-    read_ratio_ = read_ratio;
-  }
+  void SetReadRatio(double read_ratio) { read_ratio_ = read_ratio; }
 
-  void SetPrefix(std::string& prefix) {
-    prefix_ = prefix;
-  }
+  void SetPrefix(std::string& prefix) { prefix_ = prefix; }
 
-  int GetLoadOperations() const {
-    return load_record_count_;
-  }
+  int GetLoadOperations() const { return load_record_count_; }
 
-  int GetRunOperations() const {
-    return run_operation_count_;
-  }
+  int GetRunOperations() const { return run_operation_count_; }
 
   std::string NextLoadKey() {
     return GenerateKeyFromValue(load_records_[load_index_++]);
@@ -118,28 +111,34 @@ class KeyGenerator {
 
     memset(hot_read_intervals_, 0, sizeof(int) * 101);
     memset(hot_write_intervals_, 0, sizeof(int) * 101);
-    for (int i = 0; i < 10; ++i) {
-      hot_read_intervals_[r[i]] = 1;
-      hot_write_intervals_[r[i]] = 1;
+    for (int i = 0; i < 20; i++) {
+      hot_read_intervals_[i] = 1;
+      hot_write_intervals_[i+80] = 1;
     }
-    for (int i = 10; i < 20; ++i) {
-      hot_read_intervals_[r[i]] = 1;
-    }
-    for (int i = 20; i < 30; ++i) {
-      hot_write_intervals_[r[i]] = 1;
-    }
+    //    for (int i = 0; i < 10; ++i) {
+    //      hot_read_intervals_[r[i]] = 1;
+    //      hot_write_intervals_[r[i]] = 1;
+    //    }
+    //    for (int i = 10; i < 20; ++i) {
+    //      hot_read_intervals_[r[i]] = 1;
+    //    }
+    //    for (int i = 20; i < 30; ++i) {
+    //      hot_write_intervals_[r[i]] = 1;
+    //    }
 
     printf("Hot write intervals:\n");
     for (int i = 0; i < 101; ++i) {
       if (hot_write_intervals_[i]) {
-        printf("[%19zu, %19zu)\n", i * interval_length_, (i + 1) * interval_length_);
+        printf("[%19llu, %19llu)\n", i * interval_length_,
+               (i + 1) * interval_length_);
       }
     }
 
     printf("Hot write intervals:\n");
     for (int i = 0; i < 101; ++i) {
       if (hot_read_intervals_[i]) {
-        printf("[%19zu, %19zu)\n", i * interval_length_, (i + 1) * interval_length_);
+        printf("[%19llu, %19llu)\n", i * interval_length_,
+               (i + 1) * interval_length_);
       }
     }
   }
@@ -174,7 +173,9 @@ class KeyGenerator {
     hot_load_data.reserve(run_records_.size());
     cold_load_data.reserve(run_records_.size());
     for (auto& v : load_records_) {
-      (hot_write_intervals_[v / interval_length_] ? hot_load_data : cold_load_data).push_back(v);
+      (hot_write_intervals_[v / interval_length_] ? hot_load_data
+                                                  : cold_load_data)
+          .push_back(v);
     }
 
     std::random_device rd;
@@ -228,15 +229,18 @@ class KeyGenerator {
     hot_read_records_.reserve(load_records_.size());
     cold_read_records_.reserve(load_records_.size());
     for (auto v : load_records_) {
-      (hot_read_intervals_[v / interval_length_] ? hot_read_records_ : cold_read_records_).push_back(v);
+      (hot_read_intervals_[v / interval_length_] ? hot_read_records_
+                                                 : cold_read_records_)
+          .push_back(v);
     }
 
-    printf("Change load_record_count from %d to %d\n",
-           load_record_count_, (int)load_records_.size());
+    printf("Change load_record_count from %d to %d\n", load_record_count_,
+           (int)load_records_.size());
     load_record_count_ = load_records_.size();
 
-    float hot_read_ratio = (float)(hot_read_records_.size()) * 100.f/
-                           (hot_read_records_.size() + cold_read_records_.size());
+    float hot_read_ratio =
+        (float)(hot_read_records_.size()) * 100.f /
+        (hot_read_records_.size() + cold_read_records_.size());
     printf("Read: hot count = %d(%.2f%%), cold count = %d(%.2f%%)\n",
            (int)hot_read_records_.size(), hot_read_ratio,
            (int)cold_read_records_.size(), 100.f - hot_read_ratio);
@@ -245,7 +249,7 @@ class KeyGenerator {
   }
 
   static uint64_t fnvhash64(int64_t val) {
-    //from http://en.wikipedia.org/wiki/Fowler_Noll_Vo_hash
+    // from http://en.wikipedia.org/wiki/Fowler_Noll_Vo_hash
     static int64_t FNV_OFFSET_BASIS_64 = 0xCBF29CE484222325LL;
     static int64_t FNV_PRIME_64 = 1099511628211L;
 
@@ -257,7 +261,7 @@ class KeyGenerator {
 
       hashval = hashval ^ octet;
       hashval = hashval * FNV_PRIME_64;
-      //hashval = hashval ^ octet;
+      // hashval = hashval ^ octet;
     }
     return hashval > 0 ? hashval : -hashval;
   }
@@ -380,28 +384,23 @@ class KeyGenerator {
 
 class WorkloadRunner {
  public:
-  WorkloadRunner(int num_threads, DB* db)
-      : num_threads_(num_threads), db_(db) {
+  WorkloadRunner(int num_threads, DB* db) : num_threads_(num_threads), db_(db) {
     work_threads_ = new std::thread[num_threads];
   }
 
-  void SetKeyGenerator(KeyGenerator* generator) {
-    key_generator_ = generator;
-  }
+  void SetKeyGenerator(KeyGenerator* generator) { key_generator_ = generator; }
 
   void Load() {
     completed_count_.store(0, std::memory_order_relaxed);
 
     for (int i = 0; i < num_threads_; ++i) {
-      work_threads_[i] = std::thread(
-          &WorkloadRunner::LoadPhase, this, i);
+      work_threads_[i] = std::thread(&WorkloadRunner::LoadPhase, this, i);
     }
 
     printf("Load opearation count = %d\n", key_generator_->GetLoadOperations());
 
-    auto ops_thread = std::thread(
-        &WorkloadRunner::StatisticsThread, this,
-        key_generator_->GetLoadOperations());
+    auto ops_thread = std::thread(&WorkloadRunner::StatisticsThread, this,
+                                  key_generator_->GetLoadOperations());
     ops_thread.join();
 
     for (int i = 0; i < num_threads_; ++i) {
@@ -414,13 +413,11 @@ class WorkloadRunner {
     printf("Run opearation count = %d\n", key_generator_->GetRunOperations());
 
     for (int i = 0; i < num_threads_; ++i) {
-      work_threads_[i] = std::thread(
-          &WorkloadRunner::RunPhase, this, i);
+      work_threads_[i] = std::thread(&WorkloadRunner::RunPhase, this, i);
     }
 
-    auto ops_thread = std::thread(
-        &WorkloadRunner::StatisticsThread, this,
-        key_generator_->GetRunOperations());
+    auto ops_thread = std::thread(&WorkloadRunner::StatisticsThread, this,
+                                  key_generator_->GetRunOperations());
     ops_thread.join();
 
     for (int i = 0; i < num_threads_; ++i) {
@@ -428,9 +425,7 @@ class WorkloadRunner {
     }
   }
 
-  void SetMetricInterval(int interval) {
-    interval_ = interval;
-  }
+  void SetMetricInterval(int interval) { interval_ = interval; }
 
   static std::string GenerateValueFromKey(std::string& key) {
     int repeat_times = 1024UL / key.length();
@@ -499,8 +494,8 @@ class WorkloadRunner {
     while (prev_completed < operation_counts) {
       int new_completed = completed_count_.load(std::memory_order_relaxed);
       int ops = (new_completed - prev_completed) / interval_;
-      printf("[%d sec] %d operations; %d current ops/sec\n",
-             seconds, new_completed, ops);
+      printf("[%d sec] %d operations; %d current ops/sec\n", seconds,
+             new_completed, ops);
 
       prev_completed = new_completed;
       std::this_thread::sleep_for(std::chrono::seconds(interval_));
@@ -568,5 +563,6 @@ int main(int argc, char* argv[]) {
 
   db->Close();
 
+  delete gen;
   delete db;
 }
