@@ -604,10 +604,10 @@ void CompactionJob::CalculateStatistics() {
     input->Next();
   }
 
-  RECORD_INFO("Flush to base: %.2fMB, %.2fMB, %.3lfs, %.3lf\n",
+  RECORD_INFO("Flush to base: %.2fMB, %.2fMB, %.3lfs\n",
               output_raw_size / 1048576.0,
               output_total_size / 1048576.0,
-              0.0, 0.0);
+              GetStartTime() * 1e-6);
 
   input.reset();
 }
