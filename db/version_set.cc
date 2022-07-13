@@ -1727,6 +1727,8 @@ void Version::Get(const ReadOptions& read_options, const LookupKey& k,
     if (hit_partition->is_compaction_work[fp.GetCurrentLevel()]) {
       get_context.SetSearchCount(
           &hit_partition->search_counter[fp.GetCurrentLevel()]);
+    } else {
+      get_context.SetSearchCount(nullptr);
     }
 
     bool timer_enabled =
