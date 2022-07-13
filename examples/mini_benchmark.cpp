@@ -540,6 +540,7 @@ int main(int argc, char* argv[]) {
   options.use_direct_io_for_flush_and_compaction = true;
   options.use_direct_reads = true;
   options.enable_pipelined_write = true;
+  options.compaction_style = rocksdb::kCompactionStyleUniversal;
   options.compression = rocksdb::kNoCompression;
   // options.nvm_path = "/mnt/pmem1/crh/nodememory";
   options.IncreaseParallelism(16);
