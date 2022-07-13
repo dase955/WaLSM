@@ -196,7 +196,8 @@ void GlobalMemtable::Recovery() {
   HeatGroup* group = new HeatGroup;
   group->first_node_ = root_;
 
-  [[maybe_unused]] auto tail = RecoverNonLeaf(root_, 1, group);
+  tail_ = RecoverNonLeaf(root_, 1, group);
+  assert(tail_->heat_group_->first_node_->next_node_ == tail_);
 
   group->group_manager_ = group_manager_;
   CheckHeatGroup(group);
@@ -208,8 +209,8 @@ void GlobalMemtable::Recovery() {
   while (cur->next_node_) {
     cur = cur->next_node_;
   }
-  assert(cur == tail);
-  assert((char*)(tail->nvm_node_) - (char*)(root_->nvm_node_) == PAGE_SIZE);
+  assert(cur == tail_);
+  assert((char*)(tail_->nvm_node_) - (char*)(root_->nvm_node_) == PAGE_SIZE);
 #endif
 
   // Recover vptr in leaf nodes
@@ -243,11 +244,11 @@ void GlobalMemtable::InitFirstLevel() {
   art256->header_.num_children_ = 256;
   art256->header_.art_type_ = kNode256;
 
-  auto dummy_node = AllocateLeafNode(1, 0, nullptr);
-  SET_NON_GROUP_START(dummy_node);
+  auto dummy_node = AllocateLeafNode(1, 0, tail_);
+  SET_TAG(dummy_node->nvm_node_->meta.header, GROUP_START_TAG);
+  SET_GROUP_START(dummy_node);
   HeatGroup* last_group = new HeatGroup(dummy_node);
   group_manager_->InsertIntoLayer(last_group, TEMP_LAYER);
-  dummy_node->next_node_ = tail_;
   InnerNode* next_inner_node = dummy_node;
 
   for (int first_char = LAST_CHAR; first_char >= 0;) {

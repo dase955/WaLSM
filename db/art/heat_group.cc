@@ -312,8 +312,7 @@ bool HeatGroupManager::MergeNextGroup(HeatGroup* group, HeatGroup* next_group) {
 
   if (unlikely(NOT_GROUP_START(next_start_node))) {
     assert(!next_start_node->heat_group_ ||
-           next_start_node->heat_group_ == group ||
-           next_start_node->heat_group_->last_node_ == next_start_node);
+           next_start_node->heat_group_ == group);
     return false;
   }
 

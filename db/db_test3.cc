@@ -183,14 +183,14 @@ class ScrambledZipfianGenerator {
 };
 
 int thread_num = 8;
-int total_count = 32000000;
+int total_count = 6000000;
 int count_per_thread = total_count / thread_num;
 std::atomic<int64_t> counter{0};
 std::vector<uint64_t> written(total_count);
 
 std::string NumToKey(uint64_t key_num) {
   std::string s = std::to_string(key_num);
-  return "user" + std::string(9 - s.length(), '0') + s;
+  return "usertable:user" + s;
 }
 
 std::string GenerateValueFromKey(std::string& key) {
@@ -274,6 +274,24 @@ void GetThread(DB *db) {
   }
 }
 
+std::atomic<int64_t> check_counter{0};
+
+void CheckThread(DB* db) {
+  for (int i = 0; i < count_per_thread; ++i) {
+    auto c = check_counter++;
+
+    std::string res;
+    std::string key = NumToKey(written[c]);
+    std::string expected = GenerateValueFromKey(key);
+
+    auto status = db->Get(ReadOptions(), key, &res);
+    assert(!status.ok() || res == expected);
+    if (!status.ok()) {
+      std::cout << key << " Error!" << std::endl;
+    }
+  }
+}
+
 void DoTest(std::string test_name) {
   Options options;
   options.create_if_missing = true;
@@ -285,38 +303,35 @@ void DoTest(std::string test_name) {
   options.IncreaseParallelism(16);
 
   DB* db;
-  DB::Open(options, "/tmp/tmp_data/db_test_art", &db);
+  DB::Open(options, "/tmp/tmp_data/db_test", &db);
 
   std::thread read_threads[thread_num];
   std::thread write_threads[thread_num];
+  std::thread check_threads[thread_num];
   for (int i = 0; i < thread_num; ++i) {
-    write_threads[i] = std::thread(ZipfianPutThread, db);
-    read_threads[i] = std::thread(GetThread, db);
+    write_threads[i] = std::thread(UniformPutThread, db);
+    //read_threads[i] = std::thread(GetThread, db);
   }
 
   for (auto & thread : read_threads) {
-    thread.join();
+    //thread.join();
   }
 
   for (auto & thread : write_threads) {
     thread.join();
   }
 
+  db->Reset();
+
   std::cout << "Start test get" << std::endl;
-  for (int i = 0; i < total_count; i += 4) {
-    std::string res;
-    std::string key = NumToKey(written[i]);
-    std::string expected = GenerateValueFromKey(key);
 
-    auto status = db->Get(ReadOptions(), key, &res);
-    assert(!status.ok() || res == expected);
-    if (!status.ok()) {
-      std::cout << key << " Error!" << std::endl;
-    }
+  for (int i = 0; i < thread_num; ++i) {
+    check_threads[i] = std::thread(CheckThread, db);
   }
-  std::cout << "Test get done" << std::endl;
 
-  db->Close();
+  for (int i = 0; i < thread_num; ++i) {
+    check_threads[i].join();
+  }
 
   delete db;
 }
