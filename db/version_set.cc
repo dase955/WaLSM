@@ -1724,8 +1724,10 @@ void Version::Get(const ReadOptions& read_options, const LookupKey& k,
     }
 
     // set counter
-    get_context.SetSearchCount(
-        &hit_partition->search_counter[fp.GetCurrentLevel()]);
+    if (hit_partition->is_compaction_work[fp.GetCurrentLevel()]) {
+      get_context.SetSearchCount(
+          &hit_partition->search_counter[fp.GetCurrentLevel()]);
+    }
 
     bool timer_enabled =
         GetPerfLevel() >= PerfLevel::kEnableTimeExceptForMutex &&
