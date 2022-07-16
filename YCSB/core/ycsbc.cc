@@ -33,6 +33,7 @@ void StatusThread(ycsbc::Measurements *measurements, CountDownLatch *latch, int 
   using namespace std::chrono;
   time_point<system_clock> start = system_clock::now();
   bool done = false;
+  uint64_t prev_done = 0;
   while (1) {
     time_point<system_clock> now = system_clock::now();
     std::time_t now_c = system_clock::to_time_t(now);
@@ -41,7 +42,7 @@ void StatusThread(ycsbc::Measurements *measurements, CountDownLatch *latch, int 
     std::cout << std::put_time(std::localtime(&now_c), "%F %T") << ' '
               << static_cast<long long>(elapsed_time.count()) << " sec: ";
 
-    std::cout << measurements->GetStatusMsg() << std::endl;
+    std::cout << measurements->GetStatusMsg(prev_done, interval) << std::endl;
 
     if (done) {
       break;
@@ -78,7 +79,7 @@ int main(const int argc, const char *argv[]) {
   wl.Init(props);
 
   const bool show_status = (props.GetProperty("status", "false") == "true");
-  const int status_interval = std::stoi(props.GetProperty("status.interval", "10"));
+  const int status_interval = std::stoi(props.GetProperty("status.interval", "5"));
 
   // load phase
   if (do_load) {
