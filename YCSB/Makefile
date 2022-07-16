@@ -9,10 +9,9 @@
 
 #---------------------build config-------------------------
 
-DB_PATH = /tmp/tmp_data/rocksdb_nvm_l0
 DEBUG_BUILD ?= 0
-EXTRA_CXXFLAGS ?= -I$(DB_PATH)/include
-EXTRA_LDFLAGS ?= -L$(DB_PATH) -lpmem -ldl -lz -lbz2 -lzstd -lsnappy -llz4
+EXTRA_CXXFLAGS ?= -I../include -I../include/rocksdb
+EXTRA_LDFLAGS ?= -L../ -lpmem -ldl -lz -lbz2 -lsnappy -llz4 -lzstd
 
 BIND_ROCKSDB ?= 1
 BIND_LEVELDB ?= 0

@@ -566,7 +566,7 @@ ColumnFamilyOptions* ColumnFamilyOptions::OptimizeLevelStyleCompaction(
   level0_file_num_compaction_trigger = 80;
 
   // make Level1 size equal to 8G
-  max_bytes_for_level_base = 8ULL << 20;
+  max_bytes_for_level_base = 8ULL << 30;
 
   // level style compaction
   compaction_style = kCompactionStyleLevel;
