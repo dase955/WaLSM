@@ -92,3 +92,4 @@ clang-format-diff.py
 
 cmake-build-debug/
 cmake-build-release/
+YCSB/.idea
