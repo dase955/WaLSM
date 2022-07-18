@@ -222,6 +222,27 @@ void VLogManager::GetKeyIndex(uint64_t vptr, std::string& key,
 }
 
 ValueType VLogManager::GetKeyValue(uint64_t vptr,
+                                   std::string& key, std::string& value,
+                                   SequenceNumber& seq_num) {
+  GetActualVptr(vptr);
+  ValueType type = ((ValueType*)(pmemptr_ + vptr))[0];
+  assert(type == kTypeValue || type == kTypeDeletion);
+  seq_num = ((uint64_t*)(pmemptr_ + vptr + 1))[0];
+  Slice slice(pmemptr_ + vptr + RecordPrefixSize, vlog_segment_size_);
+  GetLengthPrefixedSlice(&slice, key);
+
+  switch (type) {
+    case kTypeValue:
+      GetLengthPrefixedSlice(&slice, value);
+      break;
+    default:
+      break;
+  }
+
+  return type;
+}
+
+ValueType VLogManager::GetKeyValue(uint64_t vptr,
                                    std::string& key, Slice& value,
                                    SequenceNumber& seq_num,
                                    RecordIndex& index) {

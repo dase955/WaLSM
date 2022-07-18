@@ -25,8 +25,9 @@ std::atomic<int64_t> MemTotalSize{0};
 std::atomic<int64_t> SqueezedSize{0};
 std::atomic<int64_t> CompactedSize{0};
 std::atomic<int64_t> SqueezedSizeInCompaction{0};
+std::atomic<int>     BackupRead{0};
+PriorityLock         IteratorLock;
 
-std::atomic<int> BackupRead{0};
 
 ThreadPool* SingleCompactionJob::thread_pool = NewThreadPool(4);
 
@@ -50,12 +51,20 @@ int64_t GetMemTotalSize() {
   return MemTotalSize.load(std::memory_order_acquire);
 }
 
+void TryCreateIterator() {
+  IteratorLock.LockLowPri();
+}
+
+void DeleteIterator() {
+  IteratorLock.UnlockLowPri();
+}
+
 ////////////////////////////////////////////////////////////
 
 void RemoveChildren(InnerNode* parent, InnerNode* child) {
   // assert opt_lock and shared_mutex are held
 
-  auto support_node = parent->support_node_;
+  auto support_node = parent->support_node;
   assert(GET_TAG(support_node->nvm_node_->meta.header, DUMMY_TAG));
   assert(!GET_TAG(support_node->nvm_node_->meta.header, GROUP_START_TAG));
 
@@ -64,21 +73,21 @@ void RemoveChildren(InnerNode* parent, InnerNode* child) {
     std::lock_guard<RWSpinLock> link_lk(parent->link_lock_);
     std::lock_guard<std::mutex> heat_lk(heat_group->lock);
 
-    InnerNode* next_node = support_node->next_node_;
+    InnerNode* next_node = support_node->next_node;
 
     if (support_node == heat_group->last_node_) {
       heat_group->last_node_ = parent;
     } else if (child == heat_group->last_node_) {
       heat_group->last_node_ = parent;
-      next_node = child->next_node_;
+      next_node = child->next_node;
 
       assert(IS_GROUP_START(next_node));
-      assert(next_node->next_node_ == support_node);
+      assert(next_node->next_node == support_node);
 
-      auto after = support_node->next_node_;
+      auto after = support_node->next_node;
       std::lock_guard<RWSpinLock> next_link_lk(after->link_lock_);
 
-      next_node->next_node_ = after;
+      next_node->next_node = after;
       auto next_nvm_node = GetNodeAllocator()->relative(
           after->backup_nvm_node_
               ? after->backup_nvm_node_ : after->nvm_node_);
@@ -94,7 +103,7 @@ void RemoveChildren(InnerNode* parent, InnerNode* child) {
 
     {
       std::lock_guard<RWSpinLock> next_link_lk(next_node->link_lock_);
-      parent->next_node_ = next_node;
+      parent->next_node = next_node;
       auto next_nvm_node =
           GetNodeAllocator()->relative(next_node->backup_nvm_node_
                                            ? next_node->backup_nvm_node_ : next_node->nvm_node_);
@@ -110,7 +119,7 @@ void RemoveChildren(InnerNode* parent, InnerNode* child) {
       SET_ROWS(new_hdr, 0);
       SET_SIZE(new_hdr, 0);
       parent->nvm_node_->meta.header = new_hdr;
-      parent->support_node_ = parent;
+      parent->support_node = parent;
       PERSIST(parent->nvm_node_, 8);
     }
 
@@ -284,6 +293,8 @@ void Compactor::BGWork() {
       continue;
     }
 
+    IteratorLock.LockHighPri();
+
     {
       std::unique_lock<std::mutex> lock{mutex_};
       group_manager_->AddOperation(nullptr, kOperationChooseCompaction, false, this);
@@ -378,6 +389,8 @@ void Compactor::BGWork() {
       SingleCompactionJob::thread_pool->SubmitJob(func);
     }
     SingleCompactionJob::thread_pool->Join();
+
+    IteratorLock.UnlockHighPri();
   }
 }
 
@@ -412,10 +425,10 @@ void Compactor::Reset() {
     job->Reset();
 
     for (auto& heat_group : compaction_group) {
-      auto node = heat_group->first_node_->next_node_;
-      while (node != heat_group->last_node_->next_node_) {
+      auto node = heat_group->first_node_->next_node;
+      while (node != heat_group->last_node_->next_node) {
         if (NOT_LEAF(node) || !node->heat_group_) {
-          node = node->next_node_;
+          node = node->next_node;
           continue;
         }
 
@@ -427,7 +440,7 @@ void Compactor::Reset() {
                SIZE_TO_BYTES(GET_NODE_BUFFER_SIZE(node->status_)),
                PMEM_F_MEM_NODRAIN | PMEM_F_MEM_NONTEMPORAL);
 
-        node = node->next_node_;
+        node = node->next_node;
       }
     }
 
@@ -472,7 +485,7 @@ void Compactor::CompactionPreprocess(SingleCompactionJob* job) {
   std::vector<InnerNode*> children;
   InnerNode* cur_parent = nullptr;
 
-  InnerNode* cur_node = start_node->next_node_;
+  InnerNode* cur_node = start_node->next_node;
   while (cur_node != next_start_node) {
     cur_node->opt_lock_.lock();
     cur_node->share_mutex_.lock();
@@ -480,7 +493,7 @@ void Compactor::CompactionPreprocess(SingleCompactionJob* job) {
     if (NOT_LEAF(cur_node) || !cur_node->heat_group_) {
       cur_node->share_mutex_.unlock();
       cur_node->opt_lock_.unlock();
-      cur_node = cur_node->next_node_;
+      cur_node = cur_node->next_node;
       continue;
     }
 
@@ -504,14 +517,14 @@ void Compactor::CompactionPreprocess(SingleCompactionJob* job) {
 
     cur_node->share_mutex_.unlock();
 
-    if (cur_parent && cur_node->parent_node_ != cur_parent) {
+    if (cur_parent && cur_node->parent_node != cur_parent) {
       ProcessNodes(cur_parent, children, job);
       children.clear();
     }
 
     children.push_back(cur_node);
-    cur_parent = cur_node->parent_node_;
-    cur_node = cur_node->next_node_;
+    cur_parent = cur_node->parent_node;
+    cur_node = cur_node->next_node;
   }
 
   NVM_BARRIER;
@@ -530,7 +543,7 @@ void Compactor::CompactionPreprocess(SingleCompactionJob* job) {
 void Compactor::CompactionPostprocess(SingleCompactionJob* job) {
   // remove compacted node form list
   auto cur_node = job->group_->first_node_;
-  auto node_after_end = job->group_->last_node_->next_node_;
+  auto node_after_end = job->group_->last_node_->next_node;
   auto candidates = job->candidates;
   assert(IS_GROUP_START(cur_node));
 
@@ -538,12 +551,12 @@ void Compactor::CompactionPostprocess(SingleCompactionJob* job) {
   candidates.pop_front();
   while (candidate && cur_node != node_after_end) {
     std::lock_guard<RWSpinLock> link_lk(cur_node->link_lock_);
-    if (cur_node->next_node_ == candidate) {
+    if (cur_node->next_node == candidate) {
       RemoveOldNVMNode(cur_node);
       candidate = candidates.front();
       candidates.pop_front();
     }
-    cur_node = cur_node->next_node_;
+    cur_node = cur_node->next_node;
   }
 
   assert(candidates.empty());

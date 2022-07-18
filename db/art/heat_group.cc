@@ -308,7 +308,7 @@ bool HeatGroupManager::MergeNextGroup(HeatGroup* group, HeatGroup* next_group) {
   std::lock_guard<std::mutex> group_lk(group->lock);
   InnerNode* last_node = group->last_node_;
   std::lock_guard<RWSpinLock> link_lk(last_node->link_lock_);
-  InnerNode* next_start_node = last_node->next_node_;
+  InnerNode* next_start_node = last_node->next_node;
 
   if (unlikely(NOT_GROUP_START(next_start_node))) {
     assert(!next_start_node->heat_group_ ||
@@ -342,11 +342,11 @@ bool HeatGroupManager::MergeNextGroup(HeatGroup* group, HeatGroup* next_group) {
   }
 
   // Merge two group and remove dummy node
-  InnerNode* node_after_start = next_start_node->next_node_;
+  InnerNode* node_after_start = next_start_node->next_node;
   assert(NOT_GROUP_START(node_after_start));
   assert(node_after_start->heat_group_ == next_group);
 
-  last_node->next_node_ = node_after_start;
+  last_node->next_node = node_after_start;
   auto next_nvm_node = GetNodeAllocator()->relative(node_after_start->nvm_node_);
   if (GET_TAG(last_node->nvm_node_->meta.header, ALT_FIRST_TAG)) {
     last_node->nvm_node_->meta.next1 = next_nvm_node;
@@ -359,7 +359,7 @@ bool HeatGroupManager::MergeNextGroup(HeatGroup* group, HeatGroup* next_group) {
   next_group->last_node_->heat_group_ = group;
   while (cur != next_group->last_node_) {
     cur->heat_group_ = group;
-    cur = cur->next_node_;
+    cur = cur->next_node;
   }
 
   group->group_size_.fetch_add(
@@ -452,8 +452,8 @@ void HeatGroupManager::SplitGroup(HeatGroup* group) {
     if (left_size > split_point) {
       break;
     }
-    assert(left_end->next_node_);
-    left_end = left_end->next_node_;
+    assert(left_end->next_node);
+    left_end = left_end->next_node;
   }
 
   // TODO: fix this corner case
@@ -485,7 +485,7 @@ void HeatGroupManager::SplitGroup(HeatGroup* group) {
   while (right_start != right_end) {
     right_start->heat_group_ = right_group;
     right_size += right_start->estimated_size_;
-    right_start = right_start->next_node_;
+    right_start = right_start->next_node;
   }
   right_end->heat_group_ = right_group;
   right_size += right_end->estimated_size_;

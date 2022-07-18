@@ -70,8 +70,8 @@ InnerNode* AllocateLeafNode(uint8_t prefix_length,
 
   auto nvm_node = mgr->AllocateNode();
   inode->nvm_node_ = nvm_node;
-  inode->support_node_ = inode;
-  inode->next_node_ = next_node;
+  inode->support_node = inode;
+  inode->next_node = next_node;
 
   uint64_t hdr = 0;
   SET_LAST_PREFIX(hdr, last_prefix);
@@ -122,7 +122,7 @@ InnerNode* RecoverInnerNode(NVMNode* nvm_node) {
 
   inode->status_ = status;
   inode->estimated_size_ = nvm_node->meta.node_info;
-  inode->support_node_ = inode;
+  inode->support_node = inode;
   inode->nvm_node_ = nvm_node;
   inode->backup_nvm_node_ = nullptr;
   return inode;
@@ -131,9 +131,9 @@ InnerNode* RecoverInnerNode(NVMNode* nvm_node) {
 void InsertInnerNode(InnerNode* node, InnerNode* inserted) {
   std::lock_guard<RWSpinLock> link_lk(node->link_lock_);
 
-  auto prev_node = node->support_node_;
-  inserted->next_node_ = prev_node->next_node_;
-  prev_node->next_node_ = inserted;
+  auto prev_node = node->support_node;
+  inserted->next_node = prev_node->next_node;
+  prev_node->next_node = inserted;
 
   auto prev_nvm_node = prev_node->nvm_node_;
   auto inserted_nvm_node = inserted->nvm_node_;
@@ -159,7 +159,7 @@ void InsertSplitInnerNode(InnerNode* node, InnerNode* first_inserted,
                           [[maybe_unused]] size_t prefix_length) {
   std::lock_guard<RWSpinLock> link_lk(node->link_lock_);
 
-  auto prev_node = node->support_node_;
+  auto prev_node = node->support_node;
   auto prev_nvm_node = prev_node->nvm_node_;
   auto inserted_first_nvm_node = first_inserted->nvm_node_;
   auto inserted_last_nvm_node = last_inserted->nvm_node_;
@@ -188,11 +188,11 @@ void InsertSplitInnerNode(InnerNode* node, InnerNode* first_inserted,
   PERSIST(prev_nvm_node, CACHE_LINE_SIZE);
 
   node->estimated_size_ = 0;
-  last_inserted->next_node_ = prev_node->next_node_;
-  prev_node->next_node_ = first_inserted;
+  last_inserted->next_node = prev_node->next_node;
+  prev_node->next_node = first_inserted;
 
   // Update last child node
-  node->support_node_ = last_inserted;
+  node->support_node = last_inserted;
 }
 
 void InsertNewNVMNode(InnerNode* node, NVMNode* inserted) {
@@ -228,9 +228,9 @@ void InsertNewNVMNode(InnerNode* node, NVMNode* inserted) {
   }
 }
 
-// Different from InsertNewNVMNode, link_lock_ has been held
+// Different from InsertNewNVMNode, link lock has been held
 void RemoveOldNVMNode(InnerNode* node) {
-  auto next_node = node->next_node_;
+  auto next_node = node->next_node;
   auto nvm_node = node->nvm_node_;
   auto hdr = nvm_node->meta.header;
 

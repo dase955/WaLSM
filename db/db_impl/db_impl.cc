@@ -1550,9 +1550,11 @@ InternalIterator* DBImpl::NewInternalIterator(const ReadOptions& read_options,
       &cfd->internal_comparator(), arena,
       !read_options.total_order_seek &&
           super_version->mutable_cf_options.prefix_extractor != nullptr);
-  // Collect iterator for mutable mem
-  merge_iter_builder.AddIterator(
-      super_version->mem->NewIterator(read_options, arena));
+
+  TryCreateIterator();
+  // NVM iterator
+  merge_iter_builder.AddIterator(global_memtable_->NewIterator(read_options));
+
   std::unique_ptr<FragmentedRangeTombstoneIterator> range_del_iter;
   Status s;
   if (!read_options.ignore_range_deletions) {
@@ -1560,14 +1562,7 @@ InternalIterator* DBImpl::NewInternalIterator(const ReadOptions& read_options,
         super_version->mem->NewRangeTombstoneIterator(read_options, sequence));
     range_del_agg->AddTombstones(std::move(range_del_iter));
   }
-  // Collect all needed child iterators for immutable memtables
-  if (s.ok()) {
-    super_version->imm->AddIterators(read_options, &merge_iter_builder);
-    if (!read_options.ignore_range_deletions) {
-      s = super_version->imm->AddRangeTombstoneIterators(read_options, arena,
-                                                         range_del_agg);
-    }
-  }
+
   TEST_SYNC_POINT_CALLBACK("DBImpl::NewInternalIterator:StatusCallback", &s);
   if (s.ok()) {
     // Collect iterators for files in L0 - Ln

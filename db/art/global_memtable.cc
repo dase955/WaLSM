@@ -27,7 +27,8 @@ namespace ROCKSDB_NAMESPACE {
 InnerNode::InnerNode()
     : heat_group_(nullptr), art(nullptr), backup_art(nullptr),
       nvm_node_(nullptr), backup_nvm_node_(nullptr),
-      support_node_(nullptr), next_node_(nullptr),
+      support_node(nullptr),
+      next_node(nullptr),
       vptr_(0), estimated_size_(0), squeezed_size_(0),
       status_(0), oldest_key_time_(0) {
   memset(hll_, 0, 64);
@@ -114,11 +115,11 @@ void CheckHeatGroup(HeatGroup* group) {
     return;
   }
 
-  auto cur = start->next_node_;
+  auto cur = start->next_node;
   while (cur != end) {
     assert(cur->heat_group_ == group);
     assert(NOT_GROUP_START(cur));
-    cur = cur->next_node_;
+    cur = cur->next_node;
   }
 }
 
@@ -145,8 +146,8 @@ InnerNode* GlobalMemtable::RecoverNonLeaf(InnerNode* parent, int level,
 
     auto inner_node = RecoverInnerNode(cur);
     inner_node->heat_group_ = group;
-    inner_node->parent_node_ = parent;
-    last_inner_node->next_node_ = inner_node;
+    inner_node->parent_node = parent;
+    last_inner_node->next_node = inner_node;
     group->last_node_ = last_inner_node;
     group->group_size_.fetch_add(inner_node->estimated_size_);
     UpdateTotalSize(inner_node->estimated_size_);
@@ -159,7 +160,7 @@ InnerNode* GlobalMemtable::RecoverNonLeaf(InnerNode* parent, int level,
       group_manager_->InsertIntoLayer(group, TEMP_LAYER);
       group = new HeatGroup();
       group->first_node_ = inner_node;
-      inner_node->parent_node_ = nullptr;
+      inner_node->parent_node = nullptr;
       inner_node->heat_group_ = group;
       SET_GROUP_START(inner_node);
       SET_NON_LEAF(inner_node);
@@ -170,7 +171,7 @@ InnerNode* GlobalMemtable::RecoverNonLeaf(InnerNode* parent, int level,
     if (GET_TAG(cur->meta.header, DUMMY_TAG)) {
       assert((int)GET_LEVEL(cur->meta.header) == level);
       parent->art = AllocateArtAfterSplit(children, prefixes);
-      parent->support_node_ = inner_node;
+      parent->support_node = inner_node;
       return inner_node;
     }
 
@@ -201,7 +202,7 @@ void GlobalMemtable::Recovery() {
   group->first_node_ = root_;
 
   tail_ = RecoverNonLeaf(root_, 1, group);
-  assert(tail_->heat_group_->first_node_->next_node_ == tail_);
+  assert(tail_->heat_group_->first_node_->next_node == tail_);
 
   group->group_manager_ = group_manager_;
   CheckHeatGroup(group);
@@ -210,8 +211,8 @@ void GlobalMemtable::Recovery() {
 
 #ifndef NDEBUG
   auto cur = root_;
-  while (cur->next_node_) {
-    cur = cur->next_node_;
+  while (cur->next_node) {
+    cur = cur->next_node;
   }
   assert(cur == tail_);
   assert((char*)(tail_->nvm_node_) - (char*)(root_->nvm_node_) == PAGE_SIZE);
@@ -235,14 +236,14 @@ void GlobalMemtable::InitFirstLevel() {
   tail_ = AllocateLeafNode(1, 0, nullptr);
   SET_NON_GROUP_START(tail_);
 
-  tail_->parent_node_ = root_;
+  tail_->parent_node = root_;
   SET_TAG(tail_->nvm_node_->meta.header, DUMMY_TAG);
   FLUSH(tail_->nvm_node_, CACHE_LINE_SIZE);
   SET_NON_LEAF(root_);
   SET_ART_FULL(root_);
 
   // First level
-  root_->support_node_ = tail_;
+  root_->support_node = tail_;
   root_->art = AllocateArtNode(kNode256);
   auto art256 = (ArtNode256*)root_->art;
   art256->header_.num_children_ = 256;
@@ -265,7 +266,7 @@ void GlobalMemtable::InitFirstLevel() {
           1, static_cast<unsigned char>(first_char), next_inner_node);
       art256->children_[first_char] = inner_node;
       inner_node->heat_group_ = heat_group;
-      inner_node->parent_node_ = root_;
+      inner_node->parent_node = root_;
       next_inner_node = inner_node;
       FLUSH(inner_node->nvm_node_, CACHE_LINE_SIZE);
     }
@@ -287,7 +288,7 @@ void GlobalMemtable::InitFirstLevel() {
     next_inner_node = group_start_node;
   }
 
-  root_->next_node_ = next_inner_node;
+  root_->next_node = next_inner_node;
   root_->nvm_node_->meta.next1 =
       GetNodeAllocator()->relative(next_inner_node->nvm_node_);
 
@@ -405,7 +406,7 @@ LocalRestart:
       leaf->buffer_[0] = kv_info.hash;
       leaf->buffer_[1] = kv_info.vptr;
       leaf->estimated_size_ = kv_info.kv_size;
-      leaf->parent_node_ = current;
+      leaf->parent_node = current;
 
       InsertToArtNode(current, leaf, key[level], true);
       current->opt_lock_.unlock();
@@ -644,7 +645,7 @@ void GlobalMemtable::SplitLeaf(InnerNode* leaf, size_t level,
 
   auto dummy_node = AllocateLeafNode(
       level + 1, static_cast<unsigned char>(LAST_CHAR), nullptr);
-  dummy_node->parent_node_ = leaf;
+  dummy_node->parent_node = leaf;
   dummy_node->oldest_key_time_ = oldest_key_time;
   SET_NON_LEAF(dummy_node);
   SET_TAG(dummy_node->nvm_node_->meta.header, DUMMY_TAG);
@@ -674,7 +675,7 @@ void GlobalMemtable::SplitLeaf(InnerNode* leaf, size_t level,
     auto new_leaf = AllocateLeafNode(
         level + 1, static_cast<unsigned char>(c), last_node);
     new_leaf->oldest_key_time_ = oldest_key_time;
-    new_leaf->parent_node_ = leaf;
+    new_leaf->parent_node = leaf;
     auto nvm_node = new_leaf->nvm_node_;
     int pos = 0, fpos = 0;
     for (auto& kv_info : split_buckets[c]) {
@@ -917,7 +918,7 @@ bool GlobalMemtable::FindKeyInInnerNode(InnerNode* leaf, size_t level,
   return found;
 }
 
-InnerNode* GlobalMemtable::FindInnerNodeByKey(Slice& key,
+InnerNode* GlobalMemtable::FindInnerNodeByKey(const Slice& key,
                                               size_t& level,
                                               bool& stored_in_nvm) {
   size_t max_level = key.size();
@@ -940,6 +941,204 @@ InnerNode* GlobalMemtable::FindInnerNodeByKey(Slice& key,
   }
 
   return nullptr;
+}
+
+struct IteratorKV {
+  std::string key;
+  std::string value;
+  std::string internal_key;
+
+  IteratorKV() = default;
+
+  IteratorKV(std::string& key_, std::string& value_, SequenceNumber seq_num_)
+      : key(std::move(key_)), value(std::move(value_)){
+    internal_key = key;
+    PutFixed64(&internal_key, seq_num_);
+  }
+
+  friend bool operator<(const IteratorKV& l, const IteratorKV& r) {
+    return l.key < r.key;
+  }
+
+  friend bool operator==(const IteratorKV& l, const IteratorKV& r) {
+    return l.key == r.key;
+  }
+};
+
+class GlobalMemTableIterator : public InternalIterator {
+ public:
+  GlobalMemTableIterator(GlobalMemtable* mem, const ReadOptions& read_options)
+      : mem_(mem), valid_(false) {}
+
+  ~GlobalMemTableIterator() override {
+    if (current_node_) {
+      UnlockNode();
+    }
+    DeleteIterator();
+  }
+
+  // No copying allowed
+  GlobalMemTableIterator(const GlobalMemTableIterator&) = delete;
+  void operator=(const GlobalMemTableIterator&) = delete;
+
+  bool Valid() const override { return valid_; }
+
+  void Seek(const Slice& key) override {
+    FindKey(ExtractUserKey(key));
+  }
+
+  void FindKey(const Slice& key) {
+    [[maybe_unused]] size_t level;
+    [[maybe_unused]] bool stored_in_nvm;
+
+    while (true) {
+      current_node_ = mem_->FindInnerNodeByKey(key, level, stored_in_nvm);
+      if (unlikely(!current_node_)) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        continue;
+      }
+
+      LockNode();
+      if (likely(IS_LEAF(current_node_))) {
+        break;
+      }
+      UnlockNode();
+    }
+
+    ReadNode();
+
+    IteratorKV expect;
+    expect.key = std::string(key.data(), key.size());
+    index = std::lower_bound(keys_in_node_.begin(), keys_in_node_.end(), expect)
+        - keys_in_node_.begin();
+    if (index == keys_in_node_.size()) {
+      Next();
+    }
+  }
+
+  void ReadNode() {
+    keys_in_node_.clear();
+    std::string k, v;
+    SequenceNumber seq_num;
+    for (size_t i = 0; i < GET_NODE_BUFFER_SIZE(current_node_->status_); ++i) {
+      auto vptr = current_node_->buffer_[i * 2 + 1];
+      auto type = mem_->vlog_manager_->GetKeyValue(vptr, k, v, seq_num);
+      seq_num = (seq_num << 8) | type;
+      keys_in_node_.emplace_back(k, v, seq_num);
+    }
+    auto nvm_size = GET_SIZE(current_node_->nvm_node_->meta.header);
+    for (size_t i = 0; i < nvm_size; ++i) {
+      auto vptr = current_node_->nvm_node_->data[i * 2 + 1];
+      if (!vptr) {
+        continue;
+      }
+      auto type = mem_->vlog_manager_->GetKeyValue(vptr, k, v, seq_num);
+      seq_num = (seq_num << 8) | type;
+      keys_in_node_.emplace_back(k, v, seq_num);
+    }
+
+    std::stable_sort(keys_in_node_.begin(), keys_in_node_.end());
+    keys_in_node_.erase(
+        std::unique(keys_in_node_.begin(), keys_in_node_.end()),
+        keys_in_node_.end());
+
+    index = 0;
+    valid_ = true;
+  }
+
+  void SeekForPrev(const Slice& k) override {
+    // Currently SeekForPrev is not implemented.
+    assert(false);
+  }
+
+  void SeekToFirst() override {
+    // SeekToFirst is not needed in YCSB. I'm lazy. Zzzzzzzzz.
+    assert(false);
+  }
+
+  void SeekToLast() override {
+    assert(false);
+  }
+
+  void Next() override {
+    ++index;
+    if (index < keys_in_node_.size()) {
+      return;
+    }
+
+    InnerNode* next_node;
+    while (true) {
+      next_node = current_node_->next_node;
+      UnlockNode();
+      current_node_ = next_node;
+
+      if (!current_node_) {
+        valid_ = false;
+        break;
+      }
+
+      LockNode();
+      if (likely(IS_LEAF(current_node_))) {
+        ReadNode();
+        break;
+      }
+    }
+  }
+
+  bool NextAndGetResult(IterateResult* result) override {
+    Next();
+    bool is_valid = valid_;
+    if (is_valid) {
+      result->key = key();
+      result->bound_check_result = IterBoundCheck::kUnknown;
+      result->value_prepared = true;
+    }
+    return is_valid;
+  }
+
+  void Prev() override {
+    assert(false);
+  }
+
+  Slice key() const override {
+    assert(Valid());
+    return keys_in_node_[index].internal_key;
+  }
+
+  Slice value() const override {
+    assert(Valid());
+    return keys_in_node_[index].value;
+  }
+
+  Status status() const override { return Status::OK(); }
+
+ private:
+  void LockNode() {
+    // TODO: use share mutex ?
+    assert(current_node_);
+    current_node_->opt_lock_.lock();
+    current_node_->share_mutex_.lock();
+  }
+
+  void UnlockNode() {
+    assert(current_node_);
+    current_node_->opt_lock_.unlock();
+    current_node_->share_mutex_.unlock();
+  }
+
+  GlobalMemtable* mem_;
+
+  bool valid_;
+
+  InnerNode* current_node_ = nullptr;
+
+  std::vector<IteratorKV> keys_in_node_;
+
+  size_t index = 0;
+};
+
+InternalIterator* GlobalMemtable::NewIterator(const ReadOptions& read_options) {
+  return new GlobalMemTableIterator(this, read_options);
 }
 
 } // namespace ROCKSDB_NAMESPACE

@@ -321,7 +321,24 @@ void DoTest(std::string test_name) {
     thread.join();
   }
 
-  db->Reset();
+
+  auto iter = db->NewIterator(ReadOptions());
+
+  std::string key = NumToKey(fnvhash64(total_count / 10));
+  iter->Seek(key);
+
+  for (int i = 0; i < 100 && iter->Valid(); ++i) {
+    auto k = iter->key();
+    std::string kk(k.data(), k.size());
+    std::cout << kk << std::endl;
+    iter->Next();
+  }
+
+  delete iter;
+
+  //return;
+
+  //db->Reset();
 
   std::cout << "Start test get" << std::endl;
 

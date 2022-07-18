@@ -65,7 +65,7 @@ ArtNode* AllocateArtAfterSplit(
     const std::vector<InnerNode*>& inserted_nodes,
     const std::vector<unsigned char>& c);
 
-void ReallocateArtNode(ArtNode** art);
+ArtNode* ReallocateArtNode(ArtNode* art);
 
 InnerNode* FindChild(InnerNode* node, unsigned char c);
 

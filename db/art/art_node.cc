@@ -201,24 +201,23 @@ ArtNode* ReallocateArtNode256(ArtNode* art) {
   return new_art;
 }
 
-void ReallocateArtNode(ArtNode** art) {
+ArtNode* ReallocateArtNode(ArtNode* art) {
   ArtNode* new_art = nullptr;
-  switch ((*art)->art_type_) {
+  switch (art->art_type_) {
     case kNode4:
-      new_art = ReallocateArtNode16(*art);
+      new_art = ReallocateArtNode16(art);
       break;
     case kNode16:
-      new_art = ReallocateArtNode48(*art);
+      new_art = ReallocateArtNode48(art);
       break;
     case kNode48:
-      new_art = ReallocateArtNode256(*art);
+      new_art = ReallocateArtNode256(art);
       break;
     default:
       assert(false);
   }
 
-  delete *art;
-  *art = new_art;
+  return new_art;
 }
 
 InnerNode* FindChildInNode4(ArtNode* art, unsigned char c) {
@@ -330,7 +329,7 @@ InnerNode* FindChild(InnerNode* node, std::string& key, size_t level,
                      InnerNode** backup, size_t& backup_level) {
   shared_lock<RWSpinLock> read_lk(node->art_rw_lock_);
 
-  if (node->backup_art) {
+  if (unlikely(node->backup_art)) {
     assert(backup_level == 0);
     *backup = FindChild(node->backup_art, key[level]);
     backup_level = level + 1;
@@ -467,29 +466,32 @@ void InsertToArtNode(InnerNode* current, InnerNode* leaf,
   static int full_num[5] = {0, 4, 16, 48, 256};
 
   InnerNode* left_node = nullptr;
-  ArtNode* art = nullptr;
+
+  ArtNode* prev_art = nullptr;
+  ArtNode* curr_art = current->art;
+  if (unlikely(IS_ART_FULL(current))) {
+    curr_art = ReallocateArtNode(current->art);
+    SET_ART_NON_FULL(current);
+  }
 
   {
     std::lock_guard<RWSpinLock> write_lk(current->art_rw_lock_);
 
-    if (IS_ART_FULL(current)) {
-      ReallocateArtNode(&current->art);
-      SET_ART_NON_FULL(current);
-    }
+    current->art = curr_art;
+    delete prev_art;
 
-    art = current->art;
-    switch (art->art_type_) {
+    switch (curr_art->art_type_) {
       case kNode4:
-        left_node = InsertToArtNode4(art, leaf, c);
+        left_node = InsertToArtNode4(curr_art, leaf, c);
         break;
       case kNode16:
-        left_node = InsertToArtNode16(art, leaf, c);
+        left_node = InsertToArtNode16(curr_art, leaf, c);
         break;
       case kNode48:
-        left_node = InsertToArtNode48(art, leaf, c);
+        left_node = InsertToArtNode48(curr_art, leaf, c);
         break;
       case kNode256:
-        left_node = InsertToArtNode256(art, leaf, c);
+        left_node = InsertToArtNode256(curr_art, leaf, c);
         break;
       default:
         break;
@@ -498,7 +500,7 @@ void InsertToArtNode(InnerNode* current, InnerNode* leaf,
 
   InsertInnerNode(left_node, leaf);
 
-  if ((++art->num_children_) == full_num[art->art_type_]) {
+  if ((++curr_art->num_children_) == full_num[curr_art->art_type_]) {
     SET_ART_FULL(current);
   }
 
@@ -605,7 +607,7 @@ void DeleteInnerNode(InnerNode* inner_node, uint64_t* inode_vptrs, int count) {
     }
   }
 
-  delete inner_node->support_node_;
+  delete inner_node->support_node;
   delete art;
   delete inner_node;
 }

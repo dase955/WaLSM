@@ -117,4 +117,10 @@ void IncrementBackupRead();
 
 void ReduceBackupRead();
 
+// Before creating db iterator, we must notify compactor that
+// we want to do scan operation. Because we can't do compaction when doing scan.
+void TryCreateIterator();
+
+void DeleteIterator();
+
 } // namespace ROCKSDB_NAMESPACE

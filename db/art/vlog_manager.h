@@ -78,6 +78,9 @@ class VLogManager : public BackgroundThread {
 
   ValueType GetKeyValue(uint64_t offset, std::string& key, std::string& value);
 
+  ValueType GetKeyValue(uint64_t offset, std::string& key, std::string& value,
+                        SequenceNumber& seq_num);
+
   ValueType GetKeyValue(uint64_t offset,
                         std::string& key, Slice& value,
                         SequenceNumber& seq_num, RecordIndex& index);
