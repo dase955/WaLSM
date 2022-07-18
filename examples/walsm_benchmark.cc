@@ -105,26 +105,17 @@ class KeyGenerator {
  protected:
   void InitializeIntervals() {
     std::random_device shuffle_rd;
-    std::vector<int> r(100);
-    std::iota(r.begin(), r.end(), 0);
-    std::shuffle(r.begin(), r.end(), shuffle_rd);
 
     memset(hot_read_intervals_, 0, sizeof(int) * 101);
     memset(hot_write_intervals_, 0, sizeof(int) * 101);
     for (int i = 0; i < 20; i++) {
       hot_read_intervals_[i] = 1;
-      hot_write_intervals_[i+80] = 1;
+      hot_write_intervals_[i + 80] = 1;
     }
-    //    for (int i = 0; i < 10; ++i) {
-    //      hot_read_intervals_[r[i]] = 1;
-    //      hot_write_intervals_[r[i]] = 1;
-    //    }
-    //    for (int i = 10; i < 20; ++i) {
-    //      hot_read_intervals_[r[i]] = 1;
-    //    }
-    //    for (int i = 20; i < 30; ++i) {
-    //      hot_write_intervals_[r[i]] = 1;
-    //    }
+    for (int i = 0; i < 5; i++) {
+      hot_write_intervals_[i + 15] = 1;
+      hot_read_intervals_[i + 80] = 1;
+    }
 
     printf("Hot write intervals:\n");
     for (int i = 0; i < 101; ++i) {
@@ -186,7 +177,7 @@ class KeyGenerator {
       int to_add = hot_data.size() - hot_load_data.size();
       load_records_.reserve(load_records_.size() + to_add);
       for (int i = 0; i < to_add; ++i) {
-        uint64_t v = 0;
+        uint64_t v;
         do {
           v = dist(rng);
         } while (!hot_write_intervals_[v / interval_length_]);
@@ -199,7 +190,7 @@ class KeyGenerator {
       int to_add = cold_data.size() - cold_load_data.size();
       load_records_.reserve(load_records_.size() + to_add);
       for (int i = 0; i < to_add; ++i) {
-        uint64_t v = 0;
+        uint64_t v;
         do {
           v = dist(rng);
         } while (hot_write_intervals_[v / interval_length_]);
@@ -328,9 +319,13 @@ class KeyGenerator {
         0, hot_read_records_.size() - 1);
     static std::uniform_int_distribution<uint64_t> rand2(
         0, cold_read_records_.size() - 1);
+    static std::uniform_int_distribution<uint64_t> rand_hot_write(
+        0, run_records_.size() - 1);
 
     uint64_t v;
-    if (rand_double(rng_) < 0.2) {
+    if (rand_double(rng_) < 0.3) {
+      v = run_records_[rand_hot_write(rng2_)];
+    } else if (rand_double(rng_) < 0.9) {
       v = hot_read_records_[rand1(rng2_)];
     } else {
       v = cold_read_records_[rand2(rng2_)];
@@ -397,7 +392,7 @@ class WorkloadRunner {
       work_threads_[i] = std::thread(&WorkloadRunner::LoadPhase, this, i);
     }
 
-    printf("Load opearation count = %d\n", key_generator_->GetLoadOperations());
+    printf("Load operations count = %d\n", key_generator_->GetLoadOperations());
 
     auto ops_thread = std::thread(&WorkloadRunner::StatisticsThread, this,
                                   key_generator_->GetLoadOperations());
@@ -410,7 +405,7 @@ class WorkloadRunner {
 
   void Run() {
     completed_count_.store(0, std::memory_order_relaxed);
-    printf("Run opearation count = %d\n", key_generator_->GetRunOperations());
+    printf("Run operations count = %d\n", key_generator_->GetRunOperations());
 
     for (int i = 0; i < num_threads_; ++i) {
       work_threads_[i] = std::thread(&WorkloadRunner::RunPhase, this, i);
@@ -472,15 +467,17 @@ class WorkloadRunner {
 
     while (operation_per_thread--) {
       auto type = key_generator_->Next(key);
-      auto value = GenerateValueFromKey(key);
 
       switch (type) {
-        case kWrite:
+        case kWrite: {
+          auto value = GenerateValueFromKey(key);
           s = db_->Put(WriteOptions(), key, value);
           break;
-        case kRead:
+        }
+        case kRead: {
           s = db_->Get(ReadOptions(), key, &ret);
           break;
+        }
       }
 
       ++completed_count_;
@@ -523,17 +520,20 @@ class WorkloadRunner {
 int main(int argc, char* argv[]) {
   setbuf(stdout, NULL);
 
-  float read_ratio = 0.5f;
-  if (argc == 2) {
+  float read_ratio = 0.5f, alpha = 0.98;
+  if (argc >= 2) {
     read_ratio = atof(argv[1]);
+  }
+  if (argc >= 3) {
+    alpha = atof(argv[2]);
   }
 
   printf("Read ratio = %.2f\n", read_ratio);
 
-  int thread_num = 8;
-  int load_count = 80000000;
-  int run_count = 320000000;
-  uint64_t sample_range = 9000000000000000000;
+  const int thread_num = 8;
+  const int load_count = 80000000;
+  const int run_count = 320000000;
+  const uint64_t sample_range = 9000000000000000000;
 
   Options options;
   options.create_if_missing = true;
@@ -542,8 +542,10 @@ int main(int argc, char* argv[]) {
   options.enable_pipelined_write = true;
   options.compaction_style = rocksdb::kCompactionStyleUniversal;
   options.compression = rocksdb::kNoCompression;
-  // options.nvm_path = "/mnt/pmem1/crh/nodememory";
   options.IncreaseParallelism(16);
+  options.OptimizeForPointLookup(512);
+  options.statistics = CreateDBStatistics();
+  // options.nvm_path = "/mnt/pmem1/crh/nodememory";
 
   // std::remove(options.nvm_path.c_str());
 
@@ -552,7 +554,7 @@ int main(int argc, char* argv[]) {
   DB* db;
   DB::Open(options, db_path, &db);
 
-  auto gen = new KeyGenerator(load_count, run_count, sample_range, 0.98);
+  auto gen = new KeyGenerator(load_count, run_count, sample_range, alpha);
   gen->SetOperationCount(120000000);
   gen->SetReadRatio(read_ratio);
 
@@ -562,8 +564,17 @@ int main(int argc, char* argv[]) {
   runner.Load();
   runner.Run();
 
-  db->Close();
 
+  std::cout << "Global Statistics: " << std::endl
+            << options.statistics->ToString() << std::endl;
+  std::cout << options.statistics->getTickerCount(GET_HIT_L0) << "/"
+            << options.statistics->getTickerCount(GET_MISS_L0) << std::endl
+            << options.statistics->getTickerCount(GET_HIT_L1) << "/"
+            << options.statistics->getTickerCount(GET_MISS_L1) << std::endl
+            << options.statistics->getTickerCount(GET_HIT_L2_AND_UP) << "/"
+            << options.statistics->getTickerCount(GET_MISS_L2_AND_UP) << std::endl;
+
+  db->Close();
   delete gen;
   delete db;
 }
