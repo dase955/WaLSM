@@ -64,7 +64,7 @@ class MergeQTable {
       gt *= gt;
       gt += keys[i].reward;
       if (table.find(keys[i].q_state) == table.end()) {
-        table.insert({keys[i].q_state, QValue(90, 10)});
+        table.insert({keys[i].q_state, QValue(50, 50)});
       }
 
       auto kv = table.find(keys[i].q_state);
@@ -83,7 +83,7 @@ class MergeQTable {
     auto& table = is_tier ? tier_table : level_table;
     auto it = table.find(state);
     if (it == table.end()) {
-      table.insert({state, QValue{90, 10}});
+      table.insert({state, QValue{50, 50}});
       it = table.find(state);
     }
     auto& value = it->second;

@@ -2487,7 +2487,7 @@ void VersionStorageInfo::TryUpdateQValues() {
                                    (fp->level_size[i] / (128 * 1024));
         if (!fp->q_keys[i].empty()) {
           q_table_->Reward(fp->q_keys[i], fp->is_tier[i]);
-          key.keep = q_table_->ShouldMerge(state, fp->is_tier[i]);
+          key.keep = !q_table_->ShouldMerge(state, fp->is_tier[i]);
           if (!key.keep) {
             fp->is_compaction_work[i] = false;
             fp->is_tier[i] = !fp->is_tier[i];
