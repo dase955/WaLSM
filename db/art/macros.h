@@ -27,7 +27,8 @@ namespace ROCKSDB_NAMESPACE {
  */
 
 #define LAST_CHAR                 255
-#define ROW_SIZE                  256
+#define ROW_BYTES                 256
+#define ROW_SIZE                  16
 #define NVM_MAX_ROWS              14
 #define NVM_MAX_SIZE              224
 
@@ -90,6 +91,7 @@ namespace ROCKSDB_NAMESPACE {
 #define CLEAR_TAG(hdr, tag)     (hdr) &= ~(tag)
 #define GET_TAG(hdr, tag)       ((hdr) & (tag))
 #define SET_TAG(hdr, tag)       (hdr) |= (tag)
+#define SET_NVM_TAG(node, tag)  SET_TAG((node)->meta.header, tag)
 
 // Alt bit maybe redundant
 #define ALT_FIRST_TAG           0x8000000000000000

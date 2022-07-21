@@ -183,7 +183,7 @@ class ScrambledZipfianGenerator {
 };
 
 int thread_num = 8;
-int total_count = 10000000;
+int total_count = 40000000;
 int count_per_thread = total_count / thread_num;
 std::atomic<int64_t> counter{0};
 std::vector<uint64_t> written(total_count);
@@ -309,12 +309,12 @@ void DoTest(std::string test_name) {
   std::thread write_threads[thread_num];
   std::thread check_threads[thread_num];
   for (int i = 0; i < thread_num; ++i) {
-    write_threads[i] = std::thread(UniformPutThread, db);
-    //read_threads[i] = std::thread(GetThread, db);
+    write_threads[i] = std::thread(ZipfianPutThread, db);
+    read_threads[i] = std::thread(GetThread, db);
   }
 
   for (auto & thread : read_threads) {
-    //thread.join();
+    thread.join();
   }
 
   for (auto & thread : write_threads) {
@@ -324,7 +324,7 @@ void DoTest(std::string test_name) {
 
   auto iter = db->NewIterator(ReadOptions());
 
-  std::string key = NumToKey(fnvhash64(total_count / 10));
+  std::string key = NumToKey(written[total_count / 10]);
   iter->Seek(key);
 
   for (int i = 0; i < 100 && iter->Valid(); ++i) {

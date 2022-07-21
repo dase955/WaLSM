@@ -56,32 +56,26 @@ int EstimateDistinctCount(const uint8_t hll[64]) {
 
 InnerNode* AllocateLeafNode(uint8_t prefix_length,
                             unsigned char last_prefix,
-                            InnerNode* next_node) {
+                            InnerNode* next_node,
+                            uint64_t init_tag) {
+  NodeAllocator* mgr = GetNodeAllocator();
+
   auto inode = new InnerNode();
-  /*uint32_t status = inode->status_;
-  SET_LEAF(status);
-  SET_NON_GROUP_START(status);
-  SET_ART_NON_FULL(status);
-  SET_NODE_BUFFER_SIZE(status, 0);
-  SET_GC_FLUSH_SIZE(status, 0);*/
   inode->status_ = INITIAL_STATUS(0);
-
-  auto mgr = GetNodeAllocator();
-
   auto nvm_node = mgr->AllocateNode();
   inode->nvm_node_ = nvm_node;
   inode->support_node = inode;
   inode->next_node = next_node;
 
-  uint64_t hdr = 0;
+  uint64_t hdr = init_tag;
   SET_LAST_PREFIX(hdr, last_prefix);
   SET_LEVEL(hdr, prefix_length);
   SET_TAG(hdr, VALID_TAG);
   SET_TAG(hdr, ALT_FIRST_TAG);
 
-  nvm_node->meta.header = hdr;
   nvm_node->meta.next1 = next_node ? mgr->relative(next_node->nvm_node_) : -1;
-
+  nvm_node->meta.header = hdr;
+  FLUSH(nvm_node, CACHE_LINE_SIZE);
   return inode;
 }
 
@@ -113,14 +107,14 @@ InnerNode* RecoverInnerNode(NVMNode* nvm_node) {
     inode->hll_[bucket] = std::max(inode->hll_[bucket], digit);
   }
 
-  uint32_t status = INITIAL_STATUS(buffer_size);
-  /*SET_LEAF(status);
+  /*uint32_t status = INITIAL_STATUS(buffer_size);
+  SET_LEAF(status);
   SET_NON_GROUP_START(status);
   SET_ART_NON_FULL(status);
   SET_NODE_BUFFER_SIZE(status, buffer_size);
   SET_GC_FLUSH_SIZE(status, 0);*/
 
-  inode->status_ = status;
+  inode->status_ = INITIAL_STATUS(buffer_size);
   inode->estimated_size_ = nvm_node->meta.node_info;
   inode->support_node = inode;
   inode->nvm_node_ = nvm_node;

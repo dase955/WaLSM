@@ -473,7 +473,7 @@ void HeatGroupManager::SplitGroup(HeatGroup* group) {
   InnerNode* dummy_right_start = AllocateLeafNode(0, 0, nullptr);
   SET_GROUP_START(dummy_right_start);
   SET_NON_LEAF(dummy_right_start);
-  SET_TAG(dummy_right_start->nvm_node_->meta.header, GROUP_START_TAG);
+  SET_NVM_TAG(dummy_right_start->nvm_node_, GROUP_START_TAG);
   InsertInnerNode(left_end, dummy_right_start);
 
   right_group->ts = cur_ts;

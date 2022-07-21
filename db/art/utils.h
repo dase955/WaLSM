@@ -41,7 +41,7 @@ struct KVStruct {
     struct {
       uint64_t actual_vptr  : 40;
       uint64_t insert_times : 8;
-      uint64_t kv_size      : 16;
+      int32_t  kv_size      : 16;
     };
   };
 
@@ -146,7 +146,8 @@ int EstimateDistinctCount(const uint8_t hll[64]);
 // because nvm_ptr may be changed during compaction.
 InnerNode* AllocateLeafNode(uint8_t prefix_length,
                             unsigned char last_prefix,
-                            InnerNode* next_node = nullptr);
+                            InnerNode* next_node = nullptr,
+                            uint64_t init_tag = 0);
 
 InnerNode* RecoverInnerNode(NVMNode* nvm_node);
 

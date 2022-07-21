@@ -82,17 +82,34 @@ class YCSBZipfianGenerator : public KeyGenerator{
     double uz = u * zetan_;
 
     if (uz < 1.0) {
-      return 0;
+      return fnvhash64(0);
     }
 
     if (uz < 1.0 + std::pow(0.5, theta_)) {
-      return 1;
+      return fnvhash64(0);
     }
 
-    return (int) ((sample_range_) * std::pow(eta * u - eta + 1, alpha));
+    int v = (int) ((sample_range_) * std::pow(eta * u - eta + 1, alpha));
+    return fnvhash64(v);
   }
 
  private:
+  static uint64_t fnvhash64(int64_t val) {
+    static int64_t FNV_OFFSET_BASIS_64 = 0xCBF29CE484222325LL;
+    static int64_t FNV_PRIME_64 = 1099511628211L;
+
+    int64_t hashval = FNV_OFFSET_BASIS_64;
+
+    for (int i = 0; i < 8; i++) {
+      int64_t octet = val & 0x00ff;
+      val = val >> 8;
+
+      hashval = hashval ^ octet;
+      hashval = hashval * FNV_PRIME_64;
+    }
+    return hashval > 0 ? hashval : -hashval;
+  }
+
   double theta_;
   double zetan_;
   double alpha, eta;
@@ -406,17 +423,23 @@ void DoTest(std::string test_name) {
   int sample_range = 1000000000;
 
   Options options;
-  ParseOptions(options);
+  options.create_if_missing = true;
+  options.use_direct_io_for_flush_and_compaction = true;
+  options.use_direct_reads = true;
+  options.enable_pipelined_write = true;
+  options.compression = rocksdb::kNoCompression;
+  options.nvm_path = "/mnt/chen/nodememory";
+  options.IncreaseParallelism(16);
 
-  std::string db_path = "/tmp/db_test_" + test_name;
-  std::string ops_path =  "/tmp/run_ops_" + test_name;
+
+  std::string db_path = "/tmp/tmp_data/db_test_" + test_name;
 
   DB* db;
   DB::Open(options, db_path, &db);
 
   Inserter inserter(thread_num, db);
   inserter.SetGenerator(
-      new CustomZipfianGenerator(total_count, sample_range, 0.98));
+      new YCSBZipfianGenerator(total_count, sample_range, 0.98, 26.49));
   inserter.DoInsert();
 
   db->Close();

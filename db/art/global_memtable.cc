@@ -30,7 +30,7 @@ InnerNode::InnerNode()
       support_node(nullptr),
       next_node(nullptr),
       vptr_(0), estimated_size_(0), squeezed_size_(0),
-      status_(0), oldest_key_time_(0) {
+      status_(INITIAL_STATUS(0)), oldest_key_time_(0) {
   memset(hll_, 0, 64);
   memset(buffer_, 0, 256);
 }
@@ -64,20 +64,18 @@ void FlushBuffer(InnerNode* leaf, int row) {
 
   uint64_t* data_flush_start = node->data + (row << 5);
   uint8_t* finger_flush_start = node->meta.fingerprints_ + ROW_TO_SIZE(row);
-  MEMCPY(data_flush_start, leaf->buffer_, 256,
-         PMEM_F_MEM_NODRAIN | PMEM_F_MEM_NONTEMPORAL);
-  MEMCPY(finger_flush_start, fingerprints_copy, 16,
-         PMEM_F_MEM_NODRAIN | PMEM_F_MEM_NONTEMPORAL);
-
+  MEMCPY(data_flush_start, leaf->buffer_, ROW_BYTES, PMEM_F_MEM_NONTEMPORAL);
   NVM_BARRIER;
+  MEMCPY(finger_flush_start, fingerprints_copy, ROW_SIZE,
+         PMEM_F_MEM_NODRAIN | PMEM_F_MEM_NONTEMPORAL);
 
   // Write metadata
   uint64_t hdr = node->meta.header;
   uint8_t size = GET_SIZE(hdr);
-  SET_SIZE(hdr, size + 16);
+  SET_SIZE(hdr, size + ROW_SIZE);
   SET_ROWS(hdr, row + 1);
   node->meta.header = hdr;
-  PERSIST(node, 8);
+  PERSIST(node, CACHE_LINE_SIZE);
 
   SET_NODE_BUFFER_SIZE(leaf->status_, 0);
 }
@@ -85,9 +83,9 @@ void FlushBuffer(InnerNode* leaf, int row) {
 //////////////////////////////////////////////////////////
 
 GlobalMemtable::GlobalMemtable(
-    VLogManager* vlog_manager, HeatGroupManager* group_manager, Env* env,
-    bool recovery)
-    : root_(nullptr), vlog_manager_(vlog_manager),
+    VLogManager* vlog_manager, HeatGroupManager* group_manager,
+    Env* env, bool recovery)
+    : root_(nullptr), tail_(nullptr), vlog_manager_(vlog_manager),
       group_manager_(group_manager), env_(env) {
   vlog_manager->SetMemtable(this);
   recovery ? Recovery() : InitFirstLevel();
@@ -233,26 +231,22 @@ void GlobalMemtable::Recovery() {
 
 void GlobalMemtable::InitFirstLevel() {
   root_ = AllocateLeafNode(0, 0, nullptr);
-  tail_ = AllocateLeafNode(1, 0, nullptr);
-  SET_NON_GROUP_START(tail_);
-
-  tail_->parent_node = root_;
-  SET_TAG(tail_->nvm_node_->meta.header, DUMMY_TAG);
-  FLUSH(tail_->nvm_node_, CACHE_LINE_SIZE);
   SET_NON_LEAF(root_);
   SET_ART_FULL(root_);
+
+  tail_ = AllocateLeafNode(1, 0, nullptr, DUMMY_TAG);
+  SET_NON_GROUP_START(tail_);
+  tail_->parent_node = root_;
 
   // First level
   root_->support_node = tail_;
   root_->art = AllocateArtNode(kNode256);
   auto art256 = (ArtNode256*)root_->art;
   art256->header_.num_children_ = 256;
-  art256->header_.art_type_ = kNode256;
 
-  auto dummy_node = AllocateLeafNode(1, 0, tail_);
-  SET_TAG(dummy_node->nvm_node_->meta.header, GROUP_START_TAG);
+  auto dummy_node = AllocateLeafNode(1, 0, tail_, GROUP_START_TAG);
   SET_GROUP_START(dummy_node);
-  HeatGroup* last_group = new HeatGroup(dummy_node);
+  auto last_group = new HeatGroup(dummy_node);
   group_manager_->InsertIntoLayer(last_group, TEMP_LAYER);
   InnerNode* next_inner_node = dummy_node;
 
@@ -275,7 +269,7 @@ void GlobalMemtable::InitFirstLevel() {
         0, 0, next_inner_node);
     SET_GROUP_START(group_start_node);
     SET_NON_LEAF(group_start_node);
-    SET_TAG(group_start_node->nvm_node_->meta.header, GROUP_START_TAG);
+    SET_NVM_TAG(group_start_node->nvm_node_, GROUP_START_TAG);
     FLUSH(group_start_node->nvm_node_, CACHE_LINE_SIZE);
 
     heat_group->first_node_ = group_start_node;
@@ -392,7 +386,7 @@ LocalRestart:
         goto LocalRestart;
       }
 
-      if (IS_LEAF(current)) {
+      if (unlikely(IS_LEAF(current))) {
         current->opt_lock_.unlock();
         goto LocalRestart;
       }
@@ -412,7 +406,6 @@ LocalRestart:
       current->opt_lock_.unlock();
       leaf->heat_group_->UpdateSize(kv_info.kv_size);
       leaf->heat_group_->UpdateHeat();
-
       return;
     }
 
@@ -648,7 +641,7 @@ void GlobalMemtable::SplitLeaf(InnerNode* leaf, size_t level,
   dummy_node->parent_node = leaf;
   dummy_node->oldest_key_time_ = oldest_key_time;
   SET_NON_LEAF(dummy_node);
-  SET_TAG(dummy_node->nvm_node_->meta.header, DUMMY_TAG);
+  SET_NVM_TAG(dummy_node->nvm_node_, DUMMY_TAG);
   PERSIST(dummy_node, 8);
 
   auto last_node = dummy_node;

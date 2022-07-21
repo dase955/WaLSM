@@ -9,6 +9,7 @@
 // TODO:
 // 1. keys smaller than 8byte can be directly stored in node
 // 2. store vptr in support node instead of inner node
+// 3. Update hyper log log and fingerprints when doing recovery
 
 #pragma once
 #include <rocksdb/rocksdb_namespace.h>
