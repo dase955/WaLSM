@@ -86,7 +86,7 @@ class YCSBZipfianGenerator : public KeyGenerator{
     }
 
     if (uz < 1.0 + std::pow(0.5, theta_)) {
-      return fnvhash64(0);
+      return fnvhash64(1);
     }
 
     int v = (int) ((sample_range_) * std::pow(eta * u - eta + 1, alpha));
@@ -430,7 +430,6 @@ void DoTest(std::string test_name) {
   options.compression = rocksdb::kNoCompression;
   options.nvm_path = "/mnt/chen/nodememory";
   options.IncreaseParallelism(16);
-
 
   std::string db_path = "/tmp/tmp_data/db_test_" + test_name;
 

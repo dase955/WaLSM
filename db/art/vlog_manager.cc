@@ -547,11 +547,14 @@ void VLogManager::UpdateBitmap(
   NVM_BARRIER;
 }
 
-void VLogManager::UpdateBitmap(autovector<RecordIndex>* all_indexes) {
+void VLogManager::UpdateBitmap(std::vector<std::vector<RecordIndex>>& all_indexes) {
   for (size_t i = 0; i < vlog_segment_num_; ++i) {
     auto& indexes = all_indexes[i];
-    auto header = (VLogSegmentHeader*)(pmemptr_ + vlog_segment_size_ * i);
+    if (indexes.empty()) {
+      continue ;
+    }
 
+    auto header = (VLogSegmentHeader*)(pmemptr_ + vlog_segment_size_ * i);
     std::lock_guard<SpinMutex> status_lk(header->lock.mutex_);
     if (header->status_ != kSegmentWritten &&
         header->status_ != kSegmentWriting) {
@@ -559,16 +562,18 @@ void VLogManager::UpdateBitmap(autovector<RecordIndex>* all_indexes) {
       continue;
     }
 
+    RecordIndex max_index = indexes.front();
     auto bitmap = header->bitmap_;
     for (auto& index : indexes) {
       assert(index / 8 < vlog_bitmap_size_);
       bitmap[index / 8] &= ~(1 << (index % 8));
+      max_index = std::max(max_index, index);
     }
+    indexes.clear();
+
     header->compacted_count_ += indexes.size();
     assert(header->total_count_ >= header->compacted_count_);
-    FLUSH(header, vlog_header_size_);
-
-    indexes.clear();
+    FLUSH(header, ALIGN_UP(max_index / 8, 256));
   }
 
   NVM_BARRIER;

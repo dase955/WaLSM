@@ -301,7 +301,6 @@ DBImpl::DBImpl(const DBOptions& options, const std::string& dbname,
   compactor_->SetDB(this);
   compactor_->SetGroupManager(group_manager_);
   compactor_->SetVLogManager(vlog_manager_);
-  compactor_->SetGlobalMemtable(global_memtable_);
   compactor_->StartThread();
 }
 

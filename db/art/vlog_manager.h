@@ -88,7 +88,7 @@ class VLogManager : public BackgroundThread {
   void UpdateBitmap(
       std::unordered_map<uint64_t, std::vector<RecordIndex>>& all_indexes);
 
-  void UpdateBitmap(autovector<RecordIndex>* all_indexes);
+  void UpdateBitmap(std::vector<std::vector<RecordIndex>>& all_indexes);
 
   void FreeQueue();
 

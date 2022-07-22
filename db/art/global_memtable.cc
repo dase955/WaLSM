@@ -266,17 +266,15 @@ void GlobalMemtable::InitFirstLevel() {
     }
 
     auto group_start_node = AllocateLeafNode(
-        0, 0, next_inner_node);
+        0, 0, next_inner_node, GROUP_START_TAG);
     SET_GROUP_START(group_start_node);
     SET_NON_LEAF(group_start_node);
-    SET_NVM_TAG(group_start_node->nvm_node_, GROUP_START_TAG);
     FLUSH(group_start_node->nvm_node_, CACHE_LINE_SIZE);
 
     heat_group->first_node_ = group_start_node;
     heat_group->last_node_ = art256->children_[first_char + 4];
     heat_group->group_manager_ = group_manager_;
     group_start_node->heat_group_ = heat_group;
-    //group_manager_->InsertIntoLayer(heat_group, BASE_LAYER);
     group_manager_->InsertIntoLayer(heat_group, TEMP_LAYER);
 
     next_inner_node = group_start_node;
@@ -530,19 +528,17 @@ bool GlobalMemtable::SqueezeNode(InnerNode* leaf) {
   memset(temp_data + count, 0, SIZE_TO_BYTES(flush_size - fpos));
   memset(temp_fingerprints + fpos, 0, flush_size - fpos);
   MEMCPY(node->data, temp_data,
-         SIZE_TO_BYTES(flush_size),
-         PMEM_F_MEM_NODRAIN | PMEM_F_MEM_NONTEMPORAL);
+         SIZE_TO_BYTES(flush_size), PMEM_F_MEM_NONTEMPORAL);
+  NVM_BARRIER;
   MEMCPY(node->meta.fingerprints_,
          temp_fingerprints, flush_size,
          PMEM_F_MEM_NODRAIN | PMEM_F_MEM_NONTEMPORAL);
-
-  NVM_BARRIER;
 
   uint64_t hdr = node->meta.header;
   SET_SIZE(hdr, flush_size);
   SET_ROWS(hdr, flush_rows);
   node->meta.header = hdr;
-  PERSIST(node, 8);
+  PERSIST(node, CACHE_LINE_SIZE);
 
   // update vlog bitmap
   vlog_manager_->UpdateBitmap(unused_indexes);
@@ -637,12 +633,11 @@ void GlobalMemtable::SplitLeaf(InnerNode* leaf, size_t level,
   }
 
   auto dummy_node = AllocateLeafNode(
-      level + 1, static_cast<unsigned char>(LAST_CHAR), nullptr);
+      level + 1, static_cast<unsigned char>(LAST_CHAR), nullptr, DUMMY_TAG);
   dummy_node->parent_node = leaf;
   dummy_node->oldest_key_time_ = oldest_key_time;
   SET_NON_LEAF(dummy_node);
-  SET_NVM_TAG(dummy_node->nvm_node_, DUMMY_TAG);
-  PERSIST(dummy_node, 8);
+  PERSIST(dummy_node, CACHE_LINE_SIZE);
 
   auto last_node = dummy_node;
   auto first_node = dummy_node;

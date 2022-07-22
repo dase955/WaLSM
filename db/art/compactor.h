@@ -40,19 +40,17 @@ struct SingleCompactionJob {
   std::vector<InnerNode*>  candidates_removed;
   std::vector<InnerNode*>  candidate_parents;
   std::vector<ArtNode*>    removed_arts;
-  std::vector<uint64_t>    rewrite_data;
+  std::vector<std::pair<std::string, Slice>>   kv_slices;
 
   std::vector<std::string> keys_in_node;
   autovector<RecordIndex>* compacted_indexes;
-  std::vector<std::pair<NVMNode*, int>> nvm_nodes_and_sizes;
 
   void Reset() {
-    rewrite_data.clear();
     candidates.clear();
     candidates_removed.clear();
     candidate_parents.clear();
     removed_arts.clear();
-    nvm_nodes_and_sizes.clear();
+    kv_slices.clear();
   }
 };
 
@@ -67,8 +65,6 @@ class Compactor : public BackgroundThread {
   void SetGroupManager(HeatGroupManager* group_manager);
 
   void SetVLogManager(VLogManager* vlog_manager);
-
-  void SetGlobalMemtable(GlobalMemtable* global_memtable);
 
   void SetDB(DBImpl* db_impl);
 
@@ -87,10 +83,6 @@ class Compactor : public BackgroundThread {
 
   void CompactionPostprocess(SingleCompactionJob* job);
 
-  void RewriteData(SingleCompactionJob* job);
-
-  GlobalMemtable* global_memtable_ = nullptr;
-
   HeatGroupManager* group_manager_ = nullptr;
 
   VLogManager* vlog_manager_ = nullptr;
@@ -99,11 +91,15 @@ class Compactor : public BackgroundThread {
 
   int num_parallel_compaction_;
 
+  int rewrite_threshold_;
+
   std::vector<HeatGroup*> chosen_groups_;
 
   std::vector<SingleCompactionJob*> chosen_jobs_;
 
   std::vector<SingleCompactionJob*> compaction_jobs_;
+
+  std::vector<std::vector<RecordIndex>> all_compacted_indexes_;
 };
 
 int64_t GetMemTotalSize();

@@ -11,18 +11,15 @@ namespace ROCKSDB_NAMESPACE {
 
 std::string log_path = "/tmp";
 
-std::string compaction_filename = "compaction_nvm_l0.txt";
+std::string compaction_filename = "compaction_art.txt";
 
-std::string compaction_log = "/tmp/compaction_nvm_l0.txt";
+std::string compaction_log = "/tmp/compaction_art.txt";
 
-std::string debug_filename = "debug_nvm_l0.txt";
+std::string debug_filename = "debug_art.txt";
 
-std::string debug_log = "/tmp/debug_nvm_l0.txt";
+std::string debug_log = "/tmp/debug_art.txt";
 
 void InitLogFile() {
-  //std::remove(compaction_log.c_str());
-  //std::remove(debug_log.c_str());
-
   FILE* fp;
 
   fp = fopen(compaction_log.c_str(), "w");

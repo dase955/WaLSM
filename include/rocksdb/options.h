@@ -1219,7 +1219,7 @@ struct DBOptions {
   // default: 1G
   int64_t node_memory_size = 1024LL << 20;
 
-  int max_rewrite_count = 600;
+  bool enable_rewrite = true;
 
   // Path for nvm file, don't pass directory.
   std::string nvm_path = "/tmp/nodememory";
