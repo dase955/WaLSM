@@ -112,7 +112,7 @@ class GlobalMemtable {
 
   void PutRecover(uint64_t vptr);
 
-  void Put(Slice& key, KVStruct& kv_info, bool update_heat = true);
+  void Put(Slice& key, KVStruct& kv_info);
 
   bool FindKeyInInnerNode(InnerNode* leaf, size_t level,
                           std::string& key, std::string& value, Status* s);
@@ -120,9 +120,9 @@ class GlobalMemtable {
   bool ReadInNVMNode(NVMNode* nvm_node, uint64_t hash,
                      std::string& key, std::string& value, Status* s);
 
-  void InsertIntoLeaf(InnerNode* leaf, KVStruct& kv_info,
-                      size_t level, bool update_heat = true);
+  void InsertIntoLeaf(InnerNode* leaf, KVStruct& kv_info, size_t level);
 
+  // Try to squeeze node, return false if distinct count exceed limit
   bool SqueezeNode(InnerNode* leaf);
 
   // Split leaf node and store node that still need split

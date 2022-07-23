@@ -284,7 +284,7 @@ void GlobalMemtable::InitFirstLevel() {
   root_->nvm_node_->meta.next1 =
       GetNodeAllocator()->relative(next_inner_node->nvm_node_);
 
-  FLUSH(root_->nvm_node_, CACHE_LINE_SIZE);
+  PERSIST(root_->nvm_node_, CACHE_LINE_SIZE);
 
   NVM_BARRIER;
 }
@@ -332,11 +332,11 @@ void GlobalMemtable::Put(Slice& slice, uint64_t base_vptr, size_t count) {
     assert(kv_info.actual_vptr == vptr);
 
     Put(key, kv_info);
-    vptr += (slice.data() - record_start);
+    vptr += kv_info.kv_size;
   }
 }
 
-void GlobalMemtable::Put(Slice& key, KVStruct& kv_info, bool update_heat) {
+void GlobalMemtable::Put(Slice& key, KVStruct& kv_info) {
   size_t max_level = key.size();
 
   uint32_t version;
@@ -356,6 +356,7 @@ LocalRestart:
         goto LocalRestart;
       }
 
+      // This node has been reclaimed, search again
       if (unlikely(IS_INVALID(current->status_))) {
         current->opt_lock_.unlock();
         goto Restart;
@@ -427,7 +428,7 @@ bool GlobalMemtable::Get(std::string& key, std::string& value, Status* s) {
     } else if (level == max_level) {
       shared_lock<RWSpinLock> read_lk(current->vptr_lock_);
 
-      // This mean children of current node is waiting to be reclaimed,
+      // This mean children of current node are waiting to be reclaimed,
       // so this node becomes a leaf node again.
       if (unlikely(IS_LEAF(current))) {
         found = FindKeyInInnerNode(current, level, key, value, s);
@@ -478,39 +479,39 @@ bool GlobalMemtable::SqueezeNode(InnerNode* leaf) {
   uint64_t temp_data[448] = {0};
 #endif
 
+  std::string key;
   for (int i = NVM_MAX_SIZE - 1; i >= 0; --i) {
     uint64_t hash = data[(i << 1)];
     uint64_t vptr = data[(i << 1) + 1];
     auto kv_info = KVStruct(hash, vptr);
-    if (!vptr) {
+    if (!kv_info.actual_vptr) {
       continue;
     }
-    std::string key;
     vlog_manager_->GetKeyIndex(vptr, key, index);
     auto iter = key_set.find(key);
     if (iter != key_set.end()) {
       GetActualVptr(vptr);
       unused_indexes[vptr >> 20].emplace_back(index);
       iter->second.second += kv_info.insert_times;
-      continue;
+    } else {
+      int insert_times = kv_info.insert_times;
+      key_set[key] = std::make_pair(count + 1, insert_times);
+      temp_fingerprints[fpos++] = static_cast<uint8_t>(kv_info.actual_hash);
+      temp_data[count++] = kv_info.hash;
+      temp_data[count++] = kv_info.vptr;
+      cur_size += kv_info.kv_size;
     }
-
-    int insert_times = kv_info.insert_times;
-    key_set[key] = std::make_pair(count + 1, insert_times);
-    temp_fingerprints[fpos++] = static_cast<uint8_t>(kv_info.hash);
-    temp_data[count++] = kv_info.hash;
-    temp_data[count++] = kv_info.vptr;
-    cur_size += kv_info.kv_size;
   }
 
+  // If node is still almost full after squeeze, we split it instead.
   if (unlikely(key_set.size() >= NVM_MAX_SIZE - 16)) {
     return false;
   }
 
   for (auto& pair : key_set) {
-    auto& pos_and_times = pair.second;
-    UpdateInsertTimes(temp_data[pos_and_times.first],
-                      std::min(pos_and_times.second, 254));
+    auto& pos_and_counts = pair.second;
+    UpdateInsertTimes(temp_data[pos_and_counts.first],
+                      std::min(pos_and_counts.second, 127));
   }
 
   assert(fpos <= NVM_MAX_SIZE - 16);
@@ -607,7 +608,7 @@ int32_t GlobalMemtable::ReadFromNVM(NVMNode* nvm_node, size_t level,
 
 void GlobalMemtable::SplitLeaf(InnerNode* leaf, size_t level,
                                InnerNode** node_need_split) {
-
+  // printf("Split leaf: %d\n", (int)GetNodeAllocator()->GetNumFreePages());
   auto old_nvm_node = leaf->nvm_node_;
   *node_need_split = nullptr;
 
@@ -733,10 +734,9 @@ void GlobalMemtable::SplitLeaf(InnerNode* leaf, size_t level,
 
 }
 
-// "4b prefix + 4b hash + 8b pointer" OR "4b SeqNum + 4b hash + 8b pointer"
-// This function is responsible for unlocking opt_lock_
+// This function is responsible for unlocking OptLock
 void GlobalMemtable::InsertIntoLeaf(InnerNode* leaf, KVStruct& kv_info,
-                                    size_t level, bool update_heat) {
+                                    size_t level) {
   int write_pos = GET_NODE_BUFFER_SIZE(++leaf->status_) << 1;
 
   leaf->buffer_[write_pos - 2] = kv_info.hash;
@@ -746,16 +746,12 @@ void GlobalMemtable::InsertIntoLeaf(InnerNode* leaf, KVStruct& kv_info,
   if (likely(write_pos < 32)) {
     leaf->opt_lock_.unlock();
     leaf->heat_group_->UpdateSize(kv_info.kv_size);
-    if (update_heat) {
-      leaf->heat_group_->UpdateHeat();
-    }
+    leaf->heat_group_->UpdateHeat();
     return;
   }
 
   leaf->heat_group_->UpdateSize(kv_info.kv_size);
-  if (update_heat) {
-    leaf->heat_group_->UpdateHeat();
-  }
+  leaf->heat_group_->UpdateHeat();
 
   InnerNode* next_to_split = nullptr;
 

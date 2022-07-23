@@ -516,7 +516,7 @@ class WorkloadRunner {
           s = db_->Put(WriteOptions(), key, value);
           end_time = std::chrono::steady_clock::now();
           latency = std::chrono::duration_cast<std::chrono::microseconds>
-              (end_time - start_time).count();
+                    (end_time - start_time).count();
           thread_write_stats_[thread_id].Add(latency);
           break;
         case kRead:

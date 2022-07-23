@@ -61,7 +61,7 @@ void DeleteIterator() {
 
 #ifdef ROCKSDB_SUPPORT_THREAD_LOCAL
 thread_local uint8_t fingerprints[224] = {0};
-thread_local uint64_t rewrite_data[448] = {0};
+thread_local uint64_t nvm_data[448] = {0};
 #endif
 
 struct CompactionRec {
@@ -83,6 +83,57 @@ struct CompactionRec {
 };
 
 ////////////////////////////////////////////////////////////
+
+void RewriteData(std::vector<KVStruct>& rewrite_kv, InnerNode* node,
+                 VLogManager* vlog_manager) {
+  if (rewrite_kv.empty()) {
+    return;
+  }
+
+  size_t level = GET_LEVEL(node->nvm_node_->meta.header);
+
+#ifndef ROCKSDB_SUPPORT_THREAD_LOCAL
+  uint8_t fingerprints[224] = {0};
+  uint64_t nvm_data[448] = {0};
+#endif
+
+  int pos = 0, fpos = 0;
+  int h, bucket;
+  uint8_t digit;
+  auto nvm_node = node->nvm_node_;
+
+  for (auto& kv_info : rewrite_kv) {
+    vlog_manager->MaybeRewrite(kv_info);
+    fingerprints[fpos++] = static_cast<uint8_t>(kv_info.actual_hash);
+    nvm_data[pos++] = kv_info.hash;
+    nvm_data[pos++] = kv_info.vptr;
+    node->estimated_size_ += kv_info.kv_size;
+
+    bucket = (int)(kv_info.actual_hash & 63);
+    h = (int)(kv_info.actual_hash >> 6);
+    digit = h == 0 ? 0 : __builtin_ctz(h) + 1;
+    node->hll_[bucket] = std::max(node->hll_[bucket], digit);
+  }
+
+  int flush_size = ALIGN_UP(fpos, 16);
+  int flush_rows = SIZE_TO_ROWS(flush_size);
+  assert(flush_rows <= NVM_MAX_ROWS);
+  assert(flush_size <= NVM_MAX_SIZE);
+
+  memset(nvm_data + pos, 0, SIZE_TO_BYTES(flush_size - fpos));
+  memset(fingerprints + fpos, 0, flush_size - fpos);
+  MEMCPY(nvm_node->data, nvm_data, SIZE_TO_BYTES(flush_size),
+         PMEM_F_MEM_NONTEMPORAL);
+  NVM_BARRIER;
+  MEMCPY(nvm_node->meta.fingerprints_, fingerprints, flush_size,
+         PMEM_F_MEM_NODRAIN | PMEM_F_MEM_NONTEMPORAL);
+
+  auto hdr = nvm_node->meta.header;
+  SET_SIZE(hdr, flush_size);
+  SET_ROWS(hdr, flush_rows);
+  nvm_node->meta.header = hdr;
+  PERSIST(nvm_node, CACHE_LINE_SIZE);
+}
 
 void RemoveChildren(InnerNode* parent, InnerNode* child) {
   // assert opt_lock and shared_mutex are held
@@ -173,16 +224,17 @@ void RemoveChildren(InnerNode* parent, InnerNode* child) {
 }
 
 void ProcessNodes(InnerNode* parent, std::vector<InnerNode*>& children,
-                  SingleCompactionJob* job, bool have_rewrite) {
+                  SingleCompactionJob* job, std::vector<KVStruct>& rewrite_kv) {
   std::lock_guard<OptLock> opt_lk(parent->opt_lock_);
   std::lock_guard<SharedMutex> write_lk(parent->share_mutex_);
 
   if (children.size() == parent->art->num_children_ &&
-      parent->heat_group_ == job->group_ && !have_rewrite) {
+      parent->heat_group_ == job->group_ &&
+      rewrite_kv.size() < BULK_WRITE_SIZE) {
     RemoveChildren(parent, children.back());
+    RewriteData(rewrite_kv, parent, job->vlog_manager_);
     job->candidate_parents.push_back(parent);
     for (auto child : children) {
-      assert(child->heat_group_ == job->group_);
       assert(child->heat_group_ == parent->heat_group_);
       SET_NODE_INVALID(child->status_);
       job->candidates_removed.push_back(child);
@@ -392,7 +444,7 @@ void Compactor::Reset() {
 
 #ifndef ROCKSDB_SUPPORT_THREAD_LOCAL
   thread_local uint8_t fingerprints[224] = {0};
-  thread_local uint64_t rewrite_data[448] = {0};
+  thread_local uint64_t nvm_data[448] = {0};
 #endif
 
   std::unique_lock<std::mutex> lock{mutex_};
@@ -503,23 +555,24 @@ void Compactor::Reset() {
   StartThread();
 }
 
-bool ReadData(InnerNode* node, SingleCompactionJob* job,
-              int& compacted_size, int rewrite_threshold) {
+void ReadData(InnerNode* node, SingleCompactionJob* job,
+              int& compacted_size, int rewrite_threshold,
+              std::vector<KVStruct>& rewrite_kv) {
   auto nvm_node = node->backup_nvm_node_;
   auto new_nvm_node = node->nvm_node_;
   int data_size = GET_SIZE(nvm_node->meta.header);
+  size_t parent_level = GET_LEVEL(nvm_node->meta.header) - 1; // level of parent
   auto data = nvm_node->data;
 
 #ifndef ROCKSDB_SUPPORT_THREAD_LOCAL
   uint8_t fingerprints[224] = {0};
-  uint64_t rewrite_data[448] = {0};
+  uint64_t nvm_data[448] = {0};
 #endif
 
   KVStruct tmp_struct{};
   ValueType type;
   SequenceNumber seq_num;
   int32_t cur_size = 0;
-  size_t rewrite_count = 0;
 
   std::vector<std::string>& keys = job->keys_in_node;
   std::vector<CompactionRec> read_records(241);
@@ -536,12 +589,13 @@ bool ReadData(InnerNode* node, SingleCompactionJob* job,
         tmp_struct.actual_vptr, keys[count],
         record.value_slice, seq_num, record.record_index);
     record.seq_num = (seq_num << 8) | type;
-    record.key = &keys[count++];
+    record.key = &(keys[count]);
     record.s = KVStruct{data[i * 2], data[i * 2 + 1]};
+    ++count;
   }
 
   if (count == 0) {
-    return false;
+    return;
   }
 
   std::stable_sort(read_records.begin(), read_records.begin() + count);
@@ -549,6 +603,9 @@ bool ReadData(InnerNode* node, SingleCompactionJob* job,
   keys[count] = "";
   read_records[count].key = &keys[count];
   int insert_times = 0;
+
+  size_t rewrite_count = 0;
+  int    buffer_count = 0;
 
   for (size_t i = 1; i <= count; ++i) {
     auto& record = read_records[i];
@@ -561,15 +618,18 @@ bool ReadData(InnerNode* node, SingleCompactionJob* job,
     } else {
       if (insert_times > rewrite_threshold) {
         last_record.s.insert_times = 1;
-        rewrite_data[rewrite_count * 2] = last_record.s.hash;
-        rewrite_data[rewrite_count * 2 + 1] = last_record.s.vptr;
-        fingerprints[rewrite_count++] = static_cast<uint8_t>(last_record.s.actual_hash);
         cur_size += last_record.s.kv_size;
+        nvm_data[rewrite_count * 2] = last_record.s.hash;
+        nvm_data[rewrite_count * 2 + 1] = last_record.s.vptr;
+        fingerprints[rewrite_count++] = static_cast<uint8_t>(last_record.s.actual_hash);
 
         int bucket = (int)(last_record.s.actual_hash & 63);
         int h = (int)(last_record.s.actual_hash >> 6);
         uint8_t digit = h == 0 ? 0 : __builtin_ctz(h) + 1;
         node->hll_[bucket] = std::max(node->hll_[bucket], digit);
+
+        Rehash(last_record.s, *last_record.key, parent_level);
+        rewrite_kv.push_back(last_record.s);
       } else {
         job->compacted_indexes[last_record.s.actual_vptr >> 20]
             .push_back(last_record.record_index);
@@ -580,20 +640,15 @@ bool ReadData(InnerNode* node, SingleCompactionJob* job,
     }
   }
 
-  if (rewrite_count == 0) {
-    return false;
-  }
-
-  node->estimated_size_ = cur_size;
   int flush_size = ALIGN_UP(rewrite_count, 16);
   int flush_rows = SIZE_TO_ROWS(flush_size);
   assert(flush_rows <= NVM_MAX_ROWS);
   assert(flush_size <= NVM_MAX_SIZE);
 
-  memset(rewrite_data + (rewrite_count * 2), 0,
+  memset(nvm_data + (rewrite_count * 2), 0,
          SIZE_TO_BYTES(flush_size - rewrite_count));
   memset(fingerprints + rewrite_count, 0, flush_size - rewrite_count);
-  MEMCPY(new_nvm_node->data, rewrite_data, SIZE_TO_BYTES(flush_size),
+  MEMCPY(new_nvm_node->data, nvm_data, SIZE_TO_BYTES(flush_size),
          PMEM_F_MEM_NONTEMPORAL);
   NVM_BARRIER;
   MEMCPY(new_nvm_node->meta.fingerprints_, fingerprints, flush_size,
@@ -605,8 +660,8 @@ bool ReadData(InnerNode* node, SingleCompactionJob* job,
   new_nvm_node->meta.header = hdr;
   PERSIST(new_nvm_node, CACHE_LINE_SIZE);
 
+  node->estimated_size_ = cur_size;
   compacted_size -= cur_size;
-  return true;
 }
 
 void Compactor::CompactionPreprocess(SingleCompactionJob* job) {
@@ -623,7 +678,8 @@ void Compactor::CompactionPreprocess(SingleCompactionJob* job) {
   int64_t squeezed_size = 0;
   std::vector<InnerNode*> children;
   InnerNode* cur_parent = nullptr;
-  bool have_rewrite = false;
+
+  std::vector<KVStruct> rewrite_kv;
 
   InnerNode* cur_node = start_node->next_node;
   while (cur_node != next_start_node) {
@@ -653,23 +709,22 @@ void Compactor::CompactionPreprocess(SingleCompactionJob* job) {
     cur_node->squeezed_size_ = 0;
     memset(cur_node->hll_, 0, 64);
 
-    auto rewrite = ReadData(cur_node, job, compacted_size, rewrite_threshold_);
-    cur_node->share_mutex_.unlock();
-
     if (cur_parent && cur_node->parent_node != cur_parent) {
-      ProcessNodes(cur_parent, children, job, have_rewrite);
+      ProcessNodes(cur_parent, children, job, rewrite_kv);
+      rewrite_kv.clear();
       children.clear();
-      have_rewrite = false;
     }
 
-    have_rewrite |= rewrite;
+    ReadData(cur_node, job, compacted_size, rewrite_threshold_, rewrite_kv);
+    cur_node->share_mutex_.unlock();
+
     children.push_back(cur_node);
     cur_parent = cur_node->parent_node;
     cur_node = cur_node->next_node;
   }
 
   if (cur_parent && !children.empty()) {
-    ProcessNodes(cur_parent, children, job, have_rewrite);
+    ProcessNodes(cur_parent, children, job, rewrite_kv);
   }
 
   job->candidates.push_back(nullptr);

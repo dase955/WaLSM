@@ -133,7 +133,15 @@ inline void Rehash(KVStruct& s, Slice& key, size_t level) {
          std::max(level, std::min(key.size(), level + 3)) - level);
 }
 
-inline bool ActualVptrSame(uint64_t& vptr1, uint64_t& vptr2) {
+inline void Rehash(KVStruct& s, std::string& key, size_t level) {
+  assert(level > 0);
+  level -= (level - 1) % 3;
+  memset(s.prefixes, 0, 3);
+  memcpy(s.prefixes, key.data() + level,
+         std::max(level, std::min(key.size(), level + 3)) - level);
+}
+
+inline bool ActualVptrSame(uint64_t vptr1, uint64_t vptr2) {
   return !((vptr1 ^ vptr2) & 0x000000ffffffffff);
 }
 

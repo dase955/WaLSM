@@ -44,7 +44,7 @@ bool InitializeMemory(std::unordered_map<std::string, int64_t>& memory_usages,
   size_t mapped_len;
   base_memptr = (char*)pmem_map_file(
       nvm_path.c_str(), TotalSize, PMEM_FILE_CREATE, 0666, &mapped_len, &is_pmem);
-  assert(is_pmem && mapped_len == (size_t)TotalSize);
+  //assert(is_pmem && mapped_len == (size_t)TotalSize);
 
   close(fd);
 #else

@@ -26,11 +26,12 @@ namespace ROCKSDB_NAMESPACE {
  * Macros for global_memtable.h
  */
 
-#define LAST_CHAR                 255
-#define ROW_BYTES                 256
-#define ROW_SIZE                  16
-#define NVM_MAX_ROWS              14
-#define NVM_MAX_SIZE              224
+#define LAST_CHAR            255
+#define ROW_BYTES            256
+#define ROW_SIZE             16
+#define NVM_MAX_ROWS         14
+#define NVM_MAX_SIZE         224
+#define BULK_WRITE_SIZE      208
 
 #define INITIAL_STATUS(s)         (0x80000000 | (s))
 

@@ -15,6 +15,9 @@ struct NVMNodeMeta {
   // For leaf node, store estimated size of data,
   // and for non-leaf node, store vptr
   uint64_t node_info = 0;
+  // Although fingerprints are stored in nvm node,
+  // we don't force persistence
+  // because we can reconstruct them on fly during recovery
   uint8_t fingerprints_[224] = {0};
 };
 

@@ -94,6 +94,8 @@ class VLogManager : public BackgroundThread {
 
   float Estimate();
 
+  void MaybeRewrite(KVStruct& kv_info);
+
  private:
   void BGWork() override;
 
@@ -108,6 +110,10 @@ class VLogManager : public BackgroundThread {
   char* ChooseSegmentToGC();
 
   void ReadAndSortData(std::vector<char*>& segments);
+
+  VLogSegmentHeader* GetHeader(size_t index) {
+    return (VLogSegmentHeader*)(pmemptr_ + vlog_segment_size_ * index);
+  }
 
   char* pmemptr_;
 
