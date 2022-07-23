@@ -593,26 +593,23 @@ int main(int argc, char* argv[]) {
   options.use_direct_reads = true;
   options.enable_pipelined_write = true;
   options.compression = rocksdb::kNoCompression;
-  options.nvm_path = "/mnt/pmem1/crh/nodememory";
+  options.nvm_path = "/mnt/chen/nodememory";
   options.IncreaseParallelism(16);
 
   std::remove(options.nvm_path.c_str());
 
-  std::string db_path = "/home/crh/db_test_nvm_l0";
-  RemoveDirectory(db_path.c_str());
-  std::remove(options.nvm_path.c_str());
+  std::string db_path = "/tmp/tmp_data/db_art";
 
   DB* db;
   DB::Open(options, db_path, &db);
 
   auto gen = new KeyGenerator(load_count, run_count, sample_range, 0.98);
-  gen->SetOperationCount(120000000);
-  gen->SetReadRatio(read_ratio);
+  gen->SetReadRatio(0.00000000001);
 
   WorkloadRunner runner(thread_num, db);
   runner.SetKeyGenerator(gen);
   runner.SetMetricInterval(2);
-  runner.Load();
+  //runner.Load();
   runner.Run();
 
   db->Close();

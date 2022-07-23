@@ -131,20 +131,20 @@ void InsertInnerNode(InnerNode* node, InnerNode* inserted) {
 
   auto prev_nvm_node = prev_node->nvm_node_;
   auto inserted_nvm_node = inserted->nvm_node_;
-  uint64_t hdr = prev_nvm_node->meta.header;
+  auto insert_relative = GetNodeAllocator()->relative(inserted_nvm_node);
 
   // Because we only change pointer here,
   // so there is no need to switch alt bit.
+  uint64_t hdr = prev_nvm_node->meta.header;
   if (GET_TAG(hdr, ALT_FIRST_TAG)) {
     inserted_nvm_node->meta.next1 = prev_nvm_node->meta.next1;
-    prev_nvm_node->meta.next1 =
-        GetNodeAllocator()->relative(inserted_nvm_node);
+    PERSIST(inserted_nvm_node, CACHE_LINE_SIZE);
+    prev_nvm_node->meta.next1 = insert_relative;
   } else {
     inserted_nvm_node->meta.next1 = prev_nvm_node->meta.next2;
-    prev_nvm_node->meta.next2 =
-        GetNodeAllocator()->relative(inserted_nvm_node);
+    PERSIST(inserted_nvm_node, CACHE_LINE_SIZE);
+    prev_nvm_node->meta.next2 = insert_relative;
   }
-  PERSIST(inserted_nvm_node, CACHE_LINE_SIZE);
   PERSIST(prev_nvm_node, CACHE_LINE_SIZE);
 }
 
@@ -156,19 +156,18 @@ void InsertSplitInnerNode(InnerNode* node, InnerNode* first_inserted,
   auto prev_node = node->support_node;
   auto prev_nvm_node = prev_node->nvm_node_;
   auto inserted_first_nvm_node = first_inserted->nvm_node_;
+  auto relative = GetNodeAllocator()->relative(inserted_first_nvm_node);
   auto inserted_last_nvm_node = last_inserted->nvm_node_;
 
   auto old_hdr = prev_nvm_node->meta.header;
   auto new_hdr = old_hdr;
   if (GET_TAG(old_hdr, ALT_FIRST_TAG)) {
     CLEAR_TAG(new_hdr, ALT_FIRST_TAG);
-    prev_nvm_node->meta.next2 =
-        GetNodeAllocator()->relative(inserted_first_nvm_node);
+    prev_nvm_node->meta.next2 = relative;
     inserted_last_nvm_node->meta.next1 = prev_nvm_node->meta.next1;
   } else {
     SET_TAG(new_hdr, ALT_FIRST_TAG);
-    prev_nvm_node->meta.next1 =
-        GetNodeAllocator()->relative(inserted_first_nvm_node);
+    prev_nvm_node->meta.next1 = relative;
     inserted_last_nvm_node->meta.next1 = prev_nvm_node->meta.next2;
   }
   PERSIST(inserted_last_nvm_node, CACHE_LINE_SIZE);

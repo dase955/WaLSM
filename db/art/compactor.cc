@@ -90,8 +90,6 @@ void RewriteData(std::vector<KVStruct>& rewrite_kv, InnerNode* node,
     return;
   }
 
-  size_t level = GET_LEVEL(node->nvm_node_->meta.header);
-
 #ifndef ROCKSDB_SUPPORT_THREAD_LOCAL
   uint8_t fingerprints[224] = {0};
   uint64_t nvm_data[448] = {0};
@@ -605,8 +603,6 @@ void ReadData(InnerNode* node, SingleCompactionJob* job,
   int insert_times = 0;
 
   size_t rewrite_count = 0;
-  int    buffer_count = 0;
-
   for (size_t i = 1; i <= count; ++i) {
     auto& record = read_records[i];
     auto& last_record = read_records[i - 1];

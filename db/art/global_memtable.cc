@@ -363,7 +363,7 @@ LocalRestart:
       }
 
       Rehash(kv_info, key, level);
-      InsertIntoLeaf(current, kv_info, level, update_heat);
+      InsertIntoLeaf(current, kv_info, level);
       return;
     }
 

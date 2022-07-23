@@ -17,25 +17,6 @@
 
 namespace ROCKSDB_NAMESPACE {
 
-ArtNode4::ArtNode4() {
-  memset(keys_, 0, 4);
-  memset(children_, 0, sizeof(void*) * 4);
-}
-
-ArtNode16::ArtNode16() {
-  memset(keys_, 0, 16);
-  memset(children_, 0, sizeof(void*) * 16);
-}
-
-ArtNode48::ArtNode48() {
-  memset(keys_, 0, 256);
-  memset(children_, 0, sizeof(void*) * 48);
-}
-
-ArtNode256::ArtNode256() {
-  memset(children_, 0, sizeof(void*) * 256);
-}
-
 ArtNodeType ChooseArtNodeType(size_t size) {
   // precalculate node type
   static int type[256] = {
@@ -270,9 +251,7 @@ InnerNode* FindChildInNode16(ArtNode* art, unsigned char c) {
 #endif
 #endif
 
-  if (bitfield) {
-    assert(__builtin_ctz(bitfield) < 16);
-  }
+  assert(!bitfield || __builtin_ctz(bitfield) < 16);
 
   return bitfield ? node16->children_[__builtin_ctz(bitfield)] : nullptr;
 }
@@ -355,7 +334,6 @@ InnerNode* FindChild(InnerNode* node, std::string& key, size_t level,
   }
 }
 
-// Insert new leaf node into art, and return prefix node. Prefix node will always exist.
 InnerNode* InsertToArtNode4(ArtNode* art, InnerNode* leaf, unsigned char c) {
   auto node4 = (ArtNode4*)art;
   int idx;
@@ -461,6 +439,8 @@ InnerNode* InsertToArtNode256(ArtNode* art, InnerNode* leaf, unsigned char c) {
   return nullptr;
 }
 
+// Insert new leaf node into art, and return prefix node.
+// Prefix node will always exist.
 void InsertToArtNode(InnerNode* current, InnerNode* leaf,
                      unsigned char c, bool insert_to_group) {
   static int full_num[5] = {0, 4, 16, 48, 256};
@@ -515,9 +495,7 @@ void DeleteArtNode(ArtNode* art) {
     for (int i = 0; i < art->num_children_; ++i) {
       auto inner_node = art4->children_[i];
       if (inner_node) {
-        inner_node->share_mutex_.lock();
         GetNodeAllocator()->DeallocateNode(inner_node->nvm_node_);
-        inner_node->share_mutex_.unlock();
         delete inner_node;
       }
     }
@@ -526,29 +504,23 @@ void DeleteArtNode(ArtNode* art) {
     for (int i = 0; i < art->num_children_; ++i) {
       auto inner_node = art16->children_[i];
       if (inner_node) {
-        inner_node->share_mutex_.lock();
         GetNodeAllocator()->DeallocateNode(inner_node->nvm_node_);
-        inner_node->share_mutex_.unlock();
         delete inner_node;
       }
     }
   } else if (art->art_type_ == kNode48) {
     auto art48 = (ArtNode48*)art;
-    for (auto& child : art48->children_) {
+    for (auto child : art48->children_) {
       if (child) {
-        child->share_mutex_.lock();
         GetNodeAllocator()->DeallocateNode(child->nvm_node_);
-        child->share_mutex_.unlock();
         delete child;
       }
     }
   } else {
     auto art256 = (ArtNode256*)art;
-    for (auto& child : art256->children_) {
+    for (auto child : art256->children_) {
       if (child) {
-        child->share_mutex_.lock();
         GetNodeAllocator()->DeallocateNode(child->nvm_node_);
-        child->share_mutex_.unlock();
         delete child;
       }
     }

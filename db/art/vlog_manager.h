@@ -13,10 +13,6 @@
 
 namespace ROCKSDB_NAMESPACE {
 
-struct alignas(CACHE_LINE_SIZE) AlignedLock {
-  SpinMutex mutex_;
-};
-
 enum SegmentStatus : uint8_t {
   kSegmentFree,     // Initial status
   kSegmentWriting,  // Writing records to segment
@@ -24,18 +20,24 @@ enum SegmentStatus : uint8_t {
   kSegmentGC,       // Segment is doing gc
 };
 
+struct StatusLock {
+  SpinMutex     mutex;
+  SegmentStatus status;
+};
+
 struct VLogSegmentHeader {
   struct alignas(CACHE_LINE_SIZE) {
-    SegmentStatus status_ : 8;
+    // TODO: remove status from nvm to dram
+    SegmentStatus status_to_remove : 8;
     uint32_t offset_: 24;
     uint16_t total_count_ = 0;
     uint16_t compacted_count_ = 0;
   };
-  AlignedLock lock;
+  char    padding[64];
   uint8_t bitmap_[];
 };
 
-struct GCData {
+struct alignas(CACHE_LINE_SIZE) GCData {
   std::string record;
   uint64_t    actual_vptr;
   Slice       key;
@@ -115,6 +117,10 @@ class VLogManager : public BackgroundThread {
     return (VLogSegmentHeader*)(pmemptr_ + vlog_segment_size_ * index);
   }
 
+  size_t GetIndex(const char* segment) {
+    return (segment - pmemptr_) / vlog_segment_size_;
+  }
+
   char* pmemptr_;
 
   char* cur_segment_;
@@ -145,6 +151,8 @@ class VLogManager : public BackgroundThread {
   const uint64_t vlog_bitmap_size_;
   const size_t   force_gc_ratio_;
   const float    compacted_ratio_threshold_ = 0.5;
+
+  StatusLock*    segment_statuses_;
 };
 
 }  // namespace ROCKSDB_NAMESPACE

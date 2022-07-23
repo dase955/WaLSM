@@ -402,8 +402,6 @@ void ParseOptions(Options& options) {
       options.group_min_size = std::atoi(line.substr(15).c_str()) << 10;
     } else if (line.substr(0, 21) == "group_split_threshold") {
       options.group_split_threshold = std::atoi(line.substr(22).c_str()) << 20;
-    } else if (line.substr(0, 17) == "max_rewrite_count") {
-      options.max_rewrite_count = std::atoi(line.substr(18).c_str());
     }
   }
 
@@ -414,7 +412,6 @@ void ParseOptions(Options& options) {
   printf("options.group_min_size = %.2fk\n", options.group_min_size / 1048576.f);
   printf("options.group_split_threshold = %dM\n",
          options.group_split_threshold / 1048576);
-  printf("options.max_rewrite_count = %d\n", options.max_rewrite_count);
 }
 
 void DoTest(std::string test_name) {
