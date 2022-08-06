@@ -9,9 +9,9 @@ namespace ROCKSDB_NAMESPACE {
 
 std::string log_path = "/tmp";
 
-std::string compaction_filename = "compaction_nvm_l0.csv";
+std::string compaction_filename = "compaction.csv";
 
-std::string compaction_log = "/tmp/compaction_nvm_l0.csv";
+std::string compaction_log = "/tmp/compaction.csv";
 
 void SetLogPath(const std::string& path) {
   log_path = path;

@@ -27,7 +27,7 @@ class Measurements {
         ? static_cast<double>(latency_sum_[op].load(std::memory_order_relaxed)) / cnt
         : 0.0;
   }
-  std::string GetStatusMsg(uint64_t& prev_done, int interval);
+  std::string GetStatusMsg();
   void Reset();
  private:
   std::atomic<uint> count_[MAXOPTYPE];

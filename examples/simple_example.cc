@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <iostream>
 #include <fstream>
+#include <functional>
 
 #include "rocksdb/db.h"
 #include "rocksdb/slice.h"
@@ -24,18 +25,26 @@
 #include <cmath>
 #include <time.h>
 
+#include <sys/mman.h>
+#include <sys/stat.h>
+#include <unistd.h>
+#include <fcntl.h>
+
+
 using namespace rocksdb;
+
+std::unordered_map<std::string, int> high_freq_data;
 
 class KeyGenerator {
  public:
-  KeyGenerator(int record_count, int sample_range)
+  KeyGenerator(int record_count, uint64_t sample_range)
       : record_count_(record_count), sample_range_(sample_range) {};
 
   void SetPrefix(std::string& prefix) {
     prefix_ = prefix;
   }
 
-  virtual int Next() = 0;
+  virtual uint64_t Next() = 0;
 
   virtual ~KeyGenerator() {}
 
@@ -46,60 +55,204 @@ class KeyGenerator {
   // TODO
   std::string NextKey() {
     std::string s = std::to_string(Next());
-    return prefix_ + std::string(9 - s.length(), '0') + s;
+    return prefix_ + s;
   }
 
  protected:
   int record_count_;
 
-  int sample_range_;
+  uint64_t sample_range_;
 
   std::string prefix_ = "user";
 };
 
 class YCSBZipfianGenerator : public KeyGenerator{
  public:
-  YCSBZipfianGenerator(int record_count, int sample_range, double theta, double zetan)
-      : KeyGenerator(record_count, sample_range), theta_(theta), zetan_(zetan) {
+  YCSBZipfianGenerator(
+      int load_count, int record_count, uint64_t sample_range,
+      double theta, double zetan)
+      : KeyGenerator(record_count, sample_range),
+        theta_(theta), zetan_(zetan), load_count_(load_count) {
+    zetan_ = zetastatic(sample_range + 1, theta);
     alpha = 1.0 / (1.0 - theta);
     eta = (1 - std::pow(2.0 / sample_range_, 1 - theta))
           / (1 - zetastatic(2, theta) / zetan_);
 
     std::random_device rd;
     rng = std::default_random_engine{rd()};
+
+    std::cout << "theta = " << theta << ", zetan = " << zetan_ << std::endl;
   }
 
   static double zetastatic(long n, double theta) {
     double sum = 0.0f;
+    long t = n / 100;
     for (long i = 0; i < n; i++) {
+      if (t && i % t == 0) {
+        std::cout << i << std::endl;
+      }
       sum += 1 / (std::pow(i + 1, theta));
     }
     return sum;
   }
 
-  int Next() {
+  void Prepare() override {
+    int fd;
+    uint64_t file_size = 2560000000ULL;
+    std::string file_path = "/tmp/sample_data";
+    struct stat buffer;
+    bool file_exist = stat(file_path.c_str(), &buffer) == 0;
+    if (!file_exist) {
+      fd = open(file_path.c_str(), O_RDWR|O_CREAT, 00777);
+      assert(-1 != fd);
+      lseek(fd, file_size - 1, SEEK_SET);
+      write(fd, "", 1);
+    } else {
+      fd = open(file_path.c_str(), O_RDWR, 00777);
+    }
+
+    std::cout << "Got file, exist = " << file_exist << std::endl;
+
+    auto memptr = (char*)mmap(
+        nullptr, file_size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+    close(fd);
+    if (!file_exist) {
+      InternalPrepare();
+      memcpy(memptr, samples_.data(), 2560000000ULL);
+      std::cout << "Save to file" << std::endl;
+    } else {
+      samples_.resize(320000000);
+      memcpy(samples_.data(), memptr, 2560000000ULL);
+      std::cout << "Read from file" << std::endl;
+    }
+    munmap(memptr, file_size);
+    CheckFreq(samples_);
+    PrepareForStats();
+  }
+
+  void InternalPrepare() {
+    samples_.resize(record_count_);
+    std::unordered_map<uint64_t, int> frequency;
+
+    for (int i = 0; i < record_count_; ++i) {
+      samples_[i] = Zipf();
+      frequency[samples_[i]];
+    }
+
+    printf("Distinct count = %zu\n", frequency.size());
+    CheckFreq(samples_);
+
+    std::unordered_map<uint64_t, uint64_t> mapper;
+    std::vector<std::pair<int, uint64_t>> frequency_sorted;
+    frequency_sorted.reserve(frequency.size());
+    for (auto& pair : frequency) {
+      frequency_sorted.emplace_back(pair.second, pair.first);
+    }
+    std::sort(frequency_sorted.begin(), frequency_sorted.end(),
+              [](const std::pair<int, uint64_t>& p1, const std::pair<int, uint64_t>& p2){
+                return p1.first > p2.first;
+              });
+
+    size_t idx = 0;
+    size_t runs = (frequency.size() + load_count_ - 1) / load_count_;
+    for (size_t run = 0; run < runs; ++run) {
+      std::random_device shuffle_rd;
+      std::vector<int> shuffled(load_count_);
+      std::iota(std::begin(shuffled), std::end(shuffled), 0);
+      std::shuffle(shuffled.begin(), shuffled.end(), shuffle_rd);
+
+      for (size_t i = 0; i < load_count_ && idx < frequency.size(); ++i) {
+        mapper[frequency_sorted[idx++].second] = shuffled[i];
+      }
+    }
+
+    for (auto& sample : samples_) {
+      sample = mapper[sample];
+    }
+    CheckFreq(samples_);
+  }
+
+  void PrepareForStats() {
+    std::unordered_map<uint64_t, int> freq;
+    for (auto& sample : samples_) {
+      --freq[sample];
+    }
+    std::vector<std::pair<int, uint64_t>> pairs;
+    for (auto &pair : freq) {
+      pairs.emplace_back(pair.second, pair.first);
+    }
+    std::sort(pairs.begin(), pairs.end());
+    int high_count = pairs.size() * 0.1;
+    for (int i = 0; i < high_count; ++i) {
+      auto v = std::hash<uint64_t>{}(pairs[i].second);
+      auto s = "user" + std::to_string(v);
+      high_freq_data[s] = -pairs[i].first;
+    }
+  }
+
+  uint64_t Zipf() {
     double u = rand_double(rng);
     double uz = u * zetan_;
-
+    uint64_t v;
     if (uz < 1.0) {
-      return 0;
+      v = 0;
+    } else if (uz < 1.0 + std::pow(0.5, theta_)) {
+      v = 1;
+    } else {
+      v = (uint64_t) ((sample_range_) * std::pow(eta * u - eta + 1, alpha));
+    }
+    return fnvhash64(v);
+  }
+
+  uint64_t Next() override {
+    return std::hash<uint64_t>{}(samples_[index_++]);
+  }
+
+  static void CheckFreq(std::vector<uint64_t>& samples) {
+    std::unordered_map<uint64_t, int> freqs;
+    for (auto& value : samples) {
+      ++freqs[value];
     }
 
-    if (uz < 1.0 + std::pow(0.5, theta_)) {
-      return 1;
+    int cold_count = 0;
+    for (auto& pair : freqs) {
+      cold_count += (pair.second == 1);
     }
 
-    return (int) ((sample_range_) * std::pow(eta * u - eta + 1, alpha));
+    int hot_count = freqs.size() - cold_count;
+    float hot_freq = (samples.size() - cold_count) / (float)samples.size() * 100.f;
+    printf("Sample generated. hot count = %d(%.2f), cold count = %d\n",
+           hot_count, hot_freq, cold_count);
   }
 
  private:
+  static uint64_t fnvhash64(int64_t val) {
+    static int64_t FNV_OFFSET_BASIS_64 = 0xCBF29CE484222325LL;
+    static int64_t FNV_PRIME_64 = 1099511628211L;
+
+    int64_t hashval = FNV_OFFSET_BASIS_64;
+
+    for (int i = 0; i < 8; i++) {
+      int64_t octet = val & 0x00ff;
+      val = val >> 8;
+
+      hashval = hashval ^ octet;
+      hashval = hashval * FNV_PRIME_64;
+    }
+    return hashval > 0 ? hashval : -hashval;
+  }
+
   double theta_;
   double zetan_;
   double alpha, eta;
+  uint64_t load_count_;
+  std::atomic<int> index_{0};
 
   std::uniform_real_distribution<> rand_double{0.0, 1.0};
 
   std::default_random_engine rng;
+
+  std::vector<uint64_t> samples_;
 };
 
 class CustomZipfianGenerator : public KeyGenerator {
@@ -111,14 +264,14 @@ class CustomZipfianGenerator : public KeyGenerator {
 
   void Prepare() override {
     double c = 0.0;
-    for (int i = 1; i <= sample_range_; i++) {
+    for (size_t i = 1; i <= sample_range_; i++) {
       c = c + (1.0 / pow((double)i, alpha_));
     }
     c = 1.0 / c;
 
     double* sum_probs = new double[sample_range_ + 1];
     sum_probs[0] = 0;
-    for (int i = 1; i <= sample_range_; ++i) {
+    for (size_t i = 1; i <= sample_range_; ++i) {
       sum_probs[i] = sum_probs[i - 1] + c / pow((double)i, alpha_);
     }
 
@@ -166,9 +319,10 @@ class CustomZipfianGenerator : public KeyGenerator {
     CheckFreq(records_);
   }
 
-  int Next() override {
+  uint64_t Next() override {
     return records_[cur_index_++];
   }
+
 
  private:
   static void ShuffleSamples(
@@ -242,7 +396,7 @@ class YCSBLoadGenerator : public KeyGenerator {
   YCSBLoadGenerator(int record_count, int sample_range)
       : KeyGenerator(record_count, sample_range) {};
 
-  int Next() override {
+  uint64_t Next() override {
     return fnvhash64(cur_index_++);
   }
 
@@ -318,14 +472,15 @@ class Inserter {
     }
 
     while (insert_per_thread--) {
-      auto begin_time = std::chrono::steady_clock::now();
+      [[maybe_unused]] auto begin_time = std::chrono::steady_clock::now();
       auto key = key_generator_->NextKey();
       auto value = GenerateValueFromKey(key);
       auto status = db_->Put(WriteOptions(), key, value);
-      auto end_time = std::chrono::steady_clock::now();
+      [[maybe_unused]] auto end_time = std::chrono::steady_clock::now();
 
       ++completed_count_;
       if (!status.ok()) {
+        assert(false);
         ++failed_count_;
       }
     }
@@ -365,57 +520,71 @@ class Inserter {
   DB* db_;
 };
 
-void ParseOptions(Options& options) {
+void test() {
+  int thread_num = 8;
+  int total_count = 320000000;
+  int sample_range = 1000000000;
+  auto gen = new YCSBZipfianGenerator(100000000, total_count, sample_range, 0.98, 26.469);
+  gen->Prepare();
+
+
+  std::unordered_map<uint64_t, int> freqs;
+  for (int i = 0; i < total_count; ++i) {
+    freqs[gen->Next()]++;
+  }
+
+  std::vector<std::pair<uint64_t, int>> pairs;
+  for (auto& pair : freqs) {
+    pairs.push_back(pair);
+  }
+
+  std::sort(pairs.begin(), pairs.end(), [](const std::pair<uint64_t, int>& p1, const std::pair<uint64_t, int>& p2){return p1.second > p2.second;} );
+
+  int acc = 0;
+  int sample_count = pairs.size();
+  for (int i = 1; i <= 100; ++i) {
+    int start = sample_count / 100 * (i - 1);
+    int end =   sample_count / 100 * i;
+    int sum = 0;
+    if (i == 100) {
+      end = sample_count;
+    }
+
+    for (int j = start; j < end; ++j) {
+      sum += pairs[j].second;
+    }
+    acc += sum;
+    float data_size = (float)acc * (1024 + 22 + 8 + 3) / 1024.0 / 1024.0 / 1024.0;
+    std::cout << i << "%, " << acc << ", " << (float)acc / total_count << ", "  << data_size << "G" << std::endl;
+  }
+}
+
+
+void YCSBTest() {
+  int thread_num = 8;
+  int total_count = 320000000;
+  int load_count = 100000000;
+  uint64_t sample_range = 10000000000ULL;
+
+  Options options;
   options.create_if_missing = true;
   options.use_direct_io_for_flush_and_compaction = true;
   options.use_direct_reads = true;
   options.enable_pipelined_write = true;
-  options.OptimizeLevelStyleCompaction();
+  options.compression = rocksdb::kNoCompression;
+  options.nvm_path = "/mnt/chen/rocksdb_l0";
+  options.wal_dir = "/mnt/chen/rocksdb_log";
+  options.IncreaseParallelism(16);
 
-  /*std::ifstream option_file("options.txt", std::ios::in);
-  std::string line;
-  while (getline(option_file, line)) {
-    if (line.substr(0, 16) == "timestamp_factor") {
-      options.timestamp_factor = std::atoi(line.substr(17).c_str());
-    } else if (line.substr(0, 17) == "layer_ts_interval") {
-      options.layer_ts_interval = std::atoi(line.substr(18).c_str());
-      options.timestamp_waterline = options.layer_ts_interval * 10;
-    } else if (line.substr(0, 14) == "group_min_size") {
-      options.group_min_size = std::atoi(line.substr(15).c_str()) << 10;
-    } else if (line.substr(0, 21) == "group_split_threshold") {
-      options.group_split_threshold = std::atoi(line.substr(22).c_str()) << 20;
-    } else if (line.substr(0, 17) == "max_rewrite_count") {
-      options.max_rewrite_count = std::atoi(line.substr(18).c_str());
-    }
-  }
-
-  printf("Parse option done.\n");
-  printf("options.timestamp_factor = %d\n", options.timestamp_factor);
-  printf("options.layer_ts_interval = %d\n", options.layer_ts_interval);
-  printf("options.timestamp_waterline = %d\n", options.timestamp_waterline);
-  printf("options.group_min_size = %.2fk\n", options.group_min_size / 1048576.f);
-  printf("options.group_split_threshold = %dM\n",
-         options.group_split_threshold / 1048576);
-  printf("options.max_rewrite_count = %d\n", options.max_rewrite_count);*/
-}
-
-void DoTest(std::string test_name) {
-  int thread_num = 8;
-  int total_count = 320000000;
-  int sample_range = 1000000000;
-
-  Options options;
-  ParseOptions(options);
-
-  std::string db_path = "/tmp/db_test_" + test_name;
-  std::string ops_path =  "/tmp/run_ops_" + test_name;
+  std::string db_path = "/tmp/db_ycsb_nvm_l0";
 
   DB* db;
   DB::Open(options, db_path, &db);
 
   Inserter inserter(thread_num, db);
   inserter.SetGenerator(
-      new CustomZipfianGenerator(total_count, sample_range, 0.98));
+      new YCSBZipfianGenerator(load_count, total_count,
+                               sample_range, 0.95, 26.469028));
   inserter.DoInsert();
 
   db->Close();
@@ -424,7 +593,6 @@ void DoTest(std::string test_name) {
 }
 
 int main(int argc, char* argv[]) {
-  DoTest("nvm_l0");
-
+  YCSBTest();
   return 0;
 }

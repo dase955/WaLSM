@@ -5,6 +5,8 @@
 //  Copyright (c) 2020 Youngjae Lee <ls4154.lee@gmail.com>.
 //
 
+#include <iostream>
+
 #include "rocksdb_db.h"
 
 #include "core/core_workload.h"
@@ -199,12 +201,33 @@ void RocksdbDB::Init() {
   }
 
   rocksdb::Options opt;
-  opt.create_if_missing = true;
-  opt.nvm_path = nvm_path;
-  opt.wal_dir = wal_dir;
   std::vector<rocksdb::ColumnFamilyDescriptor> cf_descs;
   std::vector<rocksdb::ColumnFamilyHandle *> cf_handles;
-  GetOptions(props, &opt, &cf_descs);
+
+  opt.create_if_missing = true;
+  opt.use_direct_io_for_flush_and_compaction = true;
+  opt.use_direct_reads = true;
+  opt.enable_pipelined_write = false;
+  opt.compression = rocksdb::kNoCompression;
+  opt.compaction_style = rocksdb::kCompactionStyleLevel;
+  opt.max_bytes_for_level_base = 8LL << 30;
+  opt.IncreaseParallelism(32);
+  opt.statistics = rocksdb::CreateDBStatistics();
+  opt.nvm_path = nvm_path;
+  opt.wal_dir = wal_dir;
+
+  rocksdb::BlockBasedTableOptions block_based_options;
+  block_based_options.pin_l0_filter_and_index_blocks_in_cache = false;
+  block_based_options.cache_index_and_filter_blocks_with_high_priority = false;
+  block_based_options.index_type = rocksdb::BlockBasedTableOptions::kTwoLevelIndexSearch;
+  block_based_options.partition_filters = true;
+  block_based_options.cache_index_and_filter_blocks = true;
+  block_based_options.filter_policy.reset(rocksdb::NewBloomFilterPolicy(10, false));
+  block_based_options.block_cache =
+      rocksdb::NewLRUCache(static_cast<size_t>(128 * 1024 * 1024));
+  opt.table_factory.reset(rocksdb::NewBlockBasedTableFactory(block_based_options));
+  opt.memtable_prefix_bloom_size_ratio = 0.02;
+
 #ifdef USE_MERGEUPDATE
   opt.merge_operator.reset(new YCSBUpdateMerge);
 #endif
@@ -231,6 +254,18 @@ void RocksdbDB::Cleanup() {
   if (--ref_cnt_) {
     return;
   }
+
+  rocksdb::Options options = db_->GetOptions();
+  std::cout << "Global Statistics: " << std::endl
+            << options.statistics->ToString() << std::endl;
+
+  std::cout << options.statistics->getTickerCount(rocksdb::GET_HIT_L0) << "/"
+            << options.statistics->getTickerCount(rocksdb::GET_MISS_L0) << std::endl
+            << options.statistics->getTickerCount(rocksdb::GET_HIT_L1) << "/"
+            << options.statistics->getTickerCount(rocksdb::GET_MISS_L1) << std::endl
+            << options.statistics->getTickerCount(rocksdb::GET_HIT_L2_AND_UP) << "/"
+            << options.statistics->getTickerCount(rocksdb::GET_MISS_L2_AND_UP) << std::endl;
+
   delete db_;
 }
 
@@ -278,7 +313,7 @@ void RocksdbDB::GetOptions(const utils::Properties &props, rocksdb::Options *opt
     }
 
     int val = std::stoi(props.GetProperty(PROP_MAX_BG_JOBS, PROP_MAX_BG_JOBS_DEFAULT));
-    long lval;
+    long lval = 0;
     if (val != 0) {
       opt->max_background_jobs = val;
     }
@@ -466,36 +501,7 @@ DB::Status RocksdbDB::ScanSingle(const std::string &table, const std::string &ke
 
 DB::Status RocksdbDB::UpdateSingle(const std::string &table, const std::string &key,
                                    std::vector<Field> &values) {
-  std::string data;
-  rocksdb::Status s = db_->Get(rocksdb::ReadOptions(), key, &data);
-  if (s.IsNotFound()) {
-    return kNotFound;
-  } else if (!s.ok()) {
-    throw utils::Exception(std::string("RocksDB Get: ") + s.ToString());
-  }
-  std::vector<Field> current_values;
-  DeserializeRow(current_values, data);
-  assert(current_values.size() == static_cast<size_t>(fieldcount_));
-  for (Field &new_field : values) {
-    bool found __attribute__((unused)) = false;
-    for (Field &cur_field : current_values) {
-      if (cur_field.name == new_field.name) {
-        found = true;
-        cur_field.value = new_field.value;
-        break;
-      }
-    }
-    assert(found);
-  }
-  rocksdb::WriteOptions wopt;
-
-  data.clear();
-  SerializeRow(current_values, data);
-  s = db_->Put(wopt, key, data);
-  if (!s.ok()) {
-    throw utils::Exception(std::string("RocksDB Put: ") + s.ToString());
-  }
-  return kOK;
+  return InsertSingle(table, key, values);
 }
 
 DB::Status RocksdbDB::MergeSingle(const std::string &table, const std::string &key,

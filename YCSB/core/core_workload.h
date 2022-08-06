@@ -191,6 +191,8 @@ class CoreWorkload {
   void BuildSingleValue(std::vector<DB::Field> &update);
 
   uint64_t NextTransactionKeyNum();
+  uint64_t NextReadTransactionKeyNum();
+  uint64_t NextUpdateTransactionKeyNum();
   std::string NextFieldName();
 
   int TransactionRead(DB &db);
@@ -207,6 +209,8 @@ class CoreWorkload {
   Generator<uint64_t> *field_len_generator_;
   DiscreteGenerator<Operation> op_chooser_;
   Generator<uint64_t> *key_chooser_; // transaction key gen
+  Generator<uint64_t> *update_key_chooser_;
+  Generator<uint64_t> *read_key_chooser_;
   Generator<uint64_t> *field_chooser_;
   Generator<uint64_t> *scan_len_chooser_;
   CounterGenerator *insert_key_sequence_; // load insert key gen
@@ -220,6 +224,22 @@ inline uint64_t CoreWorkload::NextTransactionKeyNum() {
   uint64_t key_num;
   do {
     key_num = key_chooser_->Next();
+  } while (key_num > transaction_insert_key_sequence_->Last());
+  return key_num;
+}
+
+inline uint64_t CoreWorkload::NextReadTransactionKeyNum() {
+  uint64_t key_num;
+  do {
+    key_num = read_key_chooser_->Next();
+  } while (key_num > transaction_insert_key_sequence_->Last());
+  return key_num;
+}
+
+inline uint64_t CoreWorkload::NextUpdateTransactionKeyNum() {
+  uint64_t key_num;
+  do {
+    key_num = update_key_chooser_->Next();
   } while (key_num > transaction_insert_key_sequence_->Last());
   return key_num;
 }
@@ -261,7 +281,7 @@ inline bool CoreWorkload::DoTransaction(DB &db) {
 }
 
 inline int CoreWorkload::TransactionRead(DB &db) {
-  uint64_t key_num = NextTransactionKeyNum();
+  uint64_t key_num = NextReadTransactionKeyNum();
   const std::string key = BuildKeyName(key_num);
   std::vector<DB::Field> result;
   if (!read_all_fields()) {
@@ -310,14 +330,10 @@ inline int CoreWorkload::TransactionScan(DB &db) {
 }
 
 inline int CoreWorkload::TransactionUpdate(DB &db) {
-  uint64_t key_num = NextTransactionKeyNum();
+  uint64_t key_num = NextUpdateTransactionKeyNum();
   const std::string key = BuildKeyName(key_num);
   std::vector<DB::Field> values;
-  if (write_all_fields()) {
-    BuildValues(values);
-  } else {
-    BuildSingleValue(values);
-  }
+  BuildValues(values);
   return db.Update(table_name_, key, values);
 }
 
@@ -334,3 +350,4 @@ inline int CoreWorkload::TransactionInsert(DB &db) {
 } // ycsbc
 
 #endif // YCSB_C_CORE_WORKLOAD_H_
+

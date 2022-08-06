@@ -19,6 +19,7 @@ class Generator {
   virtual Value Next() = 0;
   virtual Value Last() = 0;
   virtual ~Generator() { }
+  virtual void SetOperationCount(uint64_t operation_count) {}
 };
 
 } // ycsbc
