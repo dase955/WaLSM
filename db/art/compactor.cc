@@ -253,7 +253,7 @@ int64_t Compactor::compaction_threshold_;
 Compactor::Compactor(const DBOptions& options)
     : group_manager_(nullptr), vlog_manager_(nullptr),
       num_parallel_compaction_(options.num_parallel_compactions),
-      rewrite_threshold_(options.enable_rewrite ? 2 : INT_MAX) {}
+      rewrite_threshold_(options.enable_rewrite ? 1 : INT_MAX) {}
 
 Compactor::~Compactor() noexcept {
   printf("Statistics:\n"
