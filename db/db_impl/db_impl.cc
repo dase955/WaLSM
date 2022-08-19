@@ -109,6 +109,9 @@
 
 namespace ROCKSDB_NAMESPACE {
 
+std::atomic<int> get_in_nvm{0};
+std::atomic<int> get_in_ssd{0};
+
 const std::string kDefaultColumnFamilyName("default");
 const std::string kPersistentStatsColumnFamilyName(
     "___rocksdb_stats_history___");
@@ -1787,6 +1790,9 @@ Status DBImpl::GetImpl(const ReadOptions& read_options, const Slice& key,
         get_impl_options.get_value ? get_impl_options.is_blob_index : nullptr,
         get_impl_options.get_value);
     RecordTick(stats_, MEMTABLE_MISS);
+    get_in_ssd.fetch_add(1);
+  } else {
+    get_in_nvm.fetch_add(1);
   }
 
   {
@@ -3868,6 +3874,8 @@ Status DB::DestroyColumnFamilyHandle(ColumnFamilyHandle* column_family) {
 DB::~DB() {}
 
 Status DBImpl::Close() {
+  printf("Get in nvm: %d, get in ssd: %d\n", get_in_nvm.load(), get_in_ssd.load());
+
   if (!closed_) {
     {
       InstrumentedMutexLock l(&mutex_);
