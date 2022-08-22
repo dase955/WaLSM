@@ -256,7 +256,7 @@ bool UniversalCompactionPicker::NeedsCompaction(
   }
   for (auto& kv : vstorage->partitions_map_) {
     auto* partition = kv.second;
-    uint64_t base_size = 32 * 1024 * 1024L;
+    uint64_t base_size = 48 * 1024 * 1024L;
     for (int i = 1; i < vstorage->num_levels() - 1; i++) {
       if (partition->level_size[i] >= base_size) {
         return true;
@@ -266,7 +266,7 @@ bool UniversalCompactionPicker::NeedsCompaction(
           !partition->files_[i].empty()) {
         return true;
       }
-      base_size *= 4;
+      base_size *= 5;
     }
   }
   return false;
@@ -574,7 +574,7 @@ Compaction* UniversalCompactionBuilder::PickCompactionForL0() {
 
 Compaction* UniversalCompactionBuilder::PickCompactionForSizeMarked() {
   for (auto& kv : vstorage_->partitions_map_) {
-    uint64_t base_size = 32 * 1024 * 1024L;
+    uint64_t base_size = 48 * 1024 * 1024L;
     auto* partition = kv.second;
     int target_level = -1;
     for (int level = 1; level < vstorage_->num_levels() - 1; level++) {
@@ -590,7 +590,7 @@ Compaction* UniversalCompactionBuilder::PickCompactionForSizeMarked() {
           target_level = level;
         }
       }
-      base_size *= 4;
+      base_size *= 5;
     }
 
     if (target_level != -1) {

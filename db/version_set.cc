@@ -2473,7 +2473,7 @@ void VersionStorageInfo::UpdateNumNonEmptyLevels() {
 void VersionStorageInfo::TryUpdateQValues() {
   for (auto& kv : this->partitions_map_) {
     FilePartition* fp = kv.second;
-    const uint64_t gap = 5000;
+    const uint64_t gap = 1000;
     for (int i = 1; i < fp->level_; i++) {
       // update state every 5000 detections
       if (fp->is_compaction_work[i] && fp->queries[i] >= gap &&

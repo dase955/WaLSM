@@ -336,9 +336,9 @@ class VersionStorageInfo {
           search_counter(new std::atomic<uint64_t>[level]),
           queries(new std::atomic<uint64_t>[level]),
           q_keys(new std::vector<QKey>[level]){
-              for (int i = 3; i < level; i++) {
-                is_tier[i] = false;
-              }
+//              for (int i = 3; i < level; i++) {
+//                is_tier[i] = false;
+//              }
           };
 
     FilePartition(const FilePartition* another)

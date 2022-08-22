@@ -138,7 +138,7 @@ struct EnvOptions {
   RateLimiter* rate_limiter = nullptr;
 
   // split threshold, default 1.5gb
-  uint64_t split_threshold = 1536 * 1024 * 1024L;
+  uint64_t split_threshold = 1024 * 1024 * 1024L;
 };
 
 class Env {
