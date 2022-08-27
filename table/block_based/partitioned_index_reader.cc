@@ -86,7 +86,8 @@ InternalIteratorBase<IndexValue>* PartitionIndexReader::NewIterator(
             internal_comparator()->user_comparator(),
             rep->get_global_seqno(BlockType::kIndex), nullptr, kNullStats, true,
             index_has_first_key(), index_key_includes_seq(),
-            index_value_is_full()));
+            index_value_is_full(), false, nullptr,
+            get_context == nullptr ? nullptr : get_context->GetSearchCounter()));
 
     it = new PartitionedIndexIterator(
         table(), ro, *internal_comparator(), std::move(index_iter),

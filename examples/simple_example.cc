@@ -125,9 +125,9 @@ void genData(TestContext* ctx) {
     } else {
       uint64_t num = randomUINT64T(0, hot_insert_low_bound);
       ctx->op_insert[i] = num;
-      if (num >= hot_read_low_bound && num <= hot_insert_up_bound) {
-        hot_read_keys.push_back(ctx->op_insert[i]);
-      }
+      //      if (num >= hot_read_low_bound && num <= hot_insert_up_bound) {
+      //        hot_read_keys.push_back(ctx->op_insert[i]);
+      //      }
     }
   }
 
@@ -146,8 +146,8 @@ void genData(TestContext* ctx) {
       size_t idx = randomSIZET(0, hot_read_keys.size() - 1);
       ctx->op_query[i] = hot_read_keys[idx];
     } else {
-      size_t idx = randomSIZET(0, ctx->op_insert_num - 1);
-      ctx->op_query[i] = ctx->op_insert[idx];
+      size_t idx = randomSIZET(0, kInsert - 1);
+      ctx->op_query[i] = ctx->insert_nums[idx];
     }
   }
 }
@@ -178,6 +178,7 @@ void runOps(DB* db, TestContext* ctx, uint64_t start) {
   auto write_options = WriteOptions();
   std::string key, value;
   uint64_t num;
+  uint64_t bad_status = 0;
   for (;;) {
     for (size_t i = 0; i < ctx->insert_cnt; i++) {
       idx = ctx->run_insert.fetch_add(1);
@@ -199,6 +200,9 @@ void runOps(DB* db, TestContext* ctx, uint64_t start) {
       num = ctx->op_query[idx];
       key = numToKey(num);
       s = db->Get(read_options, key, &value);
+      if (!s.ok()) {
+        bad_status++;
+      }
     }
 
     size_t cur_ops = ctx->total_ops.fetch_add(ctx->insert_cnt + ctx->query_cnt);
@@ -211,6 +215,8 @@ void runOps(DB* db, TestContext* ctx, uint64_t start) {
       break;
     }
   }
+  std::cout << "total/bad: " << ctx->op_query_num << "/" << bad_status
+            << std::endl;
 }
 
 int main(int argc, char* argv[]) {
@@ -224,16 +230,15 @@ int main(int argc, char* argv[]) {
   DB* db;
   Options options;
   // Optimize RocksDB. This is the easiest way to get RocksDB to perform well
-  options.compaction_style = rocksdb::kCompactionStyleUniversal;
-  options.IncreaseParallelism(16);
+  options.create_if_missing = true;
   options.use_direct_io_for_flush_and_compaction = true;
   options.use_direct_reads = true;
-  // create the DB if it's not already present
-  options.create_if_missing = true;
-  options.write_buffer_size = 4 << 20;
-  options.max_bytes_for_level_base = 64 << 20;
-  options.level0_file_num_compaction_trigger = 4;
+  options.enable_pipelined_write = true;
+  options.compaction_style = rocksdb::kCompactionStyleUniversal;
   options.compression = rocksdb::kNoCompression;
+  options.IncreaseParallelism(32);
+  options.OptimizeForPointLookup(128);
+  options.statistics = rocksdb::CreateDBStatistics();
 
   // open DB
   Status s = DB::Open(options, kDBPath, &db);
@@ -254,6 +259,8 @@ int main(int argc, char* argv[]) {
     ts[i].join();
   }
 
+  std::cout << options.statistics->ToString() << std::endl;
+
   std::cout << "************************" << std::endl;
 
   start = systemTime();
@@ -264,6 +271,14 @@ int main(int argc, char* argv[]) {
     ts[i].join();
   }
   std::cout << "Run operations take " << systemTime() - start << std::endl;
+  std::cout << options.statistics->ToString() << std::endl;
+
+  std::cout << options.statistics->getTickerCount(GET_HIT_L0) << "/"
+            << options.statistics->getTickerCount(GET_MISS_L0) << std::endl
+            << options.statistics->getTickerCount(GET_HIT_L1) << "/"
+            << options.statistics->getTickerCount(GET_MISS_L1) << std::endl
+            << options.statistics->getTickerCount(GET_HIT_L2_AND_UP) << "/"
+            << options.statistics->getTickerCount(GET_MISS_L2_AND_UP) << std::endl;
 
   return 0;
 }

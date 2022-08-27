@@ -335,7 +335,11 @@ class VersionStorageInfo {
           is_compaction_work(level, false),
           search_counter(new std::atomic<uint64_t>[level]),
           queries(new std::atomic<uint64_t>[level]),
-          q_keys(new std::vector<QKey>[level]) { };
+          q_keys(new std::vector<QKey>[level]){
+//              for (int i = 3; i < level; i++) {
+//                is_tier[i] = false;
+//              }
+          };
 
     FilePartition(const FilePartition* another)
         : level_(another->level_),
@@ -350,14 +354,14 @@ class VersionStorageInfo {
           search_counter(new std::atomic<uint64_t>[level_]),
           queries(new std::atomic<uint64_t>[level_]),
           q_keys(new std::vector<QKey>[level_]) {
-              for (int i = 1; i < level_; i++) {
-                search_counter[i] = another->search_counter[i].load();
-                queries[i] = another->queries[i].load();
-                for (QKey k : another->q_keys[i]) {
-                  q_keys[i].push_back(k);
-                }
-              }
-          };
+      for (int i = 1; i < level_; i++) {
+        search_counter[i] = another->search_counter[i].load();
+        queries[i] = another->queries[i].load();
+        for (QKey k : another->q_keys[i]) {
+          q_keys[i].push_back(k);
+        }
+      }
+    };
 
     ~FilePartition() {
       delete[] files_;
@@ -407,9 +411,9 @@ class VersionStorageInfo {
       InternalKey ismallest(smallest_, kMaxSequenceNumber, kTypeValue),
           ilargest(largest_, kMaxSequenceNumber, kTypeValue);
       const Slice ssmallest = ismallest.Encode(), slargest = ilargest.Encode();
-      for (int i = level_ - 1; i >= 0; i--) {
+      for (int i = 1; i < level_; i++) {
         for (FileMetaData* f : files_[i]) {
-          if (f->fd.table_reader != nullptr) {
+          if (f != nullptr && f->fd.table_reader != nullptr) {
             middleKey =
                 f->fd.table_reader->ApproximateMiddleKey(ssmallest, slargest);
             if (!middleKey.empty()) {

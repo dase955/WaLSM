@@ -136,19 +136,28 @@ class FilePicker {
         r->Prepare(ikey);
       }
     }
-    for (unsigned int i = 0; i < num_levels; i++) {
-      if (!files[i].empty()) {
-        sort(files[i].begin(), files[i].end(),
-             [&](FileMetaData* f1, FileMetaData* f2) {
-               return f1->fd.GetNumber() > f2->fd.GetNumber();
-             });
-      }
-    }
+    //    for (unsigned int i = 0; i < num_levels; i++) {
+    //      if (!files[i].empty()) {
+    //        sort(files[i].begin(), files[i].end(),
+    //             [&](FileMetaData* f1, FileMetaData* f2) {
+    //               return f1->fd.GetNumber() > f2->fd.GetNumber();
+    //             });
+    //      }
+    //    }
   }
 
   int GetCurrentLevel() const { return curr_level_; }
 
   FileMetaData* GetNextFile() {
+    FileMetaData* f = getNextHitFile();
+    while (f != nullptr && (user_key_.compare(f->largest.user_key()) > 0 ||
+                            user_key_.compare(f->smallest.user_key()) < 0)) {
+      f = getNextHitFile();
+    }
+    return f;
+  }
+
+  FileMetaData* getNextHitFile() {
     if (curr_index_in_curr_level_ >= curr_file_level_.size()) {
       pickNextLevel();
       curr_index_in_curr_level_ = 0;
@@ -1715,8 +1724,12 @@ void Version::Get(const ReadOptions& read_options, const LookupKey& k,
     }
 
     // set counter
-    get_context.SetSearchCount(
-        &hit_partition->search_counter[fp.GetCurrentLevel()]);
+    if (hit_partition->is_compaction_work[fp.GetCurrentLevel()]) {
+      get_context.SetSearchCount(
+          &hit_partition->search_counter[fp.GetCurrentLevel()]);
+    } else {
+      get_context.SetSearchCount(nullptr);
+    }
 
     bool timer_enabled =
         GetPerfLevel() >= PerfLevel::kEnableTimeExceptForMutex &&
@@ -1743,6 +1756,15 @@ void Version::Get(const ReadOptions& read_options, const LookupKey& k,
         get_context.State() != GetContext::kMerge &&
         db_statistics_ != nullptr) {
       get_context.ReportCounters();
+    }
+    if (db_statistics_ != nullptr) {
+      if (fp.GetCurrentLevel() == 0) {
+        RecordTick(db_statistics_, GET_MISS_L0);
+      } else if (fp.GetCurrentLevel() == 1) {
+        RecordTick(db_statistics_, GET_MISS_L1);
+      } else if (fp.GetCurrentLevel() >= 2) {
+        RecordTick(db_statistics_, GET_MISS_L2_AND_UP);
+      }
     }
     switch (get_context.State()) {
       case GetContext::kNotFound:
@@ -2451,20 +2473,21 @@ void VersionStorageInfo::UpdateNumNonEmptyLevels() {
 void VersionStorageInfo::TryUpdateQValues() {
   for (auto& kv : this->partitions_map_) {
     FilePartition* fp = kv.second;
-    const uint64_t gap = 5000;
+    const uint64_t gap = 1000;
     for (int i = 1; i < fp->level_; i++) {
       // update state every 5000 detections
       if (fp->is_compaction_work[i] && fp->queries[i] >= gap &&
           fp->search_counter[i] > 0) {
         uint64_t penalty = fp->search_counter[i] / fp->queries[i];
-        uint64_t state = q_table_->genQState(fp->level_size[i], penalty,
-                                             fp->files_[i].size());
+        uint64_t state =
+            q_table_->genQState(fp->level_size[i], penalty,
+                                fp->is_tier[i] ? fp->files_[i].size() : 1);
         QKey key(state, penalty, 0, true);
         key.reward = penalty + (fp->is_tier[i] ? 1 : -1) *
                                    (fp->level_size[i] / (128 * 1024));
         if (!fp->q_keys[i].empty()) {
           q_table_->Reward(fp->q_keys[i], fp->is_tier[i]);
-          key.keep = q_table_->ShouldMerge(state, fp->is_tier[i]);
+          key.keep = !q_table_->ShouldMerge(state, fp->is_tier[i]);
           if (!key.keep) {
             fp->is_compaction_work[i] = false;
             fp->is_tier[i] = !fp->is_tier[i];
