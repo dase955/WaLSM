@@ -536,15 +536,15 @@ ColumnFamilyOptions* ColumnFamilyOptions::OptimizeForSmallDb(
 ColumnFamilyOptions* ColumnFamilyOptions::OptimizeForPointLookup(
     uint64_t block_cache_size_mb) {
   BlockBasedTableOptions block_based_options;
-  block_based_options.data_block_index_type =
-      BlockBasedTableOptions::kDataBlockBinaryAndHash;
-  block_based_options.data_block_hash_table_util_ratio = 0.75;
-  block_based_options.filter_policy.reset(NewBloomFilterPolicy(10));
+  block_based_options.partition_filters = true;
+  block_based_options.cache_index_and_filter_blocks = true;
+  block_based_options.filter_policy.reset(NewBloomFilterPolicy(10, false));
   block_based_options.block_cache =
       NewLRUCache(static_cast<size_t>(block_cache_size_mb * 1024 * 1024));
   table_factory.reset(new BlockBasedTableFactory(block_based_options));
   memtable_prefix_bloom_size_ratio = 0.02;
   memtable_whole_key_filtering = true;
+  return this;
   return this;
 }
 

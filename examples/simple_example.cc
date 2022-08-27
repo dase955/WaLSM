@@ -230,17 +230,15 @@ int main(int argc, char* argv[]) {
   DB* db;
   Options options;
   // Optimize RocksDB. This is the easiest way to get RocksDB to perform well
-  options.compaction_style = rocksdb::kCompactionStyleUniversal;
-  options.IncreaseParallelism(16);
+  options.create_if_missing = true;
   options.use_direct_io_for_flush_and_compaction = true;
   options.use_direct_reads = true;
-  // create the DB if it's not already present
-  options.create_if_missing = true;
-  options.write_buffer_size = 4 << 20;
-  options.max_bytes_for_level_base = 64 << 20;
-  options.level0_file_num_compaction_trigger = 4;
+  options.enable_pipelined_write = true;
+  options.compaction_style = rocksdb::kCompactionStyleUniversal;
   options.compression = rocksdb::kNoCompression;
-  options.statistics = CreateDBStatistics();
+  options.IncreaseParallelism(32);
+  options.OptimizeForPointLookup(128);
+  options.statistics = rocksdb::CreateDBStatistics();
 
   // open DB
   Status s = DB::Open(options, kDBPath, &db);

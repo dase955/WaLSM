@@ -71,13 +71,13 @@ struct BlockBasedTableOptions {
   // Indicating if we'd put index/filter blocks to the block cache.
   // If not specified, each "table reader" object will pre-load index/filter
   // block during table initialization.
-  bool cache_index_and_filter_blocks = false;
+  bool cache_index_and_filter_blocks = true;
 
   // If cache_index_and_filter_blocks is enabled, cache index and filter
   // blocks with high priority. If set to true, depending on implementation of
   // block cache, index and filter blocks may be less likely to be evicted
   // than data blocks.
-  bool cache_index_and_filter_blocks_with_high_priority = true;
+  bool cache_index_and_filter_blocks_with_high_priority = false;
 
   // if cache_index_and_filter_blocks is true and the below is true, then
   // filter and index blocks are stored in the cache, but a reference is
@@ -90,7 +90,7 @@ struct BlockBasedTableOptions {
   // the cache, but a reference is held in the "table reader" object so the
   // blocks are pinned and only evicted from cache when the table reader is
   // freed. This is not limited to l0 in LSM tree.
-  bool pin_top_level_index_and_filter = true;
+  bool pin_top_level_index_and_filter = false;
 
   // The index type that will be used for this table.
   enum IndexType : char {
@@ -119,7 +119,7 @@ struct BlockBasedTableOptions {
     kBinarySearchWithFirstKey = 0x03,
   };
 
-  IndexType index_type = kBinarySearch;
+  IndexType index_type = kTwoLevelIndexSearch;
 
   // The index type that will be used for the data block.
   enum DataBlockIndexType : char {
