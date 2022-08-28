@@ -13,6 +13,8 @@
 
 char* base_memptr = nullptr;
 
+char* aligned_ptr = nullptr;
+
 int64_t TotalSize = 0;
 
 std::unordered_map<std::string, char*> memories;
@@ -21,7 +23,7 @@ namespace ROCKSDB_NAMESPACE {
 
 bool InitializeMemory(std::unordered_map<std::string, int64_t>& memory_usages,
                       const std::string& nvm_path) {
-  TotalSize = 0;
+  TotalSize = 4096; // used for alignment
   for (auto& memory_usage : memory_usages) {
     TotalSize += memory_usage.second;
   }
@@ -44,7 +46,8 @@ bool InitializeMemory(std::unordered_map<std::string, int64_t>& memory_usages,
   size_t mapped_len;
   base_memptr = (char*)pmem_map_file(
       nvm_path.c_str(), TotalSize, PMEM_FILE_CREATE, 0666, &mapped_len, &is_pmem);
-  assert(is_pmem && mapped_len == (size_t)TotalSize);
+  //assert(is_pmem && mapped_len == (size_t)TotalSize);
+  aligned_ptr = reinterpret_cast<char*>(ALIGN_UP(reinterpret_cast<size_t>(base_memptr), 256));
 
   close(fd);
 #else
@@ -63,12 +66,15 @@ bool InitializeMemory(std::unordered_map<std::string, int64_t>& memory_usages,
 
   base_memptr = (char*)mmap(
       nullptr, TotalSize, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+  aligned_ptr = reinterpret_cast<char*>(ALIGN_UP(reinterpret_cast<size_t>(base_memptr), 256));
   close(fd);
 #endif
 
+  printf("mmap: %p, %p\n", base_memptr, aligned_ptr);
+
   int64_t offset = 0;
   for (auto& memory_usage : memory_usages) {
-    memories.emplace(memory_usage.first, base_memptr + offset);
+    memories.emplace(memory_usage.first, aligned_ptr + offset);
     offset += memory_usage.second;
   }
 

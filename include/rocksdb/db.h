@@ -255,6 +255,8 @@ class DB {
   // cleanup in the destructor
   virtual Status Close() { return Status::NotSupported(); }
 
+  virtual void Reset() {}
+
   // ListColumnFamilies will open the DB specified by argument name
   // and return the list of all column families in that DB
   // through column_families argument. The ordering of

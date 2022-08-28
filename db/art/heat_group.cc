@@ -199,9 +199,6 @@ HeatGroupManager::HeatGroupManager(const DBOptions& options) {
   HeatGroup::layer_ts_interval_ = options.layer_ts_interval;
   HeatGroup::force_decay_waterline_ = options.timestamp_waterline;
 
-  auto coeff = options.heat_update_coeff;
-
-  // Do some pre calculation
   for (size_t i = 0; i < MAX_LAYERS + 2; ++i) {
     auto head = new HeatGroup();
     auto tail = new HeatGroup();
@@ -210,6 +207,9 @@ HeatGroupManager::HeatGroupManager(const DBOptions& options) {
     group_queue_.heads_[i] = head;
     group_queue_.tails_[i] = tail;
   }
+
+  // Do some pre calculation
+  auto coeff = options.heat_update_coeff;
 
   LayerHeatBound[0] = 0.0;
   for (size_t i = 1; i < MAX_LAYERS + 1; ++i) {
@@ -224,7 +224,26 @@ HeatGroupManager::HeatGroupManager(const DBOptions& options) {
   }
 }
 
+void HeatGroupManager::Reset() {
+  StopThread();
+  group_operations_.clear();
+  for (size_t level = 0; level < MAX_LAYERS + 2; ++level) {
+    auto group = group_queue_.heads_[level]->next;
+    while (group != group_queue_.tails_[level]) {
+      auto next_group = group->next;
+      delete group->first_node_;
+      delete group;
+      group = next_group;
+    }
+    group_queue_.heads_[level]->next = group_queue_.tails_[level];
+    group_queue_.tails_[level]->prev = group_queue_.heads_[level];
+  }
+  group_queue_.total_layers = 1;
+  StartThread();
+}
+
 void HeatGroupManager::BGWork() {
+  Compactor* compactor = nullptr;
   while (!thread_stop_) {
     if (group_operations_.size() == 0) {
       // TryMergeBaseLayerGroups();
@@ -249,11 +268,13 @@ void HeatGroupManager::BGWork() {
         ForceGroupLevelDown();
         break;
       case kOperationChooseCompaction:
-        ChooseCompaction((Compactor*)operation.arg, 4);
+        compactor = (Compactor*)operation.arg;
+        ChooseCompaction(compactor, compactor->GetNumParallelCompaction());
+        break;
+      case kOperationFlushAll:
+        ChooseFirstGroup((Compactor*)operation.arg);
         break;
     }
-
-
   }
 }
 
@@ -287,12 +308,11 @@ bool HeatGroupManager::MergeNextGroup(HeatGroup* group, HeatGroup* next_group) {
   std::lock_guard<std::mutex> group_lk(group->lock);
   InnerNode* last_node = group->last_node_;
   std::lock_guard<RWSpinLock> link_lk(last_node->link_lock_);
-  InnerNode* next_start_node = last_node->next_node_;
+  InnerNode* next_start_node = last_node->next_node;
 
   if (unlikely(NOT_GROUP_START(next_start_node))) {
     assert(!next_start_node->heat_group_ ||
-           next_start_node->heat_group_ == group ||
-           next_start_node->heat_group_->last_node_ == next_start_node);
+           next_start_node->heat_group_ == group);
     return false;
   }
 
@@ -322,11 +342,11 @@ bool HeatGroupManager::MergeNextGroup(HeatGroup* group, HeatGroup* next_group) {
   }
 
   // Merge two group and remove dummy node
-  InnerNode* node_after_start = next_start_node->next_node_;
+  InnerNode* node_after_start = next_start_node->next_node;
   assert(NOT_GROUP_START(node_after_start));
   assert(node_after_start->heat_group_ == next_group);
 
-  last_node->next_node_ = node_after_start;
+  last_node->next_node = node_after_start;
   auto next_nvm_node = GetNodeAllocator()->relative(node_after_start->nvm_node_);
   if (GET_TAG(last_node->nvm_node_->meta.header, ALT_FIRST_TAG)) {
     last_node->nvm_node_->meta.next1 = next_nvm_node;
@@ -339,7 +359,7 @@ bool HeatGroupManager::MergeNextGroup(HeatGroup* group, HeatGroup* next_group) {
   next_group->last_node_->heat_group_ = group;
   while (cur != next_group->last_node_) {
     cur->heat_group_ = group;
-    cur = cur->next_node_;
+    cur = cur->next_node;
   }
 
   group->group_size_.fetch_add(
@@ -355,9 +375,6 @@ bool HeatGroupManager::MergeNextGroup(HeatGroup* group, HeatGroup* next_group) {
 
   RemoveFromQueue(next_group);
   next_group->is_removed = true;
-
-  //RECORD_INFO("Merge %p to %p, size after merge = %d\n", next_group, group,
-  //       group->group_size_.load(std::memory_order_relaxed));
 
   // Free dummy node
   GetNodeAllocator()->DeallocateNode(next_start_node->nvm_node_);
@@ -435,8 +452,8 @@ void HeatGroupManager::SplitGroup(HeatGroup* group) {
     if (left_size > split_point) {
       break;
     }
-    assert(left_end->next_node_);
-    left_end = left_end->next_node_;
+    assert(left_end->next_node);
+    left_end = left_end->next_node;
   }
 
   // TODO: fix this corner case
@@ -456,7 +473,7 @@ void HeatGroupManager::SplitGroup(HeatGroup* group) {
   InnerNode* dummy_right_start = AllocateLeafNode(0, 0, nullptr);
   SET_GROUP_START(dummy_right_start);
   SET_NON_LEAF(dummy_right_start);
-  SET_TAG(dummy_right_start->nvm_node_->meta.header, GROUP_START_TAG);
+  SET_NVM_TAG(dummy_right_start->nvm_node_, GROUP_START_TAG);
   InsertInnerNode(left_end, dummy_right_start);
 
   right_group->ts = cur_ts;
@@ -468,7 +485,7 @@ void HeatGroupManager::SplitGroup(HeatGroup* group) {
   while (right_start != right_end) {
     right_start->heat_group_ = right_group;
     right_size += right_start->estimated_size_;
-    right_start = right_start->next_node_;
+    right_start = right_start->next_node;
   }
   right_end->heat_group_ = right_group;
   right_size += right_end->estimated_size_;
@@ -577,6 +594,30 @@ void HeatGroupManager::ChooseCompaction(
   }
 
   compactor->Notify(chosen_groups);
+}
+
+void HeatGroupManager::ChooseFirstGroup(Compactor* compactor) {
+  HeatGroup* group = nullptr;
+  for (int level = BASE_LAYER; level < 7; ++level) {
+    if (group_queue_.heads[level]->next != group_queue_.tails[level]) {
+      group = group_queue_.heads[level]->next;
+      break;
+    }
+  }
+
+  assert(group);
+  while (group->prev_seq) {
+    group = group->prev_seq;
+  }
+
+  auto first_group = group;
+  while (group) {
+    group->is_removed = true;
+    group = group->next_seq;
+  }
+
+  std::vector<HeatGroup*> groups{first_group};
+  compactor->Notify(groups);
 }
 
 } // namespace ROCKSDB_NAMESPACE

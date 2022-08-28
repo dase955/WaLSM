@@ -25,8 +25,9 @@ std::atomic<int64_t> MemTotalSize{0};
 std::atomic<int64_t> SqueezedSize{0};
 std::atomic<int64_t> CompactedSize{0};
 std::atomic<int64_t> SqueezedSizeInCompaction{0};
+std::atomic<int>     BackupRead{0};
+PriorityLock         IteratorLock;
 
-std::atomic<int> BackupRead{0};
 
 ThreadPool* SingleCompactionJob::thread_pool = NewThreadPool(4);
 
@@ -50,12 +51,92 @@ int64_t GetMemTotalSize() {
   return MemTotalSize.load(std::memory_order_acquire);
 }
 
+void TryCreateIterator() {
+  IteratorLock.LockLowPri();
+}
+
+void DeleteIterator() {
+  IteratorLock.UnlockLowPri();
+}
+
+#ifdef ROCKSDB_SUPPORT_THREAD_LOCAL
+thread_local uint8_t fingerprints[224] = {0};
+thread_local uint64_t nvm_data[448] = {0};
+#endif
+
+struct CompactionRec {
+  std::string* key;
+  Slice        value_slice;
+  uint64_t     seq_num;
+  RecordIndex  record_index;
+  KVStruct     s;
+
+  CompactionRec() = default;
+
+  friend bool operator<(const CompactionRec& l, const CompactionRec& r) {
+    return *l.key < *r.key;
+  }
+
+  friend bool operator==(const CompactionRec& l, const CompactionRec& r) {
+    return *l.key == *r.key;
+  }
+};
+
 ////////////////////////////////////////////////////////////
+
+void RewriteData(std::vector<KVStruct>& rewrite_kv, InnerNode* node,
+                 VLogManager* vlog_manager) {
+  if (rewrite_kv.empty()) {
+    return;
+  }
+
+#ifndef ROCKSDB_SUPPORT_THREAD_LOCAL
+  uint8_t fingerprints[224] = {0};
+  uint64_t nvm_data[448] = {0};
+#endif
+
+  int pos = 0, fpos = 0;
+  int h, bucket;
+  uint8_t digit;
+  auto nvm_node = node->nvm_node_;
+
+  for (auto& kv_info : rewrite_kv) {
+    vlog_manager->MaybeRewrite(kv_info);
+    fingerprints[fpos++] = static_cast<uint8_t>(kv_info.actual_hash);
+    nvm_data[pos++] = kv_info.hash;
+    nvm_data[pos++] = kv_info.vptr;
+    node->estimated_size_ += kv_info.kv_size;
+
+    bucket = (int)(kv_info.actual_hash & 63);
+    h = (int)(kv_info.actual_hash >> 6);
+    digit = h == 0 ? 0 : __builtin_ctz(h) + 1;
+    node->hll_[bucket] = std::max(node->hll_[bucket], digit);
+  }
+
+  int flush_size = ALIGN_UP(fpos, 16);
+  int flush_rows = SIZE_TO_ROWS(flush_size);
+  assert(flush_rows <= NVM_MAX_ROWS);
+  assert(flush_size <= NVM_MAX_SIZE);
+
+  memset(nvm_data + pos, 0, SIZE_TO_BYTES(flush_size - fpos));
+  memset(fingerprints + fpos, 0, flush_size - fpos);
+  MEMCPY(nvm_node->data, nvm_data, SIZE_TO_BYTES(flush_size),
+         PMEM_F_MEM_NONTEMPORAL);
+  NVM_BARRIER;
+  MEMCPY(nvm_node->meta.fingerprints_, fingerprints, flush_size,
+         PMEM_F_MEM_NODRAIN | PMEM_F_MEM_NONTEMPORAL);
+
+  auto hdr = nvm_node->meta.header;
+  SET_SIZE(hdr, flush_size);
+  SET_ROWS(hdr, flush_rows);
+  nvm_node->meta.header = hdr;
+  PERSIST(nvm_node, CACHE_LINE_SIZE);
+}
 
 void RemoveChildren(InnerNode* parent, InnerNode* child) {
   // assert opt_lock and shared_mutex are held
 
-  auto support_node = parent->support_node_;
+  auto support_node = parent->support_node;
   assert(GET_TAG(support_node->nvm_node_->meta.header, DUMMY_TAG));
   assert(!GET_TAG(support_node->nvm_node_->meta.header, GROUP_START_TAG));
 
@@ -64,21 +145,21 @@ void RemoveChildren(InnerNode* parent, InnerNode* child) {
     std::lock_guard<RWSpinLock> link_lk(parent->link_lock_);
     std::lock_guard<std::mutex> heat_lk(heat_group->lock);
 
-    InnerNode* next_node = support_node->next_node_;
+    InnerNode* next_node = support_node->next_node;
 
     if (support_node == heat_group->last_node_) {
       heat_group->last_node_ = parent;
     } else if (child == heat_group->last_node_) {
       heat_group->last_node_ = parent;
-      next_node = child->next_node_;
+      next_node = child->next_node;
 
       assert(IS_GROUP_START(next_node));
-      assert(next_node->next_node_ == support_node);
+      assert(next_node->next_node == support_node);
 
-      auto after = support_node->next_node_;
+      auto after = support_node->next_node;
       std::lock_guard<RWSpinLock> next_link_lk(after->link_lock_);
 
-      next_node->next_node_ = after;
+      next_node->next_node = after;
       auto next_nvm_node = GetNodeAllocator()->relative(
           after->backup_nvm_node_
               ? after->backup_nvm_node_ : after->nvm_node_);
@@ -94,7 +175,7 @@ void RemoveChildren(InnerNode* parent, InnerNode* child) {
 
     {
       std::lock_guard<RWSpinLock> next_link_lk(next_node->link_lock_);
-      parent->next_node_ = next_node;
+      parent->next_node = next_node;
       auto next_nvm_node =
           GetNodeAllocator()->relative(next_node->backup_nvm_node_
                                            ? next_node->backup_nvm_node_ : next_node->nvm_node_);
@@ -110,7 +191,7 @@ void RemoveChildren(InnerNode* parent, InnerNode* child) {
       SET_ROWS(new_hdr, 0);
       SET_SIZE(new_hdr, 0);
       parent->nvm_node_->meta.header = new_hdr;
-      parent->support_node_ = parent;
+      parent->support_node = parent;
       PERSIST(parent->nvm_node_, 8);
     }
 
@@ -141,15 +222,17 @@ void RemoveChildren(InnerNode* parent, InnerNode* child) {
 }
 
 void ProcessNodes(InnerNode* parent, std::vector<InnerNode*>& children,
-                  SingleCompactionJob* job) {
+                  SingleCompactionJob* job, std::vector<KVStruct>& rewrite_kv) {
   std::lock_guard<OptLock> opt_lk(parent->opt_lock_);
   std::lock_guard<SharedMutex> write_lk(parent->share_mutex_);
 
-  if (children.size() == parent->art->num_children_ && parent->heat_group_ == job->group_) {
+  if (children.size() == parent->art->num_children_ &&
+      parent->heat_group_ == job->group_ &&
+      rewrite_kv.size() < BULK_WRITE_SIZE) {
     RemoveChildren(parent, children.back());
+    RewriteData(rewrite_kv, parent, job->vlog_manager_);
     job->candidate_parents.push_back(parent);
     for (auto child : children) {
-      assert(child->heat_group_ == job->group_);
       assert(child->heat_group_ == parent->heat_group_);
       SET_NODE_INVALID(child->status_);
       job->candidates_removed.push_back(child);
@@ -167,11 +250,10 @@ void ProcessNodes(InnerNode* parent, std::vector<InnerNode*>& children,
 
 int64_t Compactor::compaction_threshold_;
 
-size_t Compactor::max_rewrite_count;
-
 Compactor::Compactor(const DBOptions& options)
     : group_manager_(nullptr), vlog_manager_(nullptr),
-      num_parallel_compaction_(options.num_parallel_compactions) {}
+      num_parallel_compaction_(options.num_parallel_compactions),
+      rewrite_threshold_(options.enable_rewrite ? 1 : INT_MAX) {}
 
 Compactor::~Compactor() noexcept {
   printf("Statistics:\n"
@@ -192,15 +274,17 @@ void Compactor::SetGroupManager(HeatGroupManager* group_manager) {
   group_manager_ = group_manager;
 }
 
-void Compactor::SetGlobalMemtable(GlobalMemtable* global_memtable) {
-  global_memtable_ = global_memtable;
-}
-
 void Compactor::SetVLogManager(VLogManager* vlog_manager) {
   vlog_manager_ = vlog_manager;
+
+  all_compacted_indexes_.resize(vlog_manager_->vlog_segment_num_);
+  for (auto& indexes : all_compacted_indexes_) {
+    indexes.reserve(16);
+  }
+
   for (int i = 0; i < num_parallel_compaction_; ++i) {
     auto job = new SingleCompactionJob;
-    job->keys_in_node = std::vector<std::string>(240);
+    job->keys_in_node = std::vector<std::string>(241);
     job->compacted_indexes =
         new autovector<RecordIndex>[vlog_manager_->vlog_segment_num_];
     compaction_jobs_.push_back(job);
@@ -219,60 +303,12 @@ void Compactor::Notify(std::vector<HeatGroup*>& heat_groups) {
 
 std::atomic<int> total_rewrite{0};
 
-void Compactor::RewriteData(SingleCompactionJob* job) {
-  job->keys_in_node[0].clear();
-
-  total_rewrite.fetch_add(job->rewrite_data.size());
-  for (size_t idx = 0; idx < job->rewrite_data.size(); ++idx) {
-    auto vptr = job->rewrite_data[idx];
-
-    auto header = (VLogSegmentHeader*)(
-        vlog_manager_->pmemptr_ +
-        vlog_manager_->vlog_segment_size_ * (vptr >> 20));
-
-    char* record_start = vlog_manager_->pmemptr_ + vptr;
-    Slice slice(record_start, 1 << 20);
-    ValueType type = *((ValueType*)record_start);
-    slice.remove_prefix(WriteBatchInternal::kRecordPrefixSize);
-
-    uint32_t key_length;
-    GetVarint32(&slice, &key_length);
-    Slice key(slice.data(), key_length);
-    slice.remove_prefix(key_length);
-
-    if (type == kTypeValue) {
-      uint32_t value_length;
-      GetVarint32(&slice, &value_length);
-      slice.remove_prefix(value_length);
-    }
-
-    auto kv_size = slice.data() - record_start;
-    std::lock_guard<SpinMutex> status_lk(header->lock.mutex_);
-    if (unlikely(header->status_ == kSegmentGC)) {
-      std::string record(record_start, kv_size);
-      vlog_manager_->WriteToNewSegment(record, vptr);
-    }
-
-    auto hash = HashOnly(key.data(), key.size());
-    KVStruct kv_info(hash, vptr);
-    kv_info.kv_size_ = kv_size;
-    kv_info.insert_times = job->rewrite_times[idx];
-    assert((kv_info.vptr_ & 0x000000ffffffffff) == vptr);
-    assert(kv_info.insert_times > 1);
-    global_memtable_->Put(key, kv_info, false);
-  }
-}
-
 void Compactor::BGWork() {
   static int64_t choose_threshold = compaction_threshold_ +
                                     num_parallel_compaction_ *
                                         HeatGroup::group_min_size_;
 
   while (true) {
-    if (thread_stop_) {
-      break;
-    }
-
     std::this_thread::sleep_for(std::chrono::milliseconds(5));
 
     vlog_manager_->FreeQueue();
@@ -284,10 +320,16 @@ void Compactor::BGWork() {
     }
     chosen_jobs_.clear();
 
+    if (thread_stop_) {
+      break;
+    }
+
     auto cur_mem_size = MemTotalSize.load(std::memory_order_relaxed);
     if (cur_mem_size < choose_threshold) {
       continue;
     }
+
+    IteratorLock.LockHighPri();
 
     {
       std::unique_lock<std::mutex> lock{mutex_};
@@ -318,7 +360,13 @@ void Compactor::BGWork() {
     }
     SingleCompactionJob::thread_pool->Join();
 
+    auto preprocess_done_time = GetStartTime();
+    float preprocess_time = (preprocess_done_time - start_time) * 1e-6;
+
     db_impl_->SyncCallFlush(chosen_jobs_);
+
+    auto flush_done_time = GetStartTime();
+    float flush_time = (flush_done_time - preprocess_done_time) * 1e-6;
 
     uint64_t total_out_size = 0;
     SingleCompactionJob::thread_pool->SetJobCount(chosen_jobs_.size());
@@ -330,19 +378,28 @@ void Compactor::BGWork() {
     SingleCompactionJob::thread_pool->Join();
 
     for (auto job : chosen_jobs_) {
+      for (size_t i = 0; i < all_compacted_indexes_.size(); ++i) {
+        all_compacted_indexes_[i].insert(all_compacted_indexes_[i].end(),
+                                         job->compacted_indexes[i].begin(),
+                                         job->compacted_indexes[i].end());
+        job->compacted_indexes[i].clear();
+      }
+    }
+    vlog_manager_->UpdateBitmap(all_compacted_indexes_);
+
+    for (auto job : chosen_jobs_) {
       group_manager_->AddOperation(job->group_, kOperatorMove, true);
     }
 
     auto end_time = GetStartTime();
+    float postprocess_time = (end_time - flush_done_time) * 1e-6;
 
     // Use sfence after all vlog are modified
     NVM_BARRIER;
 
-    RECORD_INFO("%ld, %.2fMB, %.2fMB, %.3lf, %.3lf, %.5fs, %.3fs, %ld\n",
-                0, total_out_size / 1048576.0,
-                total_out_size / 1048576.0, 1.0, 1.0,
-                (end_time - start_time) * 1e-6, start_time * 1e-6,
-                0);
+    RECORD_INFO("Flush to base: %.2fMB, %.2fMB, %.3lfs, %.3lf\n",
+                total_out_size / 1048576.0, total_out_size / 1048576.0,
+                (end_time - start_time) * 1e-6, start_time * 1e-6);
 
     auto squeezed_in_compaction =
         (float)SqueezedSizeInCompaction.load(std::memory_order_relaxed) / 1048576.0f;
@@ -356,11 +413,13 @@ void Compactor::BGWork() {
     total_rewrite.store(0, std::memory_order_relaxed);
 
     RECORD_DEBUG("free pages: "
-        "%zu, %zu(%.2f), size: %.2fM, %.2fM, %.2fM; squeezed in groups %.2fM, rewrite count: %d\n",
+        "[%zu, %zu(%.2f)], size: [%.2fM, %.2fM, %.2fM]; group squeezed %.2fM, rewrite: %d, "
+        "time: [%.2fs, %.2fs, %.2fs]\n",
         GetNodeAllocator()->GetNumFreePages(),
         vlog_manager_->free_segments_.size(), vlog_manager_->Estimate(),
         mem_total_size, compacted_size, total_squeezed_size,
-        squeezed_in_compaction, rewrite_count);
+        squeezed_in_compaction, rewrite_count,
+        preprocess_time, flush_time, postprocess_time);
 
     SqueezedSizeInCompaction.store(0);
 
@@ -370,13 +429,235 @@ void Compactor::BGWork() {
       std::this_thread::yield();
     }
 
-    SingleCompactionJob::thread_pool->SetJobCount(chosen_jobs_.size());
-    for (auto& job : chosen_jobs_) {
-      auto func = std::bind(&Compactor::RewriteData, this, job);
-      SingleCompactionJob::thread_pool->SubmitJob(func);
-    }
-    SingleCompactionJob::thread_pool->Join();
+    IteratorLock.UnlockHighPri();
   }
+}
+
+void Compactor::Reset() {
+  StopThread();
+
+  while (BackupRead.load(std::memory_order_acquire)) {
+    std::this_thread::yield();
+  }
+
+#ifndef ROCKSDB_SUPPORT_THREAD_LOCAL
+  thread_local uint8_t fingerprints[224] = {0};
+  thread_local uint64_t nvm_data[448] = {0};
+#endif
+
+  std::unique_lock<std::mutex> lock{mutex_};
+  group_manager_->AddOperation(nullptr, kOperationFlushAll, false, this);
+  cond_var_.wait(lock);
+
+  std::vector<std::vector<HeatGroup*>> compaction_groups;
+  auto cur = chosen_groups_[0];
+  while (cur) {
+    std::vector<HeatGroup*> compaction_group;
+    int size_in_job = 0;
+    while (size_in_job < HeatGroup::group_min_size_ && cur) {
+      size_in_job += cur->group_size_.load(std::memory_order_relaxed);
+      compaction_group.push_back(cur);
+      cur = cur->next_seq;
+    }
+
+    compaction_groups.push_back(compaction_group);
+  }
+
+  int idx = 0;
+  for (auto& compaction_group : compaction_groups) {
+    SingleCompactionJob* job = compaction_jobs_[idx];
+    job->Reset();
+
+    for (auto& heat_group : compaction_group) {
+      auto node = heat_group->first_node_->next_node;
+      while (node != heat_group->last_node_->next_node) {
+        if (NOT_LEAF(node) || !node->heat_group_) {
+          node = node->next_node;
+          continue;
+        }
+
+        job->oldest_key_time_ =
+            std::min(job->oldest_key_time_, node->oldest_key_time_);
+        MEMCPY(node->nvm_node_->temp_buffer, node->buffer_,
+               SIZE_TO_BYTES(GET_NODE_BUFFER_SIZE(node->status_)),
+               PMEM_F_MEM_NODRAIN | PMEM_F_MEM_NONTEMPORAL);
+
+        std::vector<CompactionRec> read_records(241);
+
+        auto nvm_node = node->nvm_node_;
+        int data_size = GET_SIZE(nvm_node->meta.header);
+        auto data = nvm_node->data;
+
+        KVStruct tmp_struct{};
+        ValueType type;
+        SequenceNumber seq_num;
+
+        std::vector<std::string>& keys = job->keys_in_node;
+
+        size_t count = 0;
+        for (int i = -16; i < data_size; ++i) {
+          tmp_struct.vptr = data[i * 2 + 1];
+          if (!tmp_struct.actual_vptr) {
+            continue;
+          }
+
+          auto& record = read_records[count];
+          type = job->vlog_manager_->GetKeyValue(
+              tmp_struct.actual_vptr, keys[count],
+              record.value_slice, seq_num, record.record_index);
+          record.seq_num = (seq_num << 8) | type;
+          record.key = &keys[count++];
+          record.s = KVStruct{data[i * 2], data[i * 2 + 1]};
+        }
+
+        std::stable_sort(read_records.begin(), read_records.begin() + count);
+
+        keys[count] = "";
+        read_records[count].key = &keys[count];
+        for (size_t i = 1; i <= count; ++i) {
+          auto& record = read_records[i];
+          auto& last_record = read_records[i - 1];
+          if (*record.key != *last_record.key) {
+            PutFixed64(last_record.key, last_record.seq_num);
+            job->kv_slices.emplace_back(*last_record.key, last_record.value_slice);
+          }
+        }
+
+        node = node->next_node;
+      }
+    }
+
+    if (++idx == 4) {
+      db_impl_->SyncCallFlush(compaction_jobs_);
+      idx = 0;
+    }
+  }
+
+  if (idx > 0) {
+    std::vector<SingleCompactionJob*> last_jobs;
+    for (int i = 0; i < idx; ++i) {
+      last_jobs.push_back(compaction_jobs_[i]);
+    }
+    db_impl_->SyncCallFlush(last_jobs);
+  }
+
+  MemTotalSize.store(0);
+  SqueezedSize.store(0);
+  CompactedSize.store(0);
+  SqueezedSizeInCompaction.store(0);
+  chosen_jobs_.clear();
+  for (auto job : compaction_jobs_) {
+    job->Reset();
+  }
+
+  StartThread();
+}
+
+void ReadData(InnerNode* node, SingleCompactionJob* job,
+              int& compacted_size, int rewrite_threshold,
+              std::vector<KVStruct>& rewrite_kv) {
+  auto nvm_node = node->backup_nvm_node_;
+  auto new_nvm_node = node->nvm_node_;
+  int data_size = GET_SIZE(nvm_node->meta.header);
+  size_t parent_level = GET_LEVEL(nvm_node->meta.header) - 1; // level of parent
+  auto data = nvm_node->data;
+
+#ifndef ROCKSDB_SUPPORT_THREAD_LOCAL
+  uint8_t fingerprints[224] = {0};
+  uint64_t nvm_data[448] = {0};
+#endif
+
+  KVStruct tmp_struct{};
+  ValueType type;
+  SequenceNumber seq_num;
+  int32_t cur_size = 0;
+
+  std::vector<std::string>& keys = job->keys_in_node;
+  std::vector<CompactionRec> read_records(241);
+
+  size_t count = 0;
+  for (int i = -16; i < data_size; ++i) {
+    tmp_struct.vptr = data[i * 2 + 1];
+    if (!tmp_struct.actual_vptr) {
+      continue;
+    }
+
+    auto& record = read_records[count];
+    type = job->vlog_manager_->GetKeyValue(
+        tmp_struct.actual_vptr, keys[count],
+        record.value_slice, seq_num, record.record_index);
+    record.seq_num = (seq_num << 8) | type;
+    record.key = &(keys[count]);
+    record.s = KVStruct{data[i * 2], data[i * 2 + 1]};
+    ++count;
+  }
+
+  if (count == 0) {
+    return;
+  }
+
+  std::stable_sort(read_records.begin(), read_records.begin() + count);
+
+  keys[count] = "";
+  read_records[count].key = &keys[count];
+  int insert_times = 0;
+
+  size_t rewrite_count = 0;
+  for (size_t i = 1; i <= count; ++i) {
+    auto& record = read_records[i];
+    auto& last_record = read_records[i - 1];
+    insert_times += last_record.s.insert_times;
+
+    if (*record.key == *last_record.key) {
+      job->compacted_indexes[last_record.s.actual_vptr >> 20]
+          .push_back(last_record.record_index);
+    } else {
+      if (insert_times > rewrite_threshold) {
+        last_record.s.insert_times = 1;
+        cur_size += last_record.s.kv_size;
+        nvm_data[rewrite_count * 2] = last_record.s.hash;
+        nvm_data[rewrite_count * 2 + 1] = last_record.s.vptr;
+        fingerprints[rewrite_count++] = static_cast<uint8_t>(last_record.s.actual_hash);
+
+        int bucket = (int)(last_record.s.actual_hash & 63);
+        int h = (int)(last_record.s.actual_hash >> 6);
+        uint8_t digit = h == 0 ? 0 : __builtin_ctz(h) + 1;
+        node->hll_[bucket] = std::max(node->hll_[bucket], digit);
+
+        Rehash(last_record.s, *last_record.key, parent_level);
+        rewrite_kv.push_back(last_record.s);
+      } else {
+        job->compacted_indexes[last_record.s.actual_vptr >> 20]
+            .push_back(last_record.record_index);
+        PutFixed64(last_record.key, last_record.seq_num);
+        job->kv_slices.emplace_back(*last_record.key, last_record.value_slice);
+      }
+      insert_times = 0;
+    }
+  }
+
+  int flush_size = ALIGN_UP(rewrite_count, 16);
+  int flush_rows = SIZE_TO_ROWS(flush_size);
+  assert(flush_rows <= NVM_MAX_ROWS);
+  assert(flush_size <= NVM_MAX_SIZE);
+
+  memset(nvm_data + (rewrite_count * 2), 0,
+         SIZE_TO_BYTES(flush_size - rewrite_count));
+  memset(fingerprints + rewrite_count, 0, flush_size - rewrite_count);
+  MEMCPY(new_nvm_node->data, nvm_data, SIZE_TO_BYTES(flush_size),
+         PMEM_F_MEM_NONTEMPORAL);
+  NVM_BARRIER;
+  MEMCPY(new_nvm_node->meta.fingerprints_, fingerprints, flush_size,
+         PMEM_F_MEM_NODRAIN | PMEM_F_MEM_NONTEMPORAL);
+
+  uint64_t hdr = new_nvm_node->meta.header;
+  SET_SIZE(hdr, flush_size);
+  SET_ROWS(hdr, flush_rows);
+  new_nvm_node->meta.header = hdr;
+  PERSIST(new_nvm_node, CACHE_LINE_SIZE);
+
+  node->estimated_size_ = cur_size;
+  compacted_size -= cur_size;
 }
 
 void Compactor::CompactionPreprocess(SingleCompactionJob* job) {
@@ -394,7 +675,9 @@ void Compactor::CompactionPreprocess(SingleCompactionJob* job) {
   std::vector<InnerNode*> children;
   InnerNode* cur_parent = nullptr;
 
-  InnerNode* cur_node = start_node->next_node_;
+  std::vector<KVStruct> rewrite_kv;
+
+  InnerNode* cur_node = start_node->next_node;
   while (cur_node != next_start_node) {
     cur_node->opt_lock_.lock();
     cur_node->share_mutex_.lock();
@@ -402,12 +685,10 @@ void Compactor::CompactionPreprocess(SingleCompactionJob* job) {
     if (NOT_LEAF(cur_node) || !cur_node->heat_group_) {
       cur_node->share_mutex_.unlock();
       cur_node->opt_lock_.unlock();
-      cur_node = cur_node->next_node_;
+      cur_node = cur_node->next_node;
       continue;
     }
 
-    job->nvm_nodes_and_sizes.emplace_back(
-        cur_node->nvm_node_, GET_SIZE(cur_node->nvm_node_->meta.header));
     job->oldest_key_time_ =
         std::min(job->oldest_key_time_, cur_node->oldest_key_time_);
 
@@ -424,22 +705,22 @@ void Compactor::CompactionPreprocess(SingleCompactionJob* job) {
     cur_node->squeezed_size_ = 0;
     memset(cur_node->hll_, 0, 64);
 
-    cur_node->share_mutex_.unlock();
-
-    if (cur_parent && cur_node->parent_node_ != cur_parent) {
-      ProcessNodes(cur_parent, children, job);
+    if (cur_parent && cur_node->parent_node != cur_parent) {
+      ProcessNodes(cur_parent, children, job, rewrite_kv);
+      rewrite_kv.clear();
       children.clear();
     }
 
+    ReadData(cur_node, job, compacted_size, rewrite_threshold_, rewrite_kv);
+    cur_node->share_mutex_.unlock();
+
     children.push_back(cur_node);
-    cur_parent = cur_node->parent_node_;
-    cur_node = cur_node->next_node_;
+    cur_parent = cur_node->parent_node;
+    cur_node = cur_node->next_node;
   }
 
-  NVM_BARRIER;
-
   if (cur_parent && !children.empty()) {
-    ProcessNodes(cur_parent, children, job);
+    ProcessNodes(cur_parent, children, job, rewrite_kv);
   }
 
   job->candidates.push_back(nullptr);
@@ -452,7 +733,7 @@ void Compactor::CompactionPreprocess(SingleCompactionJob* job) {
 void Compactor::CompactionPostprocess(SingleCompactionJob* job) {
   // remove compacted node form list
   auto cur_node = job->group_->first_node_;
-  auto node_after_end = job->group_->last_node_->next_node_;
+  auto node_after_end = job->group_->last_node_->next_node;
   auto candidates = job->candidates;
   assert(IS_GROUP_START(cur_node));
 
@@ -460,12 +741,12 @@ void Compactor::CompactionPostprocess(SingleCompactionJob* job) {
   candidates.pop_front();
   while (candidate && cur_node != node_after_end) {
     std::lock_guard<RWSpinLock> link_lk(cur_node->link_lock_);
-    if (cur_node->next_node_ == candidate) {
+    if (cur_node->next_node == candidate) {
       RemoveOldNVMNode(cur_node);
       candidate = candidates.front();
       candidates.pop_front();
     }
-    cur_node = cur_node->next_node_;
+    cur_node = cur_node->next_node;
   }
 
   assert(candidates.empty());
@@ -481,8 +762,6 @@ void Compactor::CompactionPostprocess(SingleCompactionJob* job) {
     job->removed_arts.push_back(parent->backup_art);
     parent->backup_art = nullptr;
   }
-
-  vlog_manager_->UpdateBitmap(job->compacted_indexes);
 
   job->group_->status_.store(kGroupWaitMove, std::memory_order_relaxed);
 }

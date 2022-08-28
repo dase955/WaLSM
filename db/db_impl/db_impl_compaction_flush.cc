@@ -8,11 +8,12 @@
 // found in the LICENSE file. See the AUTHORS file for names of contributors.
 #include <cinttypes>
 
-#include "db/nvm_flush_job.h"
+#include "db/art/logger.h"
 #include "db/builder.h"
 #include "db/db_impl/db_impl.h"
 #include "db/error_handler.h"
 #include "db/event_helpers.h"
+#include "db/nvm_flush_job.h"
 #include "file/sst_file_manager_impl.h"
 #include "monitoring/iostats_context_imp.h"
 #include "monitoring/perf_context_imp.h"
@@ -3019,6 +3020,11 @@ Status DBImpl::BackgroundCompaction(bool* made_progress,
         moved_bytes += f->fd.GetFileSize();
       }
     }
+
+    RECORD_INFO("Trivial move: %.2fMB, %.3fs, %ld\n",
+                moved_bytes / 1048576.0,
+                GetStartTime() * 1e-6,
+                c->output_level());
 
     status = versions_->LogAndApply(c->column_family_data(),
                                     *c->mutable_cf_options(), c->edit(),

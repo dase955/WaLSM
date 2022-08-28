@@ -32,6 +32,11 @@ class TQueueConcurrent {
     return _collection.size();
   }
 
+  void clear() {
+    std::unique_lock<std::mutex> lock{_mutex};
+    _collection.clear();
+  }
+
   //! @brief Emplaces a new instance of T in front of the deque
 
   template<typename... Args>

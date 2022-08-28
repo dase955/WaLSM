@@ -20,6 +20,8 @@ class HeatGroupManager : public BackgroundThread {
  public:
   explicit HeatGroupManager(const DBOptions& options);
 
+  void Reset();
+
   void AddOperation(HeatGroup* group, GroupOperator op,
                     bool high_pri = false, void* arg = nullptr);
 
@@ -29,6 +31,8 @@ class HeatGroupManager : public BackgroundThread {
   void BGWork() override;
 
   void ChooseCompaction(Compactor* compactor, size_t num_chosen);
+
+  void ChooseFirstGroup(Compactor* compactor);
 
   bool MergeNextGroup(HeatGroup* group, HeatGroup* next_group);
 

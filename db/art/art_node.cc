@@ -17,25 +17,6 @@
 
 namespace ROCKSDB_NAMESPACE {
 
-ArtNode4::ArtNode4() {
-  memset(keys_, 0, 4);
-  memset(children_, 0, sizeof(void*) * 4);
-}
-
-ArtNode16::ArtNode16() {
-  memset(keys_, 0, 16);
-  memset(children_, 0, sizeof(void*) * 16);
-}
-
-ArtNode48::ArtNode48() {
-  memset(keys_, 0, 256);
-  memset(children_, 0, sizeof(void*) * 48);
-}
-
-ArtNode256::ArtNode256() {
-  memset(children_, 0, sizeof(void*) * 256);
-}
-
 ArtNodeType ChooseArtNodeType(size_t size) {
   // precalculate node type
   static int type[256] = {
@@ -201,24 +182,23 @@ ArtNode* ReallocateArtNode256(ArtNode* art) {
   return new_art;
 }
 
-void ReallocateArtNode(ArtNode** art) {
+ArtNode* ReallocateArtNode(ArtNode* art) {
   ArtNode* new_art = nullptr;
-  switch ((*art)->art_type_) {
+  switch (art->art_type_) {
     case kNode4:
-      new_art = ReallocateArtNode16(*art);
+      new_art = ReallocateArtNode16(art);
       break;
     case kNode16:
-      new_art = ReallocateArtNode48(*art);
+      new_art = ReallocateArtNode48(art);
       break;
     case kNode48:
-      new_art = ReallocateArtNode256(*art);
+      new_art = ReallocateArtNode256(art);
       break;
     default:
       assert(false);
   }
 
-  delete *art;
-  *art = new_art;
+  return new_art;
 }
 
 InnerNode* FindChildInNode4(ArtNode* art, unsigned char c) {
@@ -271,9 +251,7 @@ InnerNode* FindChildInNode16(ArtNode* art, unsigned char c) {
 #endif
 #endif
 
-  if (bitfield) {
-    assert(__builtin_ctz(bitfield) < 16);
-  }
+  assert(!bitfield || __builtin_ctz(bitfield) < 16);
 
   return bitfield ? node16->children_[__builtin_ctz(bitfield)] : nullptr;
 }
@@ -330,7 +308,7 @@ InnerNode* FindChild(InnerNode* node, std::string& key, size_t level,
                      InnerNode** backup, size_t& backup_level) {
   shared_lock<RWSpinLock> read_lk(node->art_rw_lock_);
 
-  if (node->backup_art) {
+  if (unlikely(node->backup_art)) {
     assert(backup_level == 0);
     *backup = FindChild(node->backup_art, key[level]);
     backup_level = level + 1;
@@ -356,7 +334,6 @@ InnerNode* FindChild(InnerNode* node, std::string& key, size_t level,
   }
 }
 
-// Insert new leaf node into art, and return prefix node. Prefix node will always exist.
 InnerNode* InsertToArtNode4(ArtNode* art, InnerNode* leaf, unsigned char c) {
   auto node4 = (ArtNode4*)art;
   int idx;
@@ -462,34 +439,39 @@ InnerNode* InsertToArtNode256(ArtNode* art, InnerNode* leaf, unsigned char c) {
   return nullptr;
 }
 
+// Insert new leaf node into art, and return prefix node.
+// Prefix node will always exist.
 void InsertToArtNode(InnerNode* current, InnerNode* leaf,
                      unsigned char c, bool insert_to_group) {
   static int full_num[5] = {0, 4, 16, 48, 256};
 
   InnerNode* left_node = nullptr;
-  ArtNode* art = nullptr;
+
+  ArtNode* prev_art = nullptr;
+  ArtNode* curr_art = current->art;
+  if (unlikely(IS_ART_FULL(current))) {
+    curr_art = ReallocateArtNode(current->art);
+    SET_ART_NON_FULL(current);
+  }
 
   {
     std::lock_guard<RWSpinLock> write_lk(current->art_rw_lock_);
 
-    if (IS_ART_FULL(current)) {
-      ReallocateArtNode(&current->art);
-      SET_ART_NON_FULL(current);
-    }
+    current->art = curr_art;
+    delete prev_art;
 
-    art = current->art;
-    switch (art->art_type_) {
+    switch (curr_art->art_type_) {
       case kNode4:
-        left_node = InsertToArtNode4(art, leaf, c);
+        left_node = InsertToArtNode4(curr_art, leaf, c);
         break;
       case kNode16:
-        left_node = InsertToArtNode16(art, leaf, c);
+        left_node = InsertToArtNode16(curr_art, leaf, c);
         break;
       case kNode48:
-        left_node = InsertToArtNode48(art, leaf, c);
+        left_node = InsertToArtNode48(curr_art, leaf, c);
         break;
       case kNode256:
-        left_node = InsertToArtNode256(art, leaf, c);
+        left_node = InsertToArtNode256(curr_art, leaf, c);
         break;
       default:
         break;
@@ -498,7 +480,7 @@ void InsertToArtNode(InnerNode* current, InnerNode* leaf,
 
   InsertInnerNode(left_node, leaf);
 
-  if ((++art->num_children_) == full_num[art->art_type_]) {
+  if ((++curr_art->num_children_) == full_num[curr_art->art_type_]) {
     SET_ART_FULL(current);
   }
 
@@ -513,9 +495,7 @@ void DeleteArtNode(ArtNode* art) {
     for (int i = 0; i < art->num_children_; ++i) {
       auto inner_node = art4->children_[i];
       if (inner_node) {
-        inner_node->share_mutex_.lock();
         GetNodeAllocator()->DeallocateNode(inner_node->nvm_node_);
-        inner_node->share_mutex_.unlock();
         delete inner_node;
       }
     }
@@ -524,29 +504,23 @@ void DeleteArtNode(ArtNode* art) {
     for (int i = 0; i < art->num_children_; ++i) {
       auto inner_node = art16->children_[i];
       if (inner_node) {
-        inner_node->share_mutex_.lock();
         GetNodeAllocator()->DeallocateNode(inner_node->nvm_node_);
-        inner_node->share_mutex_.unlock();
         delete inner_node;
       }
     }
   } else if (art->art_type_ == kNode48) {
     auto art48 = (ArtNode48*)art;
-    for (auto& child : art48->children_) {
+    for (auto child : art48->children_) {
       if (child) {
-        child->share_mutex_.lock();
         GetNodeAllocator()->DeallocateNode(child->nvm_node_);
-        child->share_mutex_.unlock();
         delete child;
       }
     }
   } else {
     auto art256 = (ArtNode256*)art;
-    for (auto& child : art256->children_) {
+    for (auto child : art256->children_) {
       if (child) {
-        child->share_mutex_.lock();
         GetNodeAllocator()->DeallocateNode(child->nvm_node_);
-        child->share_mutex_.unlock();
         delete child;
       }
     }
@@ -605,7 +579,7 @@ void DeleteInnerNode(InnerNode* inner_node, uint64_t* inode_vptrs, int count) {
     }
   }
 
-  delete inner_node->support_node_;
+  delete inner_node->support_node;
   delete art;
   delete inner_node;
 }

@@ -352,105 +352,6 @@ Status BuildTable(
   return s;
 }
 
-struct CompactionRec {
-  std::string* key;
-  Slice        value;
-  uint64_t     seq_num;
-  uint64_t     vptr;
-  RecordIndex  record_index;
-  int          insert_times;
-
-  CompactionRec() = default;
-
-  friend bool operator<(const CompactionRec& l, const CompactionRec& r) {
-    return *l.key < *r.key;
-  }
-
-  friend bool operator==(const CompactionRec& l, const CompactionRec& r) {
-    return *l.key == *r.key;
-  }
-};
-
-int64_t ReadAndBuild(SingleCompactionJob* job,
-                     TableBuilder* builder,
-                     FileMetaData* meta) {
-  ValueType type;
-  SequenceNumber seq_num;
-  std::vector<std::string>& keys = job->keys_in_node;
-  std::vector<CompactionRec> kvs(241);
-
-  int64_t out_kv_size = 0;
-
-  for (auto& pair : job->nvm_nodes_and_sizes) {
-    auto nvm_node = pair.first;
-    int data_size = pair.second;
-    auto data = nvm_node->data;
-
-    size_t count = 0;
-    for (int i = -16; i < data_size; ++i) {
-      auto vptr = data[i * 2 + 1];
-      auto insert_times = GetInsertTimes(vptr);
-
-      GetActualVptr(vptr);
-      if (!vptr) {
-        continue;
-      }
-
-      auto& kv = kvs[count];
-      type = job->vlog_manager_->GetKeyValue(
-          vptr, keys[count], kv.value, seq_num, kv.record_index);
-      kv.seq_num = (seq_num << 8) | type;
-      kv.key = &keys[count++];
-      kv.vptr = vptr;
-      kv.insert_times = insert_times;
-    }
-
-    if (count == 0) {
-      continue;
-    }
-
-    std::stable_sort(kvs.begin(), kvs.begin() + count);
-
-    keys[count] = "";
-    kvs[count].key = &keys[count];
-
-    int cur_count = 1;
-    auto& last_kv = kvs.front();
-    int insert_times = last_kv.insert_times;
-
-    for (size_t i = 1; i <= count; ++i) {
-      auto& kv = kvs[i];
-
-      if (*kv.key == *last_kv.key) {
-        job->compacted_indexes[last_kv.vptr >> 20]
-            .push_back(last_kv.record_index);
-        insert_times += kv.insert_times;
-        ++cur_count;
-      } else {
-        if (insert_times > 2) {
-          job->rewrite_data.push_back(last_kv.vptr);
-          job->rewrite_times.push_back(std::min(insert_times, 254));
-        } else {
-          job->compacted_indexes[last_kv.vptr >> 20]
-              .push_back(last_kv.record_index);
-
-          auto& key = last_kv.key;
-          PutFixed64(key, last_kv.seq_num);
-          builder->Add(*key, last_kv.value);
-          meta->UpdateBoundaries(
-              *key, last_kv.value, last_kv.seq_num, kTypeValue);
-          out_kv_size += (last_kv.value.size() + key->size());
-        }
-        cur_count = 1;
-        insert_times = kv.insert_times;
-      }
-      last_kv = kvs[i];
-    }
-  }
-
-  return out_kv_size;
-}
-
 Status BuildTableFromArt(
     SingleCompactionJob *job,
     const std::string& dbname, Env* env, FileSystem* fs,
@@ -528,7 +429,15 @@ Status BuildTableFromArt(
         0 /*target_file_size*/, file_creation_time, db_id, db_session_id);
   }
 
-  auto out_kv_size = ReadAndBuild(job, builder, meta);
+  uint64_t out_kv_size = 0;
+  for (auto& pair : job->kv_slices) {
+    auto& key = pair.first;
+    auto& value = pair.second;
+    uint64_t seq_num = DecodeFixed64(key.data() + key.size() - kNumInternalBytes);
+    builder->Add(key, value);
+    meta->UpdateBoundaries(key, value, seq_num, kTypeValue);
+    out_kv_size += (value.size() + key.size());
+  }
 
   TEST_SYNC_POINT("BuildTable:BeforeFinishBuildTable");
   s = builder->Finish();

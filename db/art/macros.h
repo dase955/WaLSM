@@ -26,10 +26,12 @@ namespace ROCKSDB_NAMESPACE {
  * Macros for global_memtable.h
  */
 
-#define LAST_CHAR                 255
-#define ROW_SIZE                  256
-#define NVM_MAX_ROWS              14
-#define NVM_MAX_SIZE              224
+#define LAST_CHAR            255
+#define ROW_BYTES            256
+#define ROW_SIZE             16
+#define NVM_MAX_ROWS         14
+#define NVM_MAX_SIZE         224
+#define BULK_WRITE_SIZE      208
 
 #define INITIAL_STATUS(s)         (0x80000000 | (s))
 
@@ -90,6 +92,7 @@ namespace ROCKSDB_NAMESPACE {
 #define CLEAR_TAG(hdr, tag)     (hdr) &= ~(tag)
 #define GET_TAG(hdr, tag)       ((hdr) & (tag))
 #define SET_TAG(hdr, tag)       (hdr) |= (tag)
+#define SET_NVM_TAG(node, tag)  SET_TAG((node)->meta.header, tag)
 
 // Alt bit maybe redundant
 #define ALT_FIRST_TAG           0x8000000000000000

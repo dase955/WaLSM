@@ -4,23 +4,42 @@
 
 #include "logger.h"
 
+#include <unistd.h>
 #include <mutex>
 
 namespace ROCKSDB_NAMESPACE {
 
-const std::string compaction_log = "/home/crh/compaction_art.csv";
+std::string log_path = "/tmp";
 
-const std::string debug_log = "/home/crh/debug_art.txt";
+std::string compaction_filename = "compaction_art.txt";
+
+std::string compaction_log = "/tmp/compaction_art.txt";
+
+std::string debug_filename = "debug_art.txt";
+
+std::string debug_log = "/tmp/debug_art.txt";
 
 void InitLogFile() {
-  FILE* fp = fopen(compaction_log.c_str(), "a");
+  FILE* fp;
+
+  fp = fopen(compaction_log.c_str(), "w");
   if (fp == nullptr) {
     printf("log failed\n");
   }
   fclose(fp);
-  RECORD_INFO(
-      "id, read(MB), write(MB), read_write_amp, write_amp"
-      ", time(s), start(s), is_level0\n");
+
+  fp = fopen(debug_log.c_str(), "w");
+  if (fp == nullptr) {
+    printf("log failed\n");
+  }
+  fclose(fp);
+}
+
+void SetLogPath(const std::string& path) {
+  log_path = path;
+  compaction_log = log_path + "/" + compaction_filename;
+  debug_log = log_path + "/" + debug_filename;
+  InitLogFile();
 }
 
 std::mutex m;

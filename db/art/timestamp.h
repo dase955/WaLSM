@@ -49,4 +49,6 @@ static_assert(sizeof(Timestamps) == 64, "sizeof(Timestamps) != 64!");
 
 int32_t GetTimestamp();
 
+void ResetTimestamp();
+
 } // namespace ROCKSDB_NAMESPACE

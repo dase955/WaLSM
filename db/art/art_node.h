@@ -26,33 +26,33 @@ struct ArtNode{
 
 struct ArtNode4 {
   ArtNode       header_;
-  unsigned char keys_[4]{};
-  InnerNode*    children_[4]{};
+  unsigned char keys_[4] = {0};
+  InnerNode*    children_[4] = {nullptr};
 
-  ArtNode4();
+  ArtNode4() = default;
 };
 
 struct ArtNode16 {
   ArtNode       header_;
-  unsigned char keys_[16]{};
-  InnerNode*    children_[16]{};
+  unsigned char keys_[16] = {0};
+  InnerNode*    children_[16] = {nullptr};
 
-  ArtNode16();
+  ArtNode16() = default;
 };
 
 struct ArtNode48 {
   ArtNode       header_;
-  unsigned char keys_[256]{};
-  InnerNode*    children_[48]{};
+  unsigned char keys_[256] = {0};
+  InnerNode*    children_[48] = {nullptr};
 
-  ArtNode48();
+  ArtNode48() = default;
 };
 
 struct ArtNode256 {
   ArtNode       header_;
-  InnerNode*    children_[256]{};
+  InnerNode*    children_[256] = {nullptr};
 
-  ArtNode256();
+  ArtNode256() = default;
 };
 
 /* Helper functions */
@@ -65,7 +65,7 @@ ArtNode* AllocateArtAfterSplit(
     const std::vector<InnerNode*>& inserted_nodes,
     const std::vector<unsigned char>& c);
 
-void ReallocateArtNode(ArtNode** art);
+ArtNode* ReallocateArtNode(ArtNode* art);
 
 InnerNode* FindChild(InnerNode* node, unsigned char c);
 

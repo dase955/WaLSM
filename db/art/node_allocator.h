@@ -18,6 +18,8 @@ class NodeAllocator {
  public:
   NodeAllocator(const DBOptions& options, bool recovery);
 
+  void Reset();
+
   NVMNode* GetHead();
 
   size_t GetNumFreePages() {

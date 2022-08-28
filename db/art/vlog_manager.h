@@ -13,10 +13,6 @@
 
 namespace ROCKSDB_NAMESPACE {
 
-struct alignas(CACHE_LINE_SIZE) AlignedLock {
-  SpinMutex mutex_;
-};
-
 enum SegmentStatus : uint8_t {
   kSegmentFree,     // Initial status
   kSegmentWriting,  // Writing records to segment
@@ -24,29 +20,37 @@ enum SegmentStatus : uint8_t {
   kSegmentGC,       // Segment is doing gc
 };
 
+struct StatusLock {
+  SpinMutex     mutex;
+  SegmentStatus status;
+};
+
 struct VLogSegmentHeader {
   struct alignas(CACHE_LINE_SIZE) {
-    SegmentStatus status_ : 8;
+    // TODO: remove status from nvm to dram
+    SegmentStatus status_to_remove : 8;
     uint32_t offset_: 24;
     uint16_t total_count_ = 0;
     uint16_t compacted_count_ = 0;
   };
-  AlignedLock lock;
+  char    padding[64];
   uint8_t bitmap_[];
 };
 
-struct GCData {
+struct alignas(CACHE_LINE_SIZE) GCData {
   std::string record;
-  uint64_t    vptr;
+  uint64_t    actual_vptr;
   Slice       key;
 
   GCData() = default;
 
   GCData(uint32_t key_start, uint32_t key_length,
-         uint64_t vptr_, std::string& record_)
-      : record(std::move(record_)), vptr(vptr_),
+         uint64_t actual_vptr_, std::string& record_)
+      : record(std::move(record_)),
+        actual_vptr(actual_vptr_),
         key(record.data() + key_start, key_length) {};
 };
+
 
 class GlobalMemtable;
 
@@ -62,6 +66,8 @@ class VLogManager : public BackgroundThread {
 
   void Recover();
 
+  void Reset();
+
   void SetMemtable(GlobalMemtable* mem);
 
   RecordIndex GetFirstIndex(size_t wal_size) const;
@@ -74,6 +80,9 @@ class VLogManager : public BackgroundThread {
 
   ValueType GetKeyValue(uint64_t offset, std::string& key, std::string& value);
 
+  ValueType GetKeyValue(uint64_t offset, std::string& key, std::string& value,
+                        SequenceNumber& seq_num);
+
   ValueType GetKeyValue(uint64_t offset,
                         std::string& key, Slice& value,
                         SequenceNumber& seq_num, RecordIndex& index);
@@ -81,13 +90,13 @@ class VLogManager : public BackgroundThread {
   void UpdateBitmap(
       std::unordered_map<uint64_t, std::vector<RecordIndex>>& all_indexes);
 
-  void UpdateBitmap(autovector<RecordIndex>* all_indexes);
+  void UpdateBitmap(std::vector<std::vector<RecordIndex>>& all_indexes);
 
   void FreeQueue();
 
   float Estimate();
 
-  bool RecentWritten(uint64_t vptr);
+  void MaybeRewrite(KVStruct& kv_info);
 
  private:
   void BGWork() override;
@@ -104,6 +113,14 @@ class VLogManager : public BackgroundThread {
 
   void ReadAndSortData(std::vector<char*>& segments);
 
+  VLogSegmentHeader* GetHeader(size_t index) {
+    return (VLogSegmentHeader*)(pmemptr_ + vlog_segment_size_ * index);
+  }
+
+  size_t GetIndex(const char* segment) {
+    return (segment - pmemptr_) / vlog_segment_size_;
+  }
+
   char* pmemptr_;
 
   char* cur_segment_;
@@ -113,8 +130,6 @@ class VLogManager : public BackgroundThread {
   uint32_t segment_remain_;
 
   GlobalMemtable* mem_;
-
-  int* write_time_;
 
   TQueueConcurrent<char*> free_segments_;
 
@@ -136,6 +151,8 @@ class VLogManager : public BackgroundThread {
   const uint64_t vlog_bitmap_size_;
   const size_t   force_gc_ratio_;
   const float    compacted_ratio_threshold_ = 0.5;
+
+  StatusLock*    segment_statuses_;
 };
 
 }  // namespace ROCKSDB_NAMESPACE

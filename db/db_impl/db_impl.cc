@@ -109,6 +109,9 @@
 
 namespace ROCKSDB_NAMESPACE {
 
+std::atomic<int> get_in_nvm{0};
+std::atomic<int> get_in_ssd{0};
+
 const std::string kDefaultColumnFamilyName("default");
 const std::string kPersistentStatsColumnFamilyName(
     "___rocksdb_stats_history___");
@@ -274,10 +277,11 @@ DBImpl::DBImpl(const DBOptions& options, const std::string& dbname,
   preserve_deletes_seqnum_.store(0);
 
   Timestamps::factor = options.timestamp_factor;
+  ResetTimestamp();
 
   // Use init time as start time.
+  SetLogPath(dbname);
   GetStartTime();
-  InitLogFile();
 
   std::unordered_map<std::string, int64_t> memory_usages;
   memory_usages["vlog"] = options.vlog_file_size;
@@ -296,12 +300,10 @@ DBImpl::DBImpl(const DBOptions& options, const std::string& dbname,
       vlog_manager_, group_manager_, env_, recovery);
 
   Compactor::compaction_threshold_ = options.compaction_threshold;
-  Compactor::max_rewrite_count = options.max_rewrite_count;
 
   compactor_->SetDB(this);
   compactor_->SetGroupManager(group_manager_);
   compactor_->SetVLogManager(vlog_manager_);
-  compactor_->SetGlobalMemtable(global_memtable_);
   compactor_->StartThread();
 }
 
@@ -324,6 +326,15 @@ Status DBImpl::Resume() {
   Status s = error_handler_.RecoverFromBGError(true);
   mutex_.Lock();
   return s;
+}
+
+void DBImpl::Reset() {
+  compactor_->Reset();
+  group_manager_->Reset();     // ok
+  GetNodeAllocator()->Reset(); // ok
+  global_memtable_->Reset();   // ok
+  vlog_manager_->Reset();      // ok
+  ResetTimestamp();            // ok
 }
 
 // This function implements the guts of recovery from a background error. It
@@ -1541,9 +1552,11 @@ InternalIterator* DBImpl::NewInternalIterator(const ReadOptions& read_options,
       &cfd->internal_comparator(), arena,
       !read_options.total_order_seek &&
           super_version->mutable_cf_options.prefix_extractor != nullptr);
-  // Collect iterator for mutable mem
-  merge_iter_builder.AddIterator(
-      super_version->mem->NewIterator(read_options, arena));
+
+  TryCreateIterator();
+  // NVM iterator
+  merge_iter_builder.AddIterator(global_memtable_->NewIterator(read_options));
+
   std::unique_ptr<FragmentedRangeTombstoneIterator> range_del_iter;
   Status s;
   if (!read_options.ignore_range_deletions) {
@@ -1551,14 +1564,7 @@ InternalIterator* DBImpl::NewInternalIterator(const ReadOptions& read_options,
         super_version->mem->NewRangeTombstoneIterator(read_options, sequence));
     range_del_agg->AddTombstones(std::move(range_del_iter));
   }
-  // Collect all needed child iterators for immutable memtables
-  if (s.ok()) {
-    super_version->imm->AddIterators(read_options, &merge_iter_builder);
-    if (!read_options.ignore_range_deletions) {
-      s = super_version->imm->AddRangeTombstoneIterators(read_options, arena,
-                                                         range_del_agg);
-    }
-  }
+
   TEST_SYNC_POINT_CALLBACK("DBImpl::NewInternalIterator:StatusCallback", &s);
   if (s.ok()) {
     // Collect iterators for files in L0 - Ln
@@ -1784,6 +1790,9 @@ Status DBImpl::GetImpl(const ReadOptions& read_options, const Slice& key,
         get_impl_options.get_value ? get_impl_options.is_blob_index : nullptr,
         get_impl_options.get_value);
     RecordTick(stats_, MEMTABLE_MISS);
+    get_in_ssd.fetch_add(1);
+  } else {
+    get_in_nvm.fetch_add(1);
   }
 
   {
@@ -3865,6 +3874,8 @@ Status DB::DestroyColumnFamilyHandle(ColumnFamilyHandle* column_family) {
 DB::~DB() {}
 
 Status DBImpl::Close() {
+  printf("Get in nvm: %d, get in ssd: %d\n", get_in_nvm.load(), get_in_ssd.load());
+
   if (!closed_) {
     {
       InstrumentedMutexLock l(&mutex_);

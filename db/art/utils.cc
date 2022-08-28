@@ -56,32 +56,26 @@ int EstimateDistinctCount(const uint8_t hll[64]) {
 
 InnerNode* AllocateLeafNode(uint8_t prefix_length,
                             unsigned char last_prefix,
-                            InnerNode* next_node) {
+                            InnerNode* next_node,
+                            uint64_t init_tag) {
+  NodeAllocator* mgr = GetNodeAllocator();
+
   auto inode = new InnerNode();
-  /*uint32_t status = inode->status_;
-  SET_LEAF(status);
-  SET_NON_GROUP_START(status);
-  SET_ART_NON_FULL(status);
-  SET_NODE_BUFFER_SIZE(status, 0);
-  SET_GC_FLUSH_SIZE(status, 0);*/
   inode->status_ = INITIAL_STATUS(0);
-
-  auto mgr = GetNodeAllocator();
-
   auto nvm_node = mgr->AllocateNode();
   inode->nvm_node_ = nvm_node;
-  inode->support_node_ = inode;
-  inode->next_node_ = next_node;
+  inode->support_node = inode;
+  inode->next_node = next_node;
 
-  uint64_t hdr = 0;
+  uint64_t hdr = init_tag;
   SET_LAST_PREFIX(hdr, last_prefix);
   SET_LEVEL(hdr, prefix_length);
   SET_TAG(hdr, VALID_TAG);
   SET_TAG(hdr, ALT_FIRST_TAG);
 
-  nvm_node->meta.header = hdr;
   nvm_node->meta.next1 = next_node ? mgr->relative(next_node->nvm_node_) : -1;
-
+  nvm_node->meta.header = hdr;
+  FLUSH(nvm_node, CACHE_LINE_SIZE);
   return inode;
 }
 
@@ -113,16 +107,16 @@ InnerNode* RecoverInnerNode(NVMNode* nvm_node) {
     inode->hll_[bucket] = std::max(inode->hll_[bucket], digit);
   }
 
-  uint32_t status = INITIAL_STATUS(buffer_size);
-  /*SET_LEAF(status);
+  /*uint32_t status = INITIAL_STATUS(buffer_size);
+  SET_LEAF(status);
   SET_NON_GROUP_START(status);
   SET_ART_NON_FULL(status);
   SET_NODE_BUFFER_SIZE(status, buffer_size);
   SET_GC_FLUSH_SIZE(status, 0);*/
 
-  inode->status_ = status;
+  inode->status_ = INITIAL_STATUS(buffer_size);
   inode->estimated_size_ = nvm_node->meta.node_info;
-  inode->support_node_ = inode;
+  inode->support_node = inode;
   inode->nvm_node_ = nvm_node;
   inode->backup_nvm_node_ = nullptr;
   return inode;
@@ -131,26 +125,26 @@ InnerNode* RecoverInnerNode(NVMNode* nvm_node) {
 void InsertInnerNode(InnerNode* node, InnerNode* inserted) {
   std::lock_guard<RWSpinLock> link_lk(node->link_lock_);
 
-  auto prev_node = node->support_node_;
-  inserted->next_node_ = prev_node->next_node_;
-  prev_node->next_node_ = inserted;
+  auto prev_node = node->support_node;
+  inserted->next_node = prev_node->next_node;
+  prev_node->next_node = inserted;
 
   auto prev_nvm_node = prev_node->nvm_node_;
   auto inserted_nvm_node = inserted->nvm_node_;
-  uint64_t hdr = prev_nvm_node->meta.header;
+  auto insert_relative = GetNodeAllocator()->relative(inserted_nvm_node);
 
   // Because we only change pointer here,
   // so there is no need to switch alt bit.
+  uint64_t hdr = prev_nvm_node->meta.header;
   if (GET_TAG(hdr, ALT_FIRST_TAG)) {
     inserted_nvm_node->meta.next1 = prev_nvm_node->meta.next1;
-    prev_nvm_node->meta.next1 =
-        GetNodeAllocator()->relative(inserted_nvm_node);
+    PERSIST(inserted_nvm_node, CACHE_LINE_SIZE);
+    prev_nvm_node->meta.next1 = insert_relative;
   } else {
     inserted_nvm_node->meta.next1 = prev_nvm_node->meta.next2;
-    prev_nvm_node->meta.next2 =
-        GetNodeAllocator()->relative(inserted_nvm_node);
+    PERSIST(inserted_nvm_node, CACHE_LINE_SIZE);
+    prev_nvm_node->meta.next2 = insert_relative;
   }
-  PERSIST(inserted_nvm_node, CACHE_LINE_SIZE);
   PERSIST(prev_nvm_node, CACHE_LINE_SIZE);
 }
 
@@ -159,22 +153,21 @@ void InsertSplitInnerNode(InnerNode* node, InnerNode* first_inserted,
                           [[maybe_unused]] size_t prefix_length) {
   std::lock_guard<RWSpinLock> link_lk(node->link_lock_);
 
-  auto prev_node = node->support_node_;
+  auto prev_node = node->support_node;
   auto prev_nvm_node = prev_node->nvm_node_;
   auto inserted_first_nvm_node = first_inserted->nvm_node_;
+  auto relative = GetNodeAllocator()->relative(inserted_first_nvm_node);
   auto inserted_last_nvm_node = last_inserted->nvm_node_;
 
   auto old_hdr = prev_nvm_node->meta.header;
   auto new_hdr = old_hdr;
   if (GET_TAG(old_hdr, ALT_FIRST_TAG)) {
     CLEAR_TAG(new_hdr, ALT_FIRST_TAG);
-    prev_nvm_node->meta.next2 =
-        GetNodeAllocator()->relative(inserted_first_nvm_node);
+    prev_nvm_node->meta.next2 = relative;
     inserted_last_nvm_node->meta.next1 = prev_nvm_node->meta.next1;
   } else {
     SET_TAG(new_hdr, ALT_FIRST_TAG);
-    prev_nvm_node->meta.next1 =
-        GetNodeAllocator()->relative(inserted_first_nvm_node);
+    prev_nvm_node->meta.next1 = relative;
     inserted_last_nvm_node->meta.next1 = prev_nvm_node->meta.next2;
   }
   PERSIST(inserted_last_nvm_node, CACHE_LINE_SIZE);
@@ -188,11 +181,11 @@ void InsertSplitInnerNode(InnerNode* node, InnerNode* first_inserted,
   PERSIST(prev_nvm_node, CACHE_LINE_SIZE);
 
   node->estimated_size_ = 0;
-  last_inserted->next_node_ = prev_node->next_node_;
-  prev_node->next_node_ = first_inserted;
+  last_inserted->next_node = prev_node->next_node;
+  prev_node->next_node = first_inserted;
 
   // Update last child node
-  node->support_node_ = last_inserted;
+  node->support_node = last_inserted;
 }
 
 void InsertNewNVMNode(InnerNode* node, NVMNode* inserted) {
@@ -228,9 +221,9 @@ void InsertNewNVMNode(InnerNode* node, NVMNode* inserted) {
   }
 }
 
-// Different from InsertNewNVMNode, link_lock_ has been held
+// Different from InsertNewNVMNode, link lock has been held
 void RemoveOldNVMNode(InnerNode* node) {
-  auto next_node = node->next_node_;
+  auto next_node = node->next_node;
   auto nvm_node = node->nvm_node_;
   auto hdr = nvm_node->meta.header;
 

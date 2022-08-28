@@ -67,7 +67,24 @@
 #include "util/string_util.h"
 #include "utilities/merge_operators.h"
 
+#include <cstdio>
+#include <string>
+#include <cstdint>
+
+#include <time.h>
+#include <mutex>
+#include <random>
+#include <cmath>
+
 namespace ROCKSDB_NAMESPACE {
+
+// Note that whole DBTest and its child classes disable fsync on files
+// and directories for speed.
+// If fsync needs to be covered in a test, put it in other places.
+class DBTest3 : public DBTestBase {
+ public:
+  DBTest3() : DBTestBase("/db_test3", /*env_do_fsync=*/false) {}
+};
 
 class KeyGenerator {
  public:
@@ -95,21 +112,29 @@ class KeyGenerator {
  protected:
   int record_count_;
 
-  int sample_range_;
+  uint64_t sample_range_;
 
   std::string prefix_ = "user";
 };
 
 class YCSBZipfianGenerator : public KeyGenerator{
  public:
-  YCSBZipfianGenerator(int record_count, int sample_range, double theta, double zetan)
-      : KeyGenerator(record_count, sample_range), theta_(theta), zetan_(zetan) {
+  YCSBZipfianGenerator(
+      int load_count, int record_count, uint64_t sample_range,
+      double theta, double zetan)
+      : KeyGenerator(record_count, sample_range),
+        theta_(theta), zetan_(zetan), load_count_(load_count) {
+
+    zetan_ = zetastatic(sample_range + 1, theta);
+
     alpha = 1.0 / (1.0 - theta);
     eta = (1 - std::pow(2.0 / sample_range_, 1 - theta))
           / (1 - zetastatic(2, theta) / zetan_);
 
     std::random_device rd;
     rng = std::default_random_engine{rd()};
+
+    std::cout << "theta = " << theta << ", zetan = " << zetan << std::endl;
   }
 
   static double zetastatic(long n, double theta) {
@@ -120,29 +145,108 @@ class YCSBZipfianGenerator : public KeyGenerator{
     return sum;
   }
 
-  uint64_t Next() {
+  void Prepare() override {
+    samples_.resize(record_count_);
+    std::unordered_map<uint64_t, int> frequency;
+
+    for (int i = 0; i < record_count_; ++i) {
+      samples_[i] = Zipf();
+      ++frequency[samples_[i]];
+    }
+
+    printf("Distinct count = %zu\n", frequency.size());
+    CheckFreq(samples_);
+
+    // Sort samples by frequency to avoid collision of high frequency data.
+    std::unordered_map<uint64_t, uint64_t> mapper;
+    std::vector<std::pair<int, uint64_t>> frequency_sorted;
+    frequency_sorted.reserve(frequency.size());
+    for (auto& pair : frequency) {
+      frequency_sorted.emplace_back(pair.second, pair.first);
+    }
+    std::sort(frequency_sorted.begin(), frequency_sorted.end());
+
+    size_t runs = (frequency.size() + load_count_ - 1) / load_count_;
+    for (size_t run = 0; run < runs; ++run) {
+      std::random_device shuffle_rd;
+      std::vector<int> shuffled(load_count_);
+      std::iota(std::begin(shuffled), std::end(shuffled), 0);
+      std::shuffle(shuffled.begin(), shuffled.end(), shuffle_rd);
+
+      for (size_t i = 0; i < load_count_ && i < frequency.size(); ++i) {
+        mapper[frequency_sorted[i + run * load_count_].second] = shuffled[i];
+      }
+    }
+
+    for (auto& sample : samples_) {
+      sample = mapper[sample];
+    }
+    CheckFreq(samples_);
+  }
+
+  uint64_t Zipf() {
     double u = rand_double(rng);
     double uz = u * zetan_;
-
+    uint64_t v;
     if (uz < 1.0) {
-      return 0;
+      v = 0;
+    } else if (uz < 1.0 + std::pow(0.5, theta_)) {
+      v = 1;
+    } else {
+      v = (uint64_t) ((sample_range_) * std::pow(eta * u - eta + 1, alpha));
+    }
+    return fnvhash64(v);
+  }
+
+  uint64_t Next() override {
+    return std::hash<uint64_t>{}(Zipf() % 80000000);
+  }
+
+  static void CheckFreq(std::vector<uint64_t>& samples) {
+    std::unordered_map<uint64_t, int> freqs;
+    for (auto& value : samples) {
+      ++freqs[value];
     }
 
-    if (uz < 1.0 + std::pow(0.5, theta_)) {
-      return 1;
+    int cold_count = 0;
+    for (auto& pair : freqs) {
+      cold_count += (pair.second == 1);
     }
 
-    return (int) ((sample_range_) * std::pow(eta * u - eta + 1, alpha));
+    int hot_count = freqs.size() - cold_count;
+    float hot_freq = (samples.size() - cold_count) / (float)samples.size() * 100.f;
+    printf("Sample generated. hot count = %d(%.2f), cold count = %d\n",
+           hot_count, hot_freq, cold_count);
   }
 
  private:
+  static uint64_t fnvhash64(int64_t val) {
+    static int64_t FNV_OFFSET_BASIS_64 = 0xCBF29CE484222325LL;
+    static int64_t FNV_PRIME_64 = 1099511628211L;
+
+    int64_t hashval = FNV_OFFSET_BASIS_64;
+
+    for (int i = 0; i < 8; i++) {
+      int64_t octet = val & 0x00ff;
+      val = val >> 8;
+
+      hashval = hashval ^ octet;
+      hashval = hashval * FNV_PRIME_64;
+    }
+    return hashval > 0 ? hashval : -hashval;
+  }
+
   double theta_;
   double zetan_;
   double alpha, eta;
+  uint64_t load_count_;
+  std::atomic<int> index_{0};
 
   std::uniform_real_distribution<> rand_double{0.0, 1.0};
 
   std::default_random_engine rng;
+
+  std::vector<uint64_t> samples_;
 };
 
 class CustomZipfianGenerator : public KeyGenerator {
@@ -154,14 +258,14 @@ class CustomZipfianGenerator : public KeyGenerator {
 
   void Prepare() override {
     double c = 0.0;
-    for (int i = 1; i <= sample_range_; i++) {
+    for (uint64_t i = 1; i <= sample_range_; i++) {
       c = c + (1.0 / pow((double)i, alpha_));
     }
     c = 1.0 / c;
 
     double* sum_probs = new double[sample_range_ + 1];
     sum_probs[0] = 0;
-    for (int i = 1; i <= sample_range_; ++i) {
+    for (uint64_t i = 1; i <= sample_range_; ++i) {
       sum_probs[i] = sum_probs[i - 1] + c / pow((double)i, alpha_);
     }
 
@@ -307,7 +411,6 @@ class YCSBLoadGenerator : public KeyGenerator {
     }
     return hashval > 0 ? hashval : -hashval;
   }
-
   std::atomic<int> cur_index_{0};
 };
 
@@ -327,8 +430,6 @@ class Inserter {
   }
 
   void DoInsert() {
-    key_generator_->Prepare();
-
     for (int i = 0; i < num_threads_; ++i) {
       insert_threads_[i] = std::thread(&Inserter::Insert, this, i);
     }
@@ -409,40 +510,107 @@ class Inserter {
   DB* db_;
 };
 
-// Note that whole DBTest and its child classes disable fsync on files
-// and directories for speed.
-// If fsync needs to be covered in a test, put it in other places.
-class DBTest3 : public DBTestBase {
- public:
-  DBTest3() : DBTestBase("/db_test3", /*env_do_fsync=*/false) {}
-};
+std::atomic<int> counter{0};
+std::atomic<int> failed_counter{0};
 
-TEST_F(DBTest3, MockEnvTest) {
+std::vector<uint64_t> values;
+std::vector<uint64_t> failed_values;
+
+int insert_times = 20000000;
+
+void DoInsert(DB* db, KeyGenerator* gen) {
+  int thread_num = 8;
+  int thread_count = insert_times / thread_num;
+  for (int i = 0; i < thread_count; ++i) {
+    auto v = gen->Next();
+    std::string key = "user" + std::to_string(v);
+    std::string value = Inserter::GenerateValueFromKey(key);
+    ASSERT_OK(db->Put(WriteOptions(), key, value));
+    values[counter++] = v;
+  }
+}
+
+void DoGet(DB* db) {
+  while (counter.load(std::memory_order_acquire) < insert_times - 16) {
+    auto c = counter.load(std::memory_order_acquire);
+    if (c < 16) {
+      std::this_thread::sleep_for(std::chrono::microseconds(10));
+      continue;
+    }
+
+    std::random_device rd;
+    std::default_random_engine rng = std::default_random_engine{rd()};
+    std::uniform_int_distribution<int> dist(0, c - 1);
+
+    auto index = dist(rng);
+    auto v = values[index];
+    std::string key = "user" + std::to_string(v);
+    std::string value;
+    std::string expected = Inserter::GenerateValueFromKey(key);
+    auto status = db->Get(ReadOptions(), key, &value);
+    if (status.IsNotFound()) {
+      printf("Error not found\n");
+    }
+  }
+}
+
+void DoTest2() {
+  setbuf(stdout, nullptr);
+
   int thread_num = 8;
   int total_count = 320000000;
-  int sample_range = 1000000000;
+  uint64_t sample_range = 1000000000UL;
 
-  DB* db;
+  values.reserve(total_count);
+  failed_values.reserve(total_count);
+  auto gen = new YCSBZipfianGenerator(80000000, total_count, sample_range, 0.98, 26.469028);
 
   Options options;
   options.create_if_missing = true;
-  options.enable_pipelined_write = true;
-  options.compression = kNoCompression;
-  options.compaction_style = kCompactionStyleLevel;
-  options.nvm_path = "/mnt/pmem1/crh/nodememory";
+  options.use_direct_io_for_flush_and_compaction = true;
+  options.use_direct_reads = true;
+  options.enable_pipelined_write = false;
+  options.compression = rocksdb::kNoCompression;
+  options.nvm_path = "/mnt/chen/vlog";
+  options.IncreaseParallelism(16);
 
-  //options.OptimizeLevelStyleCompaction();
+  std::string db_path = "/tmp/db_test";
 
-  ASSERT_OK(DB::Open(options, "/home/crh/db_test", &db));
+  DB* db;
+  DB::Open(options, db_path, &db);
 
-  Inserter inserter(thread_num, db);
-  inserter.SetGenerator(
-      new YCSBLoadGenerator(total_count, sample_range));
-  inserter.DoInsert();
+  std::vector<std::thread> put_threads(thread_num);
+  std::vector<std::thread> get_threads(thread_num);
+  for (auto& thread : put_threads) {
+    thread = std::thread(DoInsert, db, gen);
+  }
+  for (auto& thread : get_threads) {
+    thread = std::thread(DoGet, db);
+  }
+  for (auto& thread : put_threads) {
+    thread.join();
+  }
+  for (auto& thread : get_threads) {
+    thread.join();
+  }
+
+  for (int i = 0; i < insert_times; ++i) {
+    auto v = values[i];
+    std::string key = "user" + std::to_string(v);
+    std::string value;
+    std::string expected = Inserter::GenerateValueFromKey(key);
+    auto status = db->Get(ReadOptions(), key, &value);
+    if (status.IsNotFound()) {
+      printf("Error not found again %s\n", key.c_str());
+      status = db->Get(ReadOptions(), key, &value);
+    }
+  }
 
   db->Close();
+}
 
-  delete db;
+TEST_F(DBTest3, MockEnvTest) {
+  DoTest2();
 }
 
 /*
@@ -458,7 +626,7 @@ TEST_F(DBTest3, MockEnvTest2) {
   DB* db;
 
   ASSERT_OK(DB::Open(options, "/tmp/db_test", &db));
-  
+
   std::cout << "Start test get" << std::endl;
   for (int i = 0; i < total_count; i += 4) {
     std::string key = next_key(i);
