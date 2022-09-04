@@ -1,24 +1,14 @@
 #!/bin/bash
 
-Cleanup() {
-    rm -f /home/crh/compaction_art.csv
-    rm -f /home/crh/debug_art.txt
-    rm -f /home/crh/run_ops_art
-    rm -rf /home/crh/db_test_art
-    rm -f /mnt/pmem1/crh/nodememory
+SingleTest() {
+    sudo rm -rf /mnt/chen/*
+    sudo rm -rf /tmp/db_old_custom
+    numactl -N 1 ./ycsb $1 $2
+    #mv /tmp/db_old_custom/compaction_art.txt /home/chen/result/art_reset_$1_$2.txt
 }
 
-#Cleanup
-#./zipf_example 1.0 > 1.txt
-
-#Cleanup
-#./zipf_example 0.75 > 075.txt
-
-Cleanup
-./zipf_example 0.5 > 05.txt
-
-#Cleanup
-#./zipf_example 0.25 > 025.txt
-
-#Cleanup
-#./zipf_example 0.0 > 0.txt
+#SingleTest 0.98 0.5
+#SingleTest 0.98 0.25
+#SingleTest 0.98 0.75
+SingleTest 0.98 0
+#SingleTest 0.98 1

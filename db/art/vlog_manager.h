@@ -152,6 +152,9 @@ class VLogManager : public BackgroundThread {
   const size_t   force_gc_ratio_;
   const float    compacted_ratio_threshold_ = 0.5;
 
+  std::atomic<int> gc_freed_{0};
+  std::atomic<int> gc_used_{0};
+
   StatusLock*    segment_statuses_;
 };
 

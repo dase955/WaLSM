@@ -201,11 +201,12 @@ void NVMFlushJob::Build() {
   }
   ROCKS_LOG_INFO(db_options_.info_log,
                  "[%s] [JOB %d] Level-0 flush table #%" PRIu64 ": %" PRIu64
-                 " bytes %s"
+                 " bytes %s, smallest = %s, largest = %s"
                  "%s",
                  cfd_->GetName().c_str(), job_context_->job_id,
                  meta_.fd.GetNumber(), meta_.fd.GetFileSize(),
-                 s.ToString().c_str(),
+                 s.ToString().c_str(), meta_.smallest.DebugString(true).c_str(),
+                 meta_.largest.DebugString(true).c_str(),
                  meta_.marked_for_compaction ? " (needs compaction)" : "");
 
   RECORD_INFO("Flush l0: %.2fMB, %.3lfs, %.3lfs\n",

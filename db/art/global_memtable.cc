@@ -78,6 +78,7 @@ void FlushBuffer(InnerNode* leaf, int row) {
   PERSIST(node, CACHE_LINE_SIZE);
 
   SET_NODE_BUFFER_SIZE(leaf->status_, 0);
+  memset(leaf->buffer_, 0, 256);
 }
 
 //////////////////////////////////////////////////////////
@@ -844,7 +845,8 @@ bool GlobalMemtable::ReadInNVMNode(NVMNode* nvm_node, uint64_t hash,
       res -= (1 << found);
       int index = found + base;
       vptr = data[index * 2 + 1];
-      if (index >= size || data[index * 2] != hash) {
+      GetActualVptr(vptr);
+      if (!vptr || index >= size || data[index * 2] != hash) {
         continue;
       }
       type = vlog_manager_->GetKeyValue(vptr, found_key, value);
@@ -871,7 +873,9 @@ bool GlobalMemtable::FindKeyInInnerNode(InnerNode* leaf, size_t level,
   auto buffer = leaf->buffer_;
 
   for (int i = 0; i < pos; ++i) {
-    if (buffer[i * 2] != hash) {
+    auto vptr = buffer[i * 2 + 1];
+    GetActualVptr(vptr);
+    if (!vptr || buffer[i * 2] != hash) {
       continue;
     }
     type = vlog_manager_->GetKeyValue(
@@ -951,7 +955,8 @@ struct IteratorKV {
 
 class GlobalMemTableIterator : public InternalIterator {
  public:
-  GlobalMemTableIterator(GlobalMemtable* mem, const ReadOptions& read_options)
+  GlobalMemTableIterator(GlobalMemtable* mem,
+                         [[maybe_unused]] const ReadOptions& read_options)
       : mem_(mem), valid_(false) {}
 
   ~GlobalMemTableIterator() override {
@@ -1006,6 +1011,10 @@ class GlobalMemTableIterator : public InternalIterator {
     SequenceNumber seq_num;
     for (size_t i = 0; i < GET_NODE_BUFFER_SIZE(current_node_->status_); ++i) {
       auto vptr = current_node_->buffer_[i * 2 + 1];
+      GetActualVptr(vptr);
+      if (!vptr) {
+        continue;
+      }
       auto type = mem_->vlog_manager_->GetKeyValue(vptr, k, v, seq_num);
       seq_num = (seq_num << 8) | type;
       keys_in_node_.emplace_back(k, v, seq_num);
@@ -1030,7 +1039,7 @@ class GlobalMemTableIterator : public InternalIterator {
     valid_ = true;
   }
 
-  void SeekForPrev(const Slice& k) override {
+  void SeekForPrev([[maybe_unused]] const Slice& k) override {
     // Currently SeekForPrev is not implemented.
     assert(false);
   }

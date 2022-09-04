@@ -69,9 +69,9 @@ struct InnerNode {
   RWSpinLock  vptr_lock_;
 
   OptLock     opt_lock_;
-  int32_t     estimated_size_;   // Estimated kv size in this node
+  std::atomic<int32_t>     estimated_size_;   // Estimated kv size in this node
   int32_t     squeezed_size_;
-  uint32_t    status_;           // node status, see macros.h
+  volatile uint32_t    status_;           // node status, see macros.h
   int64_t     oldest_key_time_;  // Just for compatibility
 
   InnerNode();
