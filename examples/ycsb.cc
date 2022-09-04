@@ -8,8 +8,10 @@
 #include <cstdint>
 #include <iostream>
 #include <fstream>
+#include <functional>
 
 #include "rocksdb/db.h"
+#include "rocksdb/slice.h"
 #include "rocksdb/options.h"
 #include "rocksdb/table.h"
 #include "rocksdb/filter_policy.h"
@@ -17,19 +19,27 @@
 #include <time.h>
 #include <sys/time.h>
 
+#include <unordered_set>
 #include <algorithm>
 #include <mutex>
 #include <random>
 #include <thread>
 #include <cmath>
+#include <time.h>
 
 #include <sys/mman.h>
+#include <sys/stat.h>
+#include <unistd.h>
+#include <fcntl.h>
+
+
 using namespace rocksdb;
 
 std::unordered_map<std::string, int> high_freq_data;
 
 const uint64_t kFNVOffsetBasis64 = 0xCBF29CE484222325ull;
 const uint64_t kFNVPrime64 = 1099511628211ull;
+
 inline uint64_t FNVHash64(uint64_t val) {
   uint64_t hash = kFNVOffsetBasis64;
 
@@ -376,7 +386,7 @@ class Inserter {
     }
   }
 
-  int interval_ = 60;
+  int interval_ = 5;
 
   int num_threads_ = 16;
 
@@ -398,9 +408,9 @@ class Inserter {
 };
 
 void DoTest(double zipf, double read_ratio) {
-  int thread_num = 8;
+  int thread_num = 16;
   int total_count = 320000000;
-  int load_count = 80000000;
+  int load_count = 100000000;
   uint64_t sample_range = 1000000000ULL;
 
   Options options;
@@ -409,7 +419,7 @@ void DoTest(double zipf, double read_ratio) {
   options.use_direct_reads = true;
   options.enable_pipelined_write = true;
   options.compression = rocksdb::kNoCompression;
-  options.nvm_path = "/mnt/chen";
+  options.nvm_path = "/mnt/chen/nodememory";
   options.IncreaseParallelism(16);
 
   BlockBasedTableOptions table_options;
@@ -425,6 +435,8 @@ void DoTest(double zipf, double read_ratio) {
   load_inserter.SetGenerator(new YCSBLoadGenerator(load_count, sample_range));
   load_inserter.SetInsertCount(load_count);
   load_inserter.DoLoad();
+
+  db->Reset();
 
   Inserter inserter(thread_num, db);
   inserter.SetReadProp(read_ratio);

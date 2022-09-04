@@ -569,7 +569,7 @@ void DoTest2() {
   options.create_if_missing = true;
   options.use_direct_io_for_flush_and_compaction = true;
   options.use_direct_reads = true;
-  options.enable_pipelined_write = false;
+  options.enable_pipelined_write = true;
   options.compression = rocksdb::kNoCompression;
   options.nvm_path = "/mnt/chen/vlog";
   options.IncreaseParallelism(16);
@@ -610,6 +610,24 @@ void DoTest2() {
 }
 
 TEST_F(DBTest3, MockEnvTest) {
+  uint8_t fingerprints[32];
+  for (int i = 0; i < 32; ++i) {
+    fingerprints[i] = i * 2 + 1;
+  }
+
+  fingerprints[1] = fingerprints[4] = fingerprints[8] = fingerprints[13] = 52;
+
+  __m256i target = _mm256_set1_epi8(52);
+  __m256i f = _mm256_loadu_si256(reinterpret_cast<const __m256i *>(fingerprints));
+  __m256i r = _mm256_cmpeq_epi8(f, target);
+  auto res = (unsigned int)_mm256_movemask_epi8(r);
+  while (res) {
+    int t = __builtin_ctz(res);
+    std::cout << __builtin_ctz(res) << std::endl;
+
+  }
+  return;
+
   DoTest2();
 }
 

@@ -125,7 +125,7 @@ template uint64_t HashAndPrefix<Slice>(Slice&, size_t);
 
 // Maybe this function name is misleading,
 // but it just modifies prefix part in hash.
-inline void Rehash(KVStruct& s, Slice& key, size_t level) {
+inline void Rehash(KVStruct& s, const Slice& key, size_t level) {
   assert(level > 0);
   level -= (level - 1) % 3;
   memset(s.prefixes, 0, 3);
@@ -196,7 +196,6 @@ class BackgroundThread {
     thread_stop_ = true;
     cond_var_.notify_one();
     background_thread_.join();
-    printf("background thread stop.\n");
   }
 
  private:
