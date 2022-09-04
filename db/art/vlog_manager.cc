@@ -20,8 +20,8 @@
 
 namespace ROCKSDB_NAMESPACE {
 
-int SearchVptr(
-    InnerNode* inner_node, uint8_t hash, int rows, uint64_t& vptr) {
+int SearchVptr(InnerNode* inner_node, uint32_t hash, int rows,
+               Slice& search_key, uint64_t& vptr, VLogManager* vlog_manager) {
 
   int buffer_size = GET_NODE_BUFFER_SIZE(inner_node->status_);
   for (int i = 0; i < buffer_size; ++i) {
@@ -38,10 +38,16 @@ int SearchVptr(
   int search_rows = (rows + 1) / 2 - 1;
   int size = rows * 16;
 
-  __m256i target = _mm256_set1_epi8(hash);
+  KVStruct kv_info;
+  Slice got_key;
+  int found_times = 0;
+  auto hash8 = (uint8_t)hash;
+
+  __m256i target = _mm256_set1_epi8(hash8);
   for (int i = search_rows; i >= 0; --i) {
     int base = i << 5;
-    __m256i f = _mm256_load_si256(reinterpret_cast<const __m256i *>(fingerprints + base));
+    __m256i f = _mm256_load_si256(
+        reinterpret_cast<const __m256i *>(fingerprints + base));
     __m256i r = _mm256_cmpeq_epi8(f, target);
     auto res = (unsigned int)_mm256_movemask_epi8(r);
     while (res > 0) {
@@ -49,9 +55,29 @@ int SearchVptr(
       res -= (1 << found);
       int index = found + base;
       assert(index >= 0);
-      if ((index < size) && ActualVptrSame(vptr, data[index * 2 + 1])) {
-        vptr = data[index * 2 + 1];
-        return index;
+      kv_info.hash = data[index * 2];
+      kv_info.vptr = data[index * 2 + 1];
+
+      if (index >= size
+          || kv_info.actual_hash != hash
+          || !kv_info.actual_vptr) {
+        continue;
+      }
+
+      if (ActualVptrSame(vptr, data[index * 2 + 1])) {
+        ++found_times;
+ 	if (found_times == 1) {
+          vptr = data[index * 2 + 1];
+          return index;
+        } else {
+          data[index * 2] = data[index * 2 + 1] = 0;
+          return -1;
+        }
+      }
+
+      vlog_manager->GetKey(kv_info.actual_vptr, got_key);
+      if (likely(got_key == search_key)) {
+        ++found_times;
       }
     }
   }
@@ -117,6 +143,8 @@ VLogManager::VLogManager(const DBOptions& options, bool recovery)
 
 VLogManager::~VLogManager() {
   StopThread();
+  printf("gc used segments = %d, gc freed segments = %d\n",
+         gc_freed_.load(), gc_freed_.load() - gc_used_.load());
 }
 
 void VLogManager::Recover() {
@@ -423,20 +451,20 @@ void VLogManager::BGWork() {
         int rows = GET_ROWS(nvm_node->meta.header);
 
         while (index < data_count) {
-          auto& check_data = gc_data[index];
-          if (!check_data.key.starts_with(cur_prefix)) {
+          auto check_data = &gc_data[index];
+          if (!check_data->key.starts_with(cur_prefix)) {
             break;
           }
 
-          auto hash = (uint8_t)Hash(check_data.key.data(), check_data.key.size(), 397);
+          auto hash = Hash(check_data->key.data(), check_data->key.size(), 397);
           auto found_index = SearchVptr(
-              inner_node, hash, rows, check_data.actual_vptr);
+              inner_node, hash, rows,
+              check_data->key, check_data->actual_vptr, this);
           if (found_index != -1) {
-            WriteToNewSegment(check_data.record, new_vptr);
-            tmp_struct.vptr = check_data.actual_vptr;
+            WriteToNewSegment(check_data->record, new_vptr);
+            tmp_struct.vptr = check_data->actual_vptr;
             tmp_struct.actual_vptr = new_vptr;
             new_vptr = tmp_struct.vptr;
-            // UpdateVptrInfo(check_data.actual_vptr, new_vptr);
 
             if (found_index >= 0) {
               nvm_node->data[found_index * 2 + 1] = new_vptr;
@@ -449,6 +477,7 @@ void VLogManager::BGWork() {
       }
     }
 
+    gc_freed_ += segments.size();
     for (auto segment : segments) {
       auto* header_gc = (VLogSegmentHeader*)segment;
       header_gc->offset_ = vlog_header_size_;
@@ -465,7 +494,7 @@ char* VLogManager::ChooseSegmentToGC() {
   char* segment = nullptr;
 
   auto num_used = used_segments_.size();
-  for (size_t i = 0; i < num_used; ++i) {
+  for (size_t i = 0; i < num_used / 8; ++i) {
     segment = used_segments_.pop_front();
     auto header = (VLogSegmentHeader*)segment;
     float compacted_ratio =
@@ -497,6 +526,7 @@ void VLogManager::WriteToNewSegment(std::string& record, uint64_t& new_vptr) {
   if (remain < left) {
     PushToUsedQueue(segment_for_gc_);
     segment_for_gc_ = GetSegmentFromFreeQueue();
+    ++gc_used_;
 
     header = (VLogSegmentHeader*)segment_for_gc_;
     offset = header->offset_;
@@ -604,7 +634,6 @@ float VLogManager::Estimate() {
 void VLogManager::MaybeRewrite(KVStruct& kv_info) {
   uint64_t actual_vptr = kv_info.actual_vptr;
   auto index = actual_vptr >> 20;
-  auto header = GetHeader(index);
 
   segment_statuses_[index].mutex.lock();
   auto status = segment_statuses_[index].status;

@@ -64,7 +64,7 @@ thread_local uint8_t fingerprints[224] = {0};
 thread_local uint64_t nvm_data[448] = {0};
 #endif
 
-struct CompactionRec {
+struct alignas(CACHE_LINE_SIZE) CompactionRec {
   std::string* key;
   Slice        value_slice;
   uint64_t     seq_num;
@@ -326,6 +326,7 @@ void Compactor::BGWork() {
 
     auto cur_mem_size = MemTotalSize.load(std::memory_order_relaxed);
     if (cur_mem_size < choose_threshold) {
+      std::this_thread::yield();
       continue;
     }
 
@@ -527,9 +528,21 @@ void Compactor::Reset() {
       }
     }
 
-    if (++idx == 4) {
+    if (++idx == num_parallel_compaction_) {
+      auto start_time = GetStartTime();
       db_impl_->SyncCallFlush(compaction_jobs_);
+      auto end_time = GetStartTime();
+
       idx = 0;
+
+      uint64_t total_out_size = 0;
+      for (auto t : compaction_jobs_) {
+        total_out_size += t->out_file_size;
+      }
+
+      RECORD_INFO("Flush to base: %.2fMB, %.2fMB, %.3lfs, %.3lf\n",
+                  total_out_size / 1048576.0, total_out_size / 1048576.0,
+                  (end_time - start_time) * 1e-6, start_time * 1e-6);
     }
   }
 
@@ -538,7 +551,19 @@ void Compactor::Reset() {
     for (int i = 0; i < idx; ++i) {
       last_jobs.push_back(compaction_jobs_[i]);
     }
+
+    auto start_time = GetStartTime();
     db_impl_->SyncCallFlush(last_jobs);
+    auto end_time = GetStartTime();
+
+    uint64_t total_out_size = 0;
+    for (auto t : last_jobs) {
+      total_out_size += t->out_file_size;
+    }
+
+    RECORD_INFO("Flush to base: %.2fMB, %.2fMB, %.3lfs, %.3lf\n",
+                total_out_size / 1048576.0, total_out_size / 1048576.0,
+                (end_time - start_time) * 1e-6, start_time * 1e-6);
   }
 
   MemTotalSize.store(0);
@@ -676,6 +701,7 @@ void Compactor::CompactionPreprocess(SingleCompactionJob* job) {
   InnerNode* cur_parent = nullptr;
 
   std::vector<KVStruct> rewrite_kv;
+  rewrite_kv.reserve(256);
 
   InnerNode* cur_node = start_node->next_node;
   while (cur_node != next_start_node) {

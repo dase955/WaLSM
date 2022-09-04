@@ -23,6 +23,9 @@ namespace {
   const std::string PROP_NAME = "rocksdb.dbname";
   const std::string PROP_NAME_DEFAULT = "";
 
+  const std::string PROP_NVM_NAME = "rocksdb.nvm_path";
+  const std::string PROP_NVM_NAME_DEFAULT = "";
+
   const std::string PROP_FORMAT = "rocksdb.format";
   const std::string PROP_FORMAT_DEFAULT = "single";
 
@@ -186,12 +189,14 @@ void RocksdbDB::Init() {
   }
 
   const std::string &db_path = props.GetProperty(PROP_NAME, PROP_NAME_DEFAULT);
+  const std::string &nvm_path = props.GetProperty(PROP_NVM_NAME, PROP_NVM_NAME_DEFAULT);
   if (db_path == "") {
     throw utils::Exception("RocksDB db path is missing");
   }
 
   rocksdb::Options opt;
   opt.create_if_missing = true;
+  opt.nvm_path = nvm_path;
   std::vector<rocksdb::ColumnFamilyDescriptor> cf_descs;
   std::vector<rocksdb::ColumnFamilyHandle *> cf_handles;
   GetOptions(props, &opt, &cf_descs);
@@ -268,6 +273,7 @@ void RocksdbDB::GetOptions(const utils::Properties &props, rocksdb::Options *opt
     }
 
     int val = std::stoi(props.GetProperty(PROP_MAX_BG_JOBS, PROP_MAX_BG_JOBS_DEFAULT));
+    long lval;
     if (val != 0) {
       opt->max_background_jobs = val;
     }
@@ -279,9 +285,9 @@ void RocksdbDB::GetOptions(const utils::Properties &props, rocksdb::Options *opt
     if (val != 0) {
       opt->target_file_size_multiplier = val;
     }
-    val = std::stoi(props.GetProperty(PROP_MAX_BYTES_FOR_LEVEL_BASE, PROP_MAX_BYTES_FOR_LEVEL_BASE_DEFAULT));
-    if (val != 0) {
-      opt->max_bytes_for_level_base = val;
+    lval = std::stol(props.GetProperty(PROP_MAX_BYTES_FOR_LEVEL_BASE, PROP_MAX_BYTES_FOR_LEVEL_BASE_DEFAULT));
+    if (lval != 0) {
+      opt->max_bytes_for_level_base = lval;
     }
     val = std::stoi(props.GetProperty(PROP_WRITE_BUFFER_SIZE, PROP_WRITE_BUFFER_SIZE_DEFAULT));
     if (val != 0) {

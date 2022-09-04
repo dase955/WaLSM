@@ -29,11 +29,11 @@ void Measurements::Report(Operation op, uint64_t latency) {
          && !latency_max_[op].compare_exchange_weak(prev_max, latency, std::memory_order_relaxed));
 }
 
-std::string Measurements::GetStatusMsg() {
+std::string Measurements::GetStatusMsg(uint64_t& prev_done, int interval) {
   std::ostringstream msg_stream;
   msg_stream.precision(2);
   uint64_t total_cnt = 0;
-  msg_stream << std::fixed << " operations;";
+  msg_stream << std::fixed;
   for (int i = 0; i < MAXOPTYPE; i++) {
     Operation op = static_cast<Operation>(i);
     uint64_t cnt = GetCount(op);
@@ -50,7 +50,10 @@ std::string Measurements::GetStatusMsg() {
                << "]";
     total_cnt += cnt;
   }
-  return std::to_string(total_cnt) + msg_stream.str();
+  std::string out = std::to_string(total_cnt) + " operations, " +
+    std::to_string((total_cnt - prev_done) / interval) + " ops/s;" + msg_stream.str();
+  prev_done = total_cnt;
+  return out;
 }
 
 void Measurements::Reset() {
