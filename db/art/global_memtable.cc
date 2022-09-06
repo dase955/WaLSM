@@ -78,6 +78,7 @@ void FlushBuffer(InnerNode* leaf, int row) {
   PERSIST(node, CACHE_LINE_SIZE);
 
   SET_NODE_BUFFER_SIZE(leaf->status_, 0);
+  memset(leaf->buffer_, 0, 256);
 }
 
 //////////////////////////////////////////////////////////

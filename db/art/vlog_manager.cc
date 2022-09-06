@@ -38,6 +38,9 @@ int SearchVptr(InnerNode* inner_node, uint32_t hash, int rows,
   int search_rows = (rows + 1) / 2 - 1;
   int size = rows * 16;
 
+  KVStruct first_kv;
+  int first_index = -1;
+
   KVStruct kv_info;
   Slice got_key;
   int found_times = 0;
@@ -70,7 +73,17 @@ int SearchVptr(InnerNode* inner_node, uint32_t hash, int rows,
           vptr = data[index * 2 + 1];
           return index;
         } else {
-          data[index * 2] = data[index * 2 + 1] = 0;
+          inner_node->estimated_size_ -= kv_info.kv_size;
+          if (inner_node->heat_group_) {
+            inner_node->heat_group_->UpdateSqueezedSize(kv_info.kv_size);
+          }
+          assert(first_index >= 0);
+          int insert_times = first_kv.insert_times + kv_info.insert_times;
+          first_kv.insert_times = std::min(insert_times, 127);
+          nvm_node->data[first_index * 2 + 1] = first_kv.vptr;
+
+          nvm_node->data[index * 2] = nvm_node->data[index * 2 + 1] = 0;
+          nvm_node->meta.fingerprints_[index] = 0;
           return -1;
         }
       }
@@ -78,6 +91,11 @@ int SearchVptr(InnerNode* inner_node, uint32_t hash, int rows,
       vlog_manager->GetKey(kv_info.actual_vptr, got_key);
       if (likely(got_key == search_key)) {
         ++found_times;
+        if (found_times == 1) {
+          first_kv.hash = data[index * 2];
+          first_kv.vptr = data[index * 2 + 1];
+          first_index = index;
+        }
       }
     }
   }
@@ -144,7 +162,7 @@ VLogManager::VLogManager(const DBOptions& options, bool recovery)
 VLogManager::~VLogManager() {
   StopThread();
   printf("gc used segments = %d, gc freed segments = %d\n",
-         gc_freed_.load(), gc_freed_.load() - gc_used_.load());
+         gc_used_.load(), gc_freed_.load() - gc_used_.load());
 }
 
 void VLogManager::Recover() {
@@ -473,6 +491,7 @@ void VLogManager::BGWork() {
             }
           }
           ++index;
+          pmem_persist(inner_node->nvm_node_, 4096);
         }
       }
     }
@@ -634,6 +653,7 @@ float VLogManager::Estimate() {
 void VLogManager::MaybeRewrite(KVStruct& kv_info) {
   uint64_t actual_vptr = kv_info.actual_vptr;
   auto index = actual_vptr >> 20;
+  auto header = GetHeader(index);
 
   segment_statuses_[index].mutex.lock();
   auto status = segment_statuses_[index].status;
