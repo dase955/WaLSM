@@ -738,13 +738,14 @@ void GlobalMemtable::SplitLeaf(InnerNode* leaf, size_t level,
 // This function is responsible for unlocking OptLock
 void GlobalMemtable::InsertIntoLeaf(InnerNode* leaf, KVStruct& kv_info,
                                     size_t level) {
-  int write_pos = GET_NODE_BUFFER_SIZE(++leaf->status_) << 1;
-
-  leaf->buffer_[write_pos - 2] = kv_info.hash;
-  leaf->buffer_[write_pos - 1] = kv_info.vptr;
+  int write_pos = GET_NODE_BUFFER_SIZE(leaf->status_) << 1;
+  leaf->buffer_[write_pos] = kv_info.hash;
+  leaf->buffer_[write_pos + 1] = kv_info.vptr;
+  MEMORY_BARRIER;
+  ++leaf->status_;
   leaf->estimated_size_ += kv_info.kv_size;
 
-  if (likely(write_pos < 32)) {
+  if (likely(write_pos < 30)) {
     leaf->opt_lock_.unlock();
     leaf->heat_group_->UpdateSize(kv_info.kv_size);
     leaf->heat_group_->UpdateHeat();

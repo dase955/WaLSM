@@ -9,6 +9,7 @@
 #include <deque>
 #include <mutex>
 #include <condition_variable>
+#include "db/art/rwspinlock.h"
 
 #include "heat_group.h"
 
@@ -97,5 +98,102 @@ class TQueueConcurrent {
 template class TQueueConcurrent<GroupOperation>;
 
 template class TQueueConcurrent<char *>;
+
+class SegmentQueue {
+ public:
+  SegmentQueue(int max_count) {
+    count_ = max_count * 2;
+    queue_ = new int[max_count * 2];
+    for (int i = 0; i < count_; ++i) {
+      queue_[i] = -1;
+      garbage_count_[i] = 0;
+    }
+
+    vptr_map = std::vector<std::unordered_map<uint32_t, uint64_t>>(1024);
+    for (int i = 0; i < 1024; ++i) {
+      vptr_map[i].clear();
+    }
+  }
+
+  ~SegmentQueue() {
+    delete[] queue_;
+  }
+
+  int GetSegment() {
+    auto tail = tail_.load(std::memory_order_relaxed);
+    int check_count = (tail - head_) / 16;
+
+    int max_garbage_count = 0;
+    int chosen_slot = -1;
+    int chosen_segment = -1;
+
+    for (int i = head_; i < head_ + check_count; ++i) {
+      int slot = i % count_;
+      int segment_id = queue_[slot];
+
+      if (segment_id != -1 && garbage_count_[segment_id] > max_garbage_count) {
+        chosen_slot = slot;
+        chosen_segment = segment_id;
+        max_garbage_count =
+            garbage_count_[segment_id].load(std::memory_order_relaxed);
+      }
+    }
+
+    // prune
+    while (queue_[head_ % count_] == -1) {
+      ++head_;
+    }
+
+    if (unlikely(chosen_slot == -1)) {
+      chosen_slot = (head_++) % count_;
+      chosen_segment = queue_[chosen_slot];
+    }
+
+    assert(chosen_segment >= 0);
+    queue_[chosen_slot] = -1;
+    return chosen_segment;
+  }
+
+  void PushSegment(int segment_id) {
+    int cur_tail = tail_.load(std::memory_order_relaxed);
+    while (!tail_.compare_exchange_strong(cur_tail, cur_tail + 1));
+    queue_[(cur_tail - 1) % count_] = segment_id;
+  }
+
+  void ClearGarbage(int segment_id) {
+    garbage_count_[segment_id] = 0;
+  }
+
+  void AddGarbage(uint32_t hash, uint64_t vptr) {
+    auto bucket_id = hash & 1023;
+    std::lock_guard<RWSpinLock> lk(map_locks[bucket_id]);
+    auto& map = vptr_map[bucket_id];
+    auto iter = map.find(hash);
+    if (unlikely(iter == map.end())) {
+      map[hash] = vptr;
+      return;
+    }
+
+    auto old_vptr = iter->second;
+    map[hash] = vptr;
+    ++garbage_count_[old_vptr >> 20];
+  }
+
+ private:
+  int head_ = 0;
+
+  std::atomic<int> tail_{1};
+
+  int count_;
+
+  int* queue_;
+
+  std::atomic<int> garbage_count_[8192];
+
+  std::vector<std::unordered_map<uint32_t, uint64_t>> vptr_map;
+
+  RWSpinLock map_locks[1024];
+
+};
 
 }  // namespace ROCKSDB_NAMESPACE

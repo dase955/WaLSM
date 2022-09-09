@@ -410,7 +410,7 @@ class Inserter {
 void DoTest(double zipf, double read_ratio) {
   int thread_num = 16;
   int total_count = 320000000;
-  int load_count = 100000000;
+  int load_count = 80000000;
   uint64_t sample_range = 1000000000ULL;
 
   Options options;

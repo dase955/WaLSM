@@ -414,10 +414,10 @@ void Compactor::BGWork() {
     total_rewrite.store(0, std::memory_order_relaxed);
 
     RECORD_DEBUG("free pages: "
-        "[%zu, %zu(%.2f)], size: [%.2fM, %.2fM, %.2fM]; group squeezed %.2fM, rewrite: %d, "
+        "[%zu, %zu], size: [%.2fM, %.2fM, %.2fM]; group squeezed %.2fM, rewrite: %d, "
         "time: [%.2fs, %.2fs, %.2fs]\n",
         GetNodeAllocator()->GetNumFreePages(),
-        vlog_manager_->free_segments_.size(), vlog_manager_->Estimate(),
+        vlog_manager_->free_segments_.size(),
         mem_total_size, compacted_size, total_squeezed_size,
         squeezed_in_compaction, rewrite_count,
         preprocess_time, flush_time, postprocess_time);
