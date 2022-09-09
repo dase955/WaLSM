@@ -38,19 +38,18 @@ struct VLogSegmentHeader {
 };
 
 struct alignas(CACHE_LINE_SIZE) GCData {
-  std::string record;
-  uint64_t    actual_vptr;
-  Slice       key;
+  Slice    record;
+  Slice    key;
+  uint64_t actual_vptr;
 
   GCData() = default;
 
-  GCData(uint32_t key_start, uint32_t key_length,
-         uint64_t actual_vptr_, std::string& record_)
-      : record(std::move(record_)),
-        actual_vptr(actual_vptr_),
-        key(record.data() + key_start, key_length) {};
+  GCData(const char* pmemptr, const char* record_start, int record_len,
+         const char* key_start, int key_len)
+      : record(Slice(record_start, record_len)),
+        key(Slice(key_start, key_len)),
+        actual_vptr(record_start - pmemptr) {};
 };
-
 
 class GlobalMemtable;
 
@@ -94,9 +93,9 @@ class VLogManager : public BackgroundThread {
 
   void FreeQueue();
 
-  float Estimate();
-
   void MaybeRewrite(KVStruct& kv_info);
+
+  SegmentQueue* used_segments_;
 
  private:
   void BGWork() override;
@@ -107,9 +106,7 @@ class VLogManager : public BackgroundThread {
 
   void PopFreeSegment();
 
-  void WriteToNewSegment(std::string& record, uint64_t& new_vptr);
-
-  char* ChooseSegmentToGC();
+  void WriteToNewSegment(Slice& record, uint64_t& new_vptr);
 
   void ReadAndSortData(std::vector<char*>& segments);
 
@@ -133,8 +130,6 @@ class VLogManager : public BackgroundThread {
 
   TQueueConcurrent<char*> free_segments_;
 
-  TQueueConcurrent<char*> used_segments_;
-
   // segment should push into a separate queue after gc,
   // because compaction thread may still need these segments.
   TQueueConcurrent<char*> gc_pages_;
@@ -150,11 +145,10 @@ class VLogManager : public BackgroundThread {
   const uint64_t vlog_header_size_;
   const uint64_t vlog_bitmap_size_;
   const size_t   force_gc_ratio_;
-  const float    compacted_ratio_threshold_ = 0.5;
 
   std::atomic<int> gc_freed_{0};
   std::atomic<int> gc_used_{0};
-
+  char*          stored_segment_keys_;
   StatusLock*    segment_statuses_;
 };
 

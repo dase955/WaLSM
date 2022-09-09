@@ -71,7 +71,7 @@ struct InnerNode {
   OptLock     opt_lock_;
   std::atomic<int32_t>     estimated_size_;   // Estimated kv size in this node
   int32_t     squeezed_size_;
-  volatile uint32_t    status_;           // node status, see macros.h
+  uint32_t    status_;           // node status, see macros.h
   int64_t     oldest_key_time_;  // Just for compatibility
 
   InnerNode();
