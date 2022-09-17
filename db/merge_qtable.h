@@ -5,6 +5,8 @@
 #pragma once
 
 #include <unordered_map>
+#include <vector>
+#include <random>
 
 namespace ROCKSDB_NAMESPACE {
 

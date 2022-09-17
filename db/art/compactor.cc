@@ -5,6 +5,7 @@
 #include "compactor.h"
 
 #include <iostream>
+#include <unistd.h>
 
 #include <db/db_impl/db_impl.h>
 
@@ -790,6 +791,21 @@ void Compactor::CompactionPostprocess(SingleCompactionJob* job) {
   }
 
   job->group_->status_.store(kGroupWaitMove, std::memory_order_relaxed);
+}
+
+void TimerCompaction::SetDB(DBImpl* db_impl) {
+  this->db_impl_ = db_impl;
+}
+
+void TimerCompaction::StopCompaction() {
+  this->flag_.store(false);
+}
+
+void TimerCompaction::BGWork() {
+  while (flag_.load()) {
+    sleep(interval_);
+    db_impl_->TryScheduleCompaction();
+  }
 }
 
 } // namespace ROCKSDB_NAMESPACE

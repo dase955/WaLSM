@@ -119,4 +119,21 @@ void TryCreateIterator();
 
 void DeleteIterator();
 
+
+class TimerCompaction : public BackgroundThread {
+  public:
+    TimerCompaction(uint64_t interval) : interval_(interval), flag_(true) {}
+
+    void SetDB(DBImpl* db_impl);
+
+    void StopCompaction();
+
+  private:
+    void BGWork() override;
+
+    uint64_t interval_;
+    std::atomic<bool> flag_;
+    DBImpl* db_impl_;
+};
+
 } // namespace ROCKSDB_NAMESPACE

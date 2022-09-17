@@ -903,6 +903,12 @@ class DBImpl : public DB {
 
   InstrumentedMutex* mutex() const { return &mutex_; }
 
+  void TryScheduleCompaction() {
+    mutex_.Lock();
+    this->MaybeScheduleFlushOrCompaction();
+    mutex_.Unlock();
+  }
+
   // Initialize a brand new DB. The DB directory is expected to be empty before
   // calling it. Push new manifest file name into `new_filenames`.
   Status NewDB(std::vector<std::string>* new_filenames);
@@ -1886,6 +1892,8 @@ class DBImpl : public DB {
   GlobalMemtable* global_memtable_;
 
   Compactor* compactor_;
+
+  TimerCompaction* compact_timer_;
 
   HeatGroupManager* group_manager_;
 

@@ -409,6 +409,9 @@ Compaction* UniversalCompactionBuilder::PickCompaction() {
 
   Compaction* c = nullptr;
 
+  if (c == nullptr) {
+    c = PickCompactionForSizeMarked();
+  }
 
   if (c == nullptr &&
       sorted_runs_.size() >=
@@ -419,10 +422,6 @@ Compaction* UniversalCompactionBuilder::PickCompaction() {
 
   if (c == nullptr) {
     c = PickCompactionForQLearning();
-  }
-
-  if (c == nullptr) {
-    c = PickCompactionForSizeMarked();
   }
 
   //  if (mutable_cf_options_.compaction_options_universal.allow_trivial_move ==

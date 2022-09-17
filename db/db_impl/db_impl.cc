@@ -305,6 +305,11 @@ DBImpl::DBImpl(const DBOptions& options, const std::string& dbname,
   compactor_->SetGroupManager(group_manager_);
   compactor_->SetVLogManager(vlog_manager_);
   compactor_->StartThread();
+
+  compact_timer_ = new TimerCompaction(3);
+  compact_timer_->SetDB(this);
+  compact_timer_->StartThread();
+  
 }
 
 Status DBImpl::Resume() {
