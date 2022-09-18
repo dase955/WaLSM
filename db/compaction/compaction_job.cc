@@ -774,12 +774,16 @@ Status CompactionJob::Install(const MutableCFOptions& mutable_cf_options) {
         stats.bytes_written / static_cast<double>(stats.micros);
   }
 
-  RECORD_INFO("Compaction: %.2fMB, %.3lf, %.3lf, %.5fs, %.3fs, %ld\n",
+  RECORD_INFO("Compaction: %.2fMB, %.3lf, %.3lf, %.5fs, %.3fs, [%zu %zu %zu %zu], %ld \n",
               stats.bytes_written / 1048576.0f,
               read_amp, write_amp,
               stats.micros * 1e-6,
               (GetStartTime() - stats.micros) * 1e-6,
-              compact_->compaction->output_level());
+              compact_->compaction->output_level(),
+              vstorage->NumLevelBytes(0),
+              vstorage->NumLevelBytes(1),
+              vstorage->NumLevelBytes(2),
+              vstorage->NumLevelBytes(3));
 
   ROCKS_LOG_BUFFER(
       log_buffer_,
