@@ -1061,7 +1061,6 @@ void CompactionJob::ProcessKeyValueCompaction(SubcompactionState* sub_compact) {
     if (sub_compact->compaction->output_level() != 0 &&
         sub_compact->current_output_file_size >=
             sub_compact->compaction->max_output_file_size()) {
-      auto t = sub_compact->compaction->max_output_file_size();
       // (1) this key terminates the file. For historical reasons, the iterator
       // status before advancing will be given to FinishCompactionOutputFile().
       output_file_ended = true;
