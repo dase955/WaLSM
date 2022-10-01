@@ -302,6 +302,12 @@ bool Compaction::IsTrivialMove() const {
   // If start_level_== output_level_, the purpose is to force compaction
   // filter to be applied to that level, and thus cannot be a trivial move.
 
+  // level0 and level1 files are not in same directory,so we cannot
+  // do trivial move
+  if (start_level_ == 0) {
+    return false;
+  }
+
   // Check if start level have files with overlapping ranges
   if (start_level_ == 0 && input_vstorage_->level0_non_overlapping() == false) {
     // We cannot move files from L0 to L1 if the files are overlapping

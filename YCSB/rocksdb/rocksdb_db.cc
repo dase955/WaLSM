@@ -201,7 +201,6 @@ void RocksdbDB::Init() {
   }
 
   rocksdb::Options opt;
-  std::vector<rocksdb::ColumnFamilyDescriptor> cf_descs;
   std::vector<rocksdb::ColumnFamilyHandle *> cf_handles;
 
   opt.create_if_missing = true;
@@ -210,15 +209,15 @@ void RocksdbDB::Init() {
   opt.enable_pipelined_write = false;
   opt.compression = rocksdb::kNoCompression;
   opt.compaction_style = rocksdb::kCompactionStyleLevel;
-  //opt.max_bytes_for_level_base = 12LL << 30;
   opt.target_file_size_base = 64LL << 20;
-  opt.level0_file_num_compaction_trigger = 32;
+  opt.level0_file_num_compaction_trigger = 4;
   opt.IncreaseParallelism(32);
   opt.statistics = rocksdb::CreateDBStatistics();
   opt.nvm_path = nvm_path;
   opt.wal_dir = wal_dir;
 
   rocksdb::BlockBasedTableOptions block_based_options;
+  block_based_options.pin_top_level_index_and_filter = false;
   block_based_options.pin_l0_filter_and_index_blocks_in_cache = false;
   block_based_options.cache_index_and_filter_blocks_with_high_priority = false;
   block_based_options.index_type = rocksdb::BlockBasedTableOptions::kTwoLevelIndexSearch;
@@ -241,11 +240,7 @@ void RocksdbDB::Init() {
       throw utils::Exception(std::string("RocksDB DestroyDB: ") + s.ToString());
     }
   }
-  if (cf_descs.empty()) {
-    s = rocksdb::DB::Open(opt, db_path, &db_);
-  } else {
-    s = rocksdb::DB::Open(opt, db_path, cf_descs, &cf_handles, &db_);
-  }
+  s = rocksdb::DB::Open(opt, db_path, &db_);
   if (!s.ok()) {
     throw utils::Exception(std::string("RocksDB Open: ") + s.ToString());
   }
