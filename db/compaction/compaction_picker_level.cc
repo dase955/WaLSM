@@ -403,8 +403,9 @@ uint32_t LevelCompactionBuilder::GetPathId(
     current_path_size = ioptions.cf_paths[p].target_size;
   }
 
-  // always use disk path for compaction
-  return 0;
+  // Compaction level 0 file to nvm(path 1) and compaction other files to
+  // disk(path 0)
+  return level == 0 ? 1 : 0;
 }
 
 bool LevelCompactionBuilder::PickFileToCompact() {

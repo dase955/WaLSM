@@ -210,7 +210,8 @@ void RocksdbDB::Init() {
   opt.compression = rocksdb::kNoCompression;
   opt.compaction_style = rocksdb::kCompactionStyleLevel;
   opt.target_file_size_base = 64LL << 20;
-  opt.level0_file_num_compaction_trigger = 4;
+  opt.level0_file_num_compaction_trigger = 124;
+  opt.max_bytes_for_level_base = 24LL << 30;
   opt.IncreaseParallelism(32);
   opt.statistics = rocksdb::CreateDBStatistics();
   opt.nvm_path = nvm_path;

@@ -477,7 +477,8 @@ class ColumnFamilyData {
     kPendingCompactionBytes,
   };
   static std::pair<WriteStallCondition, WriteStallCause>
-  GetWriteStallConditionAndCause(int num_unflushed_memtables, int num_l0_files,
+  GetWriteStallConditionAndCause(int num_unflushed_memtables,
+                                 int num_l0_files, uint64_t num_l0_size,
                                  uint64_t num_compaction_needed_bytes,
                                  const MutableCFOptions& mutable_cf_options);
 

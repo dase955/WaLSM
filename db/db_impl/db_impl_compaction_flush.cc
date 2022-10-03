@@ -1992,7 +1992,7 @@ Status DBImpl::WaitUntilFlushWouldNotStallWrites(ColumnFamilyData* cfd,
       write_stall_condition =
           ColumnFamilyData::GetWriteStallConditionAndCause(
               cfd->imm()->NumNotFlushed() + 1,
-              vstorage->l0_delay_trigger_count() + 1,
+              vstorage->l0_delay_trigger_count() + 1, 0,
               vstorage->estimated_compaction_needed_bytes(), mutable_cf_options)
               .first;
     } while (write_stall_condition != WriteStallCondition::kNormal);
