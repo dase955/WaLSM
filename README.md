@@ -1,32 +1,45 @@
-## RocksDB: A Persistent Key-Value Store for Flash and RAM Storage
+# WaLSM
 
-[![CircleCI Status](https://circleci.com/gh/facebook/rocksdb.svg?style=svg)](https://circleci.com/gh/facebook/rocksdb)
-[![TravisCI Status](https://travis-ci.org/facebook/rocksdb.svg?branch=master)](https://travis-ci.org/facebook/rocksdb)
-[![Appveyor Build status](https://ci.appveyor.com/api/projects/status/fbgfu0so3afcno78/branch/master?svg=true)](https://ci.appveyor.com/project/Facebook/rocksdb/branch/master)
-[![PPC64le Build Status](http://140.211.168.68:8080/buildStatus/icon?job=Rocksdb)](http://140.211.168.68:8080/job/Rocksdb)
+WaLSM is a workload-aware KV store for NVM-SSD hybrid storage. It is designed for reducing write amplifications on SSD with NVM, and auto index tuning on varying workloads.
 
-RocksDB is developed and maintained by Facebook Database Engineering Team.
-It is built on earlier work on [LevelDB](https://github.com/google/leveldb) by Sanjay Ghemawat (sanjay@google.com)
-and Jeff Dean (jeff@google.com)
+## Build
 
-This code is a library that forms the core building block for a fast
-key-value server, especially suited for storing data on flash drives.
-It has a Log-Structured-Merge-Database (LSM) design with flexible tradeoffs
-between Write-Amplification-Factor (WAF), Read-Amplification-Factor (RAF)
-and Space-Amplification-Factor (SAF). It has multi-threaded compactions,
-making it especially suitable for storing multiple terabytes of data in a
-single database.
+Our code is on `dev` branch.
 
-Start with example usage here: https://github.com/facebook/rocksdb/tree/master/examples
+Currently, we only support building with Makefile. Use
 
-See the [github wiki](https://github.com/facebook/rocksdb/wiki) for more explanation.
+```
+make -j32 static_lib
+```
 
-The public interface is in `include/`.  Callers should not include or
-rely on the details of any other header files in this package.  Those
-internal APIs may be changed without warning.
+to build the static library.
 
-Design discussions are conducted in https://www.facebook.com/groups/rocksdb.dev/ and https://rocksdb.slack.com/
+## Test
 
-## License
+We use the following settings for testing performance:
 
-RocksDB is dual-licensed under both the GPLv2 (found in the COPYING file in the root directory) and Apache 2.0 License (found in the LICENSE.Apache file in the root directory).  You may select, at your option, one of the above-listed licenses.
+```C++
+  opt.create_if_missing = true;
+  opt.use_direct_io_for_flush_and_compaction = true;
+  opt.use_direct_reads = true;
+  opt.compression = rocksdb::kNoCompression;
+  opt.compaction_style = rocksdb::kCompactionStyleUniversal;
+  opt.IncreaseParallelism(32);
+  opt.statistics = rocksdb::CreateDBStatistics();
+  opt.nvm_path = nvm_path; // use nvm path here
+
+  rocksdb::BlockBasedTableOptions block_based_options;
+  block_based_options.pin_top_level_index_and_filter = false;
+  block_based_options.pin_l0_filter_and_index_blocks_in_cache = false;
+  block_based_options.cache_index_and_filter_blocks_with_high_priority = false;
+  block_based_options.index_type = rocksdb::BlockBasedTableOptions::kTwoLevelIndexSearch;
+  block_based_options.partition_filters = true;
+  block_based_options.cache_index_and_filter_blocks = true;
+  block_based_options.filter_policy.reset(rocksdb::NewBloomFilterPolicy(10, false));
+  block_based_options.block_cache =
+      rocksdb::NewLRUCache(static_cast<size_t>(128 * 1024 * 1024));
+  opt.table_factory.reset(rocksdb::NewBlockBasedTableFactory(block_based_options));
+  opt.memtable_prefix_bloom_size_ratio = 0.02;
+```
+
+Note that our compacting algorithm is based on `Universal Compaction`, using other RocksDB default compacting algorithm may cause unexpected behaviors.
