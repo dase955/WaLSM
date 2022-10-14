@@ -1061,7 +1061,8 @@ class GlobalMemTableIterator : public InternalIterator {
     }
 
     InnerNode* next_node;
-    while (true) {
+    keys_in_node_.clear();
+    while (keys_in_node_.empty()) {
       next_node = current_node_->next_node;
       UnlockNode();
       current_node_ = next_node;
@@ -1074,7 +1075,6 @@ class GlobalMemTableIterator : public InternalIterator {
       LockNode();
       if (likely(IS_LEAF(current_node_))) {
         ReadNode();
-        break;
       }
     }
   }
