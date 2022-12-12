@@ -378,44 +378,29 @@ void DoTest(std::string test_name) {
   options.IncreaseParallelism(16);
 
   zipf = new YCSBZipfianGenerator(
-      80000000, 320000000, 1000000000ULL, 0.98, 26.4);
+      100000000, 320000000, 1000000000ULL, 0.98, 26.4);
   zipf->Prepare();
 
   DB* db;
-  DB::Open(options, "/tmp/db_old_custom", &db);
+  DB::Open(options, "/mnt/nvme/chen/hotness_test", &db);
 
   std::thread read_threads[thread_num];
   std::thread write_threads[thread_num];
   std::thread check_threads[thread_num];
   for (int i = 0; i < thread_num; ++i) {
     write_threads[i] = std::thread(ZipfianPutThread, db);
-    read_threads[i] = std::thread(GetThread, db);
-  }
-
-  for (auto & thread : read_threads) {
-    thread.join();
+    //read_threads[i] = std::thread(GetThread, db);
   }
 
   for (auto & thread : write_threads) {
     thread.join();
   }
 
-
-  auto iter = db->NewIterator(ReadOptions());
-
-  std::string key = NumToKey(written[total_count / 10]);
-  iter->Seek(key);
-
-  for (int i = 0; i < 100 && iter->Valid(); ++i) {
-    auto k = iter->key();
-    std::string kk(k.data(), k.size());
-    std::cout << kk << std::endl;
-    iter->Next();
+  for (auto & thread : read_threads) {
+    //thread.join();
   }
 
-  delete iter;
-
-  //return;
+  return;
 
   //db->Reset();
 

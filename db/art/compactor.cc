@@ -333,6 +333,8 @@ void Compactor::BGWork() {
 
     IteratorLock.LockHighPri();
 
+    int parallel_job_num = 0;
+
     {
       std::unique_lock<std::mutex> lock{mutex_};
       group_manager_->AddOperation(nullptr, kOperationChooseCompaction, false, this);
@@ -346,6 +348,7 @@ void Compactor::BGWork() {
         continue;
       }
 
+      parallel_job_num = std::min((int)chosen_groups_.size(), 4);
       for (size_t i = 0; i < chosen_groups_.size(); ++i) {
         auto job = compaction_jobs_[i];
         job->group_ = chosen_groups_[i];
@@ -355,9 +358,16 @@ void Compactor::BGWork() {
 
     auto start_time = GetStartTime();
 
-    SingleCompactionJob::thread_pool->SetJobCount(chosen_jobs_.size());
-    for (auto& job : chosen_jobs_) {
-      auto func = std::bind(&Compactor::CompactionPreprocess, this, job);
+    std::vector<std::vector<SingleCompactionJob*>> merge_jobs(parallel_job_num);
+    int cur_merge = 0;
+    for (auto chosen_job : chosen_jobs_) {
+      merge_jobs[cur_merge].push_back(chosen_job);
+      cur_merge = (cur_merge + 1) % parallel_job_num;
+    }
+
+    SingleCompactionJob::thread_pool->SetJobCount(parallel_job_num);
+    for (auto& merge_job : merge_jobs) {
+      auto func = std::bind(&Compactor::CompactionPreprocess, this, merge_job);
       SingleCompactionJob::thread_pool->SubmitJob(func);
     }
     SingleCompactionJob::thread_pool->Join();
@@ -365,16 +375,26 @@ void Compactor::BGWork() {
     auto preprocess_done_time = GetStartTime();
     float preprocess_time = (preprocess_done_time - start_time) * 1e-6;
 
-    db_impl_->SyncCallFlush(chosen_jobs_);
+    // Sort jobs in each group by key order
+    for (auto& mege_job : merge_jobs) {
+      std::sort(mege_job.begin(), mege_job.end(), [](SingleCompactionJob* job1, SingleCompactionJob* job2){
+        return job1->kv_slices[0].first < job2->kv_slices[0].first;
+      });
+    }
+
+    db_impl_->SyncCallFlush(merge_jobs);
 
     auto flush_done_time = GetStartTime();
     float flush_time = (flush_done_time - preprocess_done_time) * 1e-6;
 
     uint64_t total_out_size = 0;
-    SingleCompactionJob::thread_pool->SetJobCount(chosen_jobs_.size());
     for (auto job : chosen_jobs_) {
       total_out_size += job->out_file_size;
-      auto func = std::bind(&Compactor::CompactionPostprocess, this, job);
+    }
+
+    SingleCompactionJob::thread_pool->SetJobCount(parallel_job_num);
+    for (auto& merge_job : merge_jobs) {
+      auto func = std::bind(&Compactor::CompactionPostprocess, this, merge_job);
       SingleCompactionJob::thread_pool->SubmitJob(func);
     }
     SingleCompactionJob::thread_pool->Join();
@@ -529,9 +549,11 @@ void Compactor::Reset() {
       }
     }
 
+    // TODO: change logic
     if (++idx == num_parallel_compaction_) {
       auto start_time = GetStartTime();
-      db_impl_->SyncCallFlush(compaction_jobs_);
+      std::vector<std::vector<SingleCompactionJob*>> temp{compaction_jobs_};
+      db_impl_->SyncCallFlush(temp);
       auto end_time = GetStartTime();
 
       idx = 0;
@@ -554,7 +576,8 @@ void Compactor::Reset() {
     }
 
     auto start_time = GetStartTime();
-    db_impl_->SyncCallFlush(last_jobs);
+    std::vector<std::vector<SingleCompactionJob*>> temp{last_jobs};
+    db_impl_->SyncCallFlush(temp);
     auto end_time = GetStartTime();
 
     uint64_t total_out_size = 0;
@@ -686,111 +709,115 @@ void ReadData(InnerNode* node, SingleCompactionJob* job,
   compacted_size -= cur_size;
 }
 
-void Compactor::CompactionPreprocess(SingleCompactionJob* job) {
-  auto chosen_group = job->group_;
-  InnerNode* start_node = chosen_group->first_node_;
-  InnerNode* next_start_node = chosen_group->next_seq->first_node_;
-  assert(IS_GROUP_START(start_node));
-  assert(IS_GROUP_START(next_start_node));
+void Compactor::CompactionPreprocess(std::vector<SingleCompactionJob*> jobs) {
+  for (auto job : jobs) {
+    auto chosen_group = job->group_;
+    InnerNode* start_node = chosen_group->first_node_;
+    InnerNode* next_start_node = chosen_group->next_seq->first_node_;
+    assert(IS_GROUP_START(start_node));
+    assert(IS_GROUP_START(next_start_node));
 
-  job->Reset();
-  job->vlog_manager_ = vlog_manager_;
+    job->Reset();
+    job->vlog_manager_ = vlog_manager_;
 
-  int32_t compacted_size = 0;
-  int64_t squeezed_size = 0;
-  std::vector<InnerNode*> children;
-  InnerNode* cur_parent = nullptr;
+    int32_t compacted_size = 0;
+    int64_t squeezed_size = 0;
+    std::vector<InnerNode*> children;
+    InnerNode* cur_parent = nullptr;
 
-  std::vector<KVStruct> rewrite_kv;
-  rewrite_kv.reserve(256);
+    std::vector<KVStruct> rewrite_kv;
+    rewrite_kv.reserve(256);
 
-  InnerNode* cur_node = start_node->next_node;
-  while (cur_node != next_start_node) {
-    cur_node->opt_lock_.lock();
-    cur_node->share_mutex_.lock();
+    InnerNode* cur_node = start_node->next_node;
+    while (cur_node != next_start_node) {
+      cur_node->opt_lock_.lock();
+      cur_node->share_mutex_.lock();
 
-    if (NOT_LEAF(cur_node) || !cur_node->heat_group_) {
+      if (NOT_LEAF(cur_node) || !cur_node->heat_group_) {
+        cur_node->share_mutex_.unlock();
+        cur_node->opt_lock_.unlock();
+        cur_node = cur_node->next_node;
+        continue;
+      }
+
+      job->oldest_key_time_ =
+          std::min(job->oldest_key_time_, cur_node->oldest_key_time_);
+
+      MEMCPY(cur_node->nvm_node_->temp_buffer, cur_node->buffer_,
+             SIZE_TO_BYTES(GET_NODE_BUFFER_SIZE(cur_node->status_)),
+             PMEM_F_MEM_NODRAIN | PMEM_F_MEM_NONTEMPORAL);
+      SET_NODE_BUFFER_SIZE(cur_node->status_, 0);
+      auto new_nvm_node = GetNodeAllocator()->AllocateNode();
+      InsertNewNVMNode(cur_node, new_nvm_node);
+      compacted_size += cur_node->estimated_size_;
+      squeezed_size += cur_node->squeezed_size_;
+
+      cur_node->estimated_size_ = 0;
+      cur_node->squeezed_size_ = 0;
+      memset(cur_node->hll_, 0, 64);
+
+      if (cur_parent && cur_node->parent_node != cur_parent) {
+        ProcessNodes(cur_parent, children, job, rewrite_kv);
+        rewrite_kv.clear();
+        children.clear();
+      }
+
+      ReadData(cur_node, job, compacted_size, rewrite_threshold_, rewrite_kv);
       cur_node->share_mutex_.unlock();
-      cur_node->opt_lock_.unlock();
+
+      children.push_back(cur_node);
+      cur_parent = cur_node->parent_node;
       cur_node = cur_node->next_node;
-      continue;
     }
 
-    job->oldest_key_time_ =
-        std::min(job->oldest_key_time_, cur_node->oldest_key_time_);
-
-    MEMCPY(cur_node->nvm_node_->temp_buffer, cur_node->buffer_,
-           SIZE_TO_BYTES(GET_NODE_BUFFER_SIZE(cur_node->status_)),
-           PMEM_F_MEM_NODRAIN | PMEM_F_MEM_NONTEMPORAL);
-    SET_NODE_BUFFER_SIZE(cur_node->status_, 0);
-    auto new_nvm_node = GetNodeAllocator()->AllocateNode();
-    InsertNewNVMNode(cur_node, new_nvm_node);
-    compacted_size += cur_node->estimated_size_;
-    squeezed_size += cur_node->squeezed_size_;
-
-    cur_node->estimated_size_ = 0;
-    cur_node->squeezed_size_ = 0;
-    memset(cur_node->hll_, 0, 64);
-
-    if (cur_parent && cur_node->parent_node != cur_parent) {
+    if (cur_parent && !children.empty()) {
       ProcessNodes(cur_parent, children, job, rewrite_kv);
-      rewrite_kv.clear();
-      children.clear();
     }
 
-    ReadData(cur_node, job, compacted_size, rewrite_threshold_, rewrite_kv);
-    cur_node->share_mutex_.unlock();
-
-    children.push_back(cur_node);
-    cur_parent = cur_node->parent_node;
-    cur_node = cur_node->next_node;
+    job->candidates.push_back(nullptr);
+    job->group_->group_size_.fetch_add(-compacted_size, std::memory_order_relaxed);
+    UpdateTotalSize(-compacted_size);
+    SqueezedSizeInCompaction.fetch_add(squeezed_size, std::memory_order_release);
+    CompactedSize.fetch_add(compacted_size, std::memory_order_release);
   }
-
-  if (cur_parent && !children.empty()) {
-    ProcessNodes(cur_parent, children, job, rewrite_kv);
-  }
-
-  job->candidates.push_back(nullptr);
-  job->group_->group_size_.fetch_add(-compacted_size, std::memory_order_relaxed);
-  UpdateTotalSize(-compacted_size);
-  SqueezedSizeInCompaction.fetch_add(squeezed_size, std::memory_order_release);
-  CompactedSize.fetch_add(compacted_size, std::memory_order_release);
 }
 
-void Compactor::CompactionPostprocess(SingleCompactionJob* job) {
-  // remove compacted node form list
-  auto cur_node = job->group_->first_node_;
-  auto node_after_end = job->group_->last_node_->next_node;
-  auto candidates = job->candidates;
-  assert(IS_GROUP_START(cur_node));
+void Compactor::CompactionPostprocess(std::vector<SingleCompactionJob*> jobs) {
+  for (auto& job : jobs) {
+    // remove compacted node form list
+    auto cur_node = job->group_->first_node_;
+    auto node_after_end = job->group_->last_node_->next_node;
+    auto candidates = job->candidates;
+    assert(IS_GROUP_START(cur_node));
 
-  auto candidate = candidates.front();
-  candidates.pop_front();
-  while (candidate && cur_node != node_after_end) {
-    std::lock_guard<RWSpinLock> link_lk(cur_node->link_lock_);
-    if (cur_node->next_node == candidate) {
-      RemoveOldNVMNode(cur_node);
-      candidate = candidates.front();
-      candidates.pop_front();
+    auto candidate = candidates.front();
+    candidates.pop_front();
+    while (candidate && cur_node != node_after_end) {
+      std::lock_guard<RWSpinLock> link_lk(cur_node->link_lock_);
+      if (cur_node->next_node == candidate) {
+        RemoveOldNVMNode(cur_node);
+        candidate = candidates.front();
+        candidates.pop_front();
+      }
+      cur_node = cur_node->next_node;
     }
-    cur_node = cur_node->next_node;
+
+    assert(candidates.empty());
+
+    for (auto removed : job->candidates_removed) {
+      GetNodeAllocator()->DeallocateNode(removed->backup_nvm_node_);
+      removed->backup_nvm_node_ = nullptr;
+    }
+
+    for (auto parent : job->candidate_parents) {
+      assert(parent->backup_art);
+      std::lock_guard<RWSpinLock> art_lk(parent->art_rw_lock_);
+      job->removed_arts.push_back(parent->backup_art);
+      parent->backup_art = nullptr;
+    }
+
+    job->group_->status_.store(kGroupWaitMove, std::memory_order_relaxed);
   }
-
-  assert(candidates.empty());
-
-  for (auto removed : job->candidates_removed) {
-    GetNodeAllocator()->DeallocateNode(removed->backup_nvm_node_);
-    removed->backup_nvm_node_ = nullptr;
-  }
-
-  for (auto parent : job->candidate_parents) {
-    assert(parent->backup_art);
-    std::lock_guard<RWSpinLock> art_lk(parent->art_rw_lock_);
-    job->removed_arts.push_back(parent->backup_art);
-    parent->backup_art = nullptr;
-  }
-
-  job->group_->status_.store(kGroupWaitMove, std::memory_order_relaxed);
 }
 
 void TimerCompaction::SetDB(DBImpl* db_impl) {

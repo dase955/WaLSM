@@ -93,7 +93,7 @@ extern Status BuildTable(
     const std::string& db_session_id = "");
 
 extern Status BuildTableFromArt(
-    SingleCompactionJob* job,
+    std::vector<SingleCompactionJob*>& jobs,
     const std::string& dbname, Env* env, FileSystem* fs,
     const ImmutableCFOptions& options,
     const MutableCFOptions& mutable_cf_options, const FileOptions& file_options,

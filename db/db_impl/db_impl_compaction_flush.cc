@@ -2502,7 +2502,7 @@ struct DBCompactionJob {
   SuperVersionContext* superversion_context;
 };
 
-void DBImpl::SyncCallFlush(std::vector<SingleCompactionJob*>& jobs) {
+void DBImpl::SyncCallFlush(std::vector<std::vector<SingleCompactionJob*>>& jobs) {
   JobContext job_context(next_job_id_.fetch_add(1), true);
 
   TEST_SYNC_POINT("DBImpl::SyncCallFlush:start");

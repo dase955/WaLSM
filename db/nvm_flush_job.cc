@@ -50,7 +50,7 @@
 
 namespace ROCKSDB_NAMESPACE {
 
-NVMFlushJob::NVMFlushJob(SingleCompactionJob* job,
+NVMFlushJob::NVMFlushJob(std::vector<SingleCompactionJob*> &jobs,
     const std::string& dbname, ColumnFamilyData* cfd,
     const ImmutableDBOptions& db_options,
     const MutableCFOptions& mutable_cf_options,
@@ -85,7 +85,7 @@ NVMFlushJob::NVMFlushJob(SingleCompactionJob* job,
       write_manifest_(write_manifest),
       edit_(nullptr),
       base_(nullptr),
-      job_(job),
+      jobs_(jobs),
       io_tracer_(io_tracer) {
   // Update the thread status to indicate flush.
   ReportStartedFlush();
@@ -160,7 +160,7 @@ void NVMFlushJob::Build() {
     auto status = db_options_.env->GetCurrentTime(&_current_time);
     const uint64_t current_time = static_cast<uint64_t>(_current_time);
 
-    uint64_t oldest_key_time = job_->oldest_key_time_;
+    uint64_t oldest_key_time = jobs_[0]->oldest_key_time_;
 
     // It's not clear whether oldest_key_time is always available. In case
     // it is not available, use current_time.
@@ -177,7 +177,7 @@ void NVMFlushJob::Build() {
 
     IOStatus io_s;
     s = BuildTableFromArt(
-        job_, dbname_, db_options_.env, db_options_.fs.get(),
+        jobs_, dbname_, db_options_.env, db_options_.fs.get(),
         *cfd_->ioptions(), mutable_cf_options_, file_options_,
         cfd_->table_cache(), &meta_,
         cfd_->internal_comparator(),

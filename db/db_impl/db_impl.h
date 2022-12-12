@@ -1675,7 +1675,7 @@ class DBImpl : public DB {
   void BackgroundCallCompaction(PrepickedCompaction* prepicked_compaction,
                                 Env::Priority thread_pri);
   void BackgroundCallFlush(Env::Priority thread_pri);
-  void SyncCallFlush(std::vector<SingleCompactionJob*>& jobs);
+  void SyncCallFlush(std::vector<std::vector<SingleCompactionJob*>>& jobs);
   void BackgroundCallPurge();
   Status BackgroundCompaction(bool* madeProgress, JobContext* job_context,
                               LogBuffer* log_buffer,

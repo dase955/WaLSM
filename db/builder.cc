@@ -353,7 +353,7 @@ Status BuildTable(
 }
 
 Status BuildTableFromArt(
-    SingleCompactionJob *job,
+    std::vector<SingleCompactionJob*>& jobs,
     const std::string& dbname, Env* env, FileSystem* fs,
     const ImmutableCFOptions& ioptions,
     const MutableCFOptions& mutable_cf_options, const FileOptions& file_options,
@@ -429,14 +429,19 @@ Status BuildTableFromArt(
         0 /*target_file_size*/, file_creation_time, db_id, db_session_id);
   }
 
-  uint64_t out_kv_size = 0;
-  for (auto& pair : job->kv_slices) {
-    auto& key = pair.first;
-    auto& value = pair.second;
-    uint64_t seq_num = DecodeFixed64(key.data() + key.size() - kNumInternalBytes);
-    builder->Add(key, value);
-    meta->UpdateBoundaries(key, value, seq_num, kTypeValue);
-    out_kv_size += (value.size() + key.size());
+  for (auto job : jobs) {
+    uint64_t out_kv_size = 0;
+
+    for (auto& pair : job->kv_slices) {
+      auto& key = pair.first;
+      auto& value = pair.second;
+      uint64_t seq_num = DecodeFixed64(key.data() + key.size() - kNumInternalBytes);
+      builder->Add(key, value);
+      meta->UpdateBoundaries(key, value, seq_num, kTypeValue);
+      out_kv_size += (value.size() + key.size());
+    }
+
+    job->out_file_size = out_kv_size;
   }
 
   TEST_SYNC_POINT("BuildTable:BeforeFinishBuildTable");
@@ -445,7 +450,6 @@ Status BuildTableFromArt(
   if (s.ok()) {
     uint64_t file_size = builder->FileSize();
     meta->fd.file_size = file_size;
-    job->out_file_size = out_kv_size;
     meta->marked_for_compaction = builder->NeedCompact();
     assert(meta->fd.GetFileSize() > 0);
     tp = builder->GetTableProperties(); // refresh now that builder is finished
