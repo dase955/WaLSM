@@ -59,7 +59,7 @@ class NVMFlushJob {
  public:
   // TODO(icanadi) make effort to reduce number of parameters here
   // IMPORTANT: mutable_cf_options needs to be alive while FlushJob is alive
-  NVMFlushJob(SingleCompactionJob* job,
+  NVMFlushJob(std::vector<SingleCompactionJob*> &jobs,
            const std::string& dbname, ColumnFamilyData* cfd,
            const ImmutableDBOptions& db_options,
            const MutableCFOptions& mutable_cf_options,
@@ -149,7 +149,7 @@ class NVMFlushJob {
   VersionEdit* edit_;
   Version* base_;
   IOStatus io_status_;
-  SingleCompactionJob* job_;
+  std::vector<SingleCompactionJob*> jobs_;
   uint64_t prev_write_nanos = 0;
   uint64_t prev_fsync_nanos = 0;
   uint64_t prev_range_sync_nanos = 0;

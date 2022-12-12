@@ -79,9 +79,9 @@ class Compactor : public BackgroundThread {
  private:
   void BGWork() override;
 
-  void CompactionPreprocess(SingleCompactionJob* job);
+  void CompactionPreprocess(std::vector<SingleCompactionJob*> jobs);
 
-  void CompactionPostprocess(SingleCompactionJob* job);
+  void CompactionPostprocess(std::vector<SingleCompactionJob*> jobs);
 
   HeatGroupManager* group_manager_ = nullptr;
 

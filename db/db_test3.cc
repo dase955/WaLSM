@@ -266,7 +266,7 @@ class YCSBLoadGenerator : public KeyGenerator {
 };
 
 int thread_num = 8;
-int total_count = 16000000;
+int total_count = 40000000;
 int count_per_thread = total_count / thread_num;
 std::atomic<int64_t> counter{0};
 std::vector<uint64_t> written(total_count);
@@ -277,15 +277,14 @@ std::string NumToKey(uint64_t key_num) {
 }
 
 std::string GenerateValueFromKey(std::string& key) {
-  int value_len = 4096;
-  int repeat_times = value_len / key.length();
+  int repeat_times = 1024UL / key.length();
   size_t len = key.length() * repeat_times;
   std::string value;
-  value.reserve(value_len);
+  value.reserve(1024);
   while (repeat_times--) {
     value += key;
   }
-  value += key.substr(0, value_len - value.length());
+  value += key.substr(0, 1024 - value.length());
   return value;
 }
 
@@ -307,7 +306,7 @@ unsigned long fnvhash64(int64_t val) {
   return hashval > 0 ? hashval : -hashval;
 }
 
-KeyGenerator* zipf;
+YCSBZipfianGenerator* zipf;
 
 void ZipfianPutThread(DB *db) {
   for (int i = 0; i < count_per_thread; ++i) {
@@ -351,31 +350,18 @@ void GetThread(DB *db) {
 std::atomic<int64_t> check_counter{0};
 
 void CheckThread(DB* db) {
-  std::random_device rd;
-  std::default_random_engine rng{rd()};
-  std::uniform_int_distribution<long> dist {1, total_count - 128};
+  for (int i = 0; i < count_per_thread; ++i) {
+    auto c = check_counter++;
 
-  for (int t = 0; t < count_per_thread; ++t) {
-    auto iter = db->NewIterator(ReadOptions());
-
-    auto c = dist(rng);
+    std::string res;
     std::string key = NumToKey(written[c]);
-    iter->Seek(key);
+    std::string expected = GenerateValueFromKey(key);
 
-    for (int i = 0; i < 100 && iter->Valid(); ++i) {
-      auto k = iter->key().ToString();
-      auto v = iter->value().ToString();
-      auto e = GenerateValueFromKey(k);
-      if (v != e) {
-        std::cout << k << " " << v << std::endl;
-      }
-
-      iter->Next();
+    auto status = db->Get(ReadOptions(), key, &res);
+    assert(!status.ok() || res == expected);
+    if (!status.ok()) {
+      std::cout << key << " Error!" << std::endl;
     }
-
-    printf("Scan done\n");
-
-    delete iter;
   }
 }
 
@@ -384,42 +370,41 @@ void DoTest(std::string test_name) {
 
   Options options;
   options.create_if_missing = true;
-  options.use_direct_io_for_flush_and_compaction = false;
-  options.use_direct_reads = false;
+  options.use_direct_io_for_flush_and_compaction = true;
+  options.use_direct_reads = true;
   options.enable_pipelined_write = true;
   options.nvm_path = "/mnt/chen/nodememory";
   options.compression = rocksdb::kNoCompression;
   options.IncreaseParallelism(16);
 
-//  zipf = new YCSBZipfianGenerator(
-//      80000000, 320000000, 1000000000ULL, 0.98, 26.4);
-  zipf = new YCSBLoadGenerator(total_count, 1000000000ULL);
+  zipf = new YCSBZipfianGenerator(
+      100000000, 320000000, 1000000000ULL, 0.98, 26.4);
   zipf->Prepare();
 
   DB* db;
-  DB::Open(options, "/mnt/nvme/chen/scan_test", &db);
+  DB::Open(options, "/mnt/nvme/chen/hotness_test", &db);
 
-  std::thread write_threads[thread_num];
   std::thread read_threads[thread_num];
+  std::thread write_threads[thread_num];
   std::thread check_threads[thread_num];
   for (int i = 0; i < thread_num; ++i) {
     write_threads[i] = std::thread(ZipfianPutThread, db);
+    //read_threads[i] = std::thread(GetThread, db);
   }
 
-  for (int i = 0; i < thread_num; ++i) {
-    read_threads[i] = std::thread(GetThread, db);
-  }
-
-  for (auto& thread : write_threads) {
-    thread.join();
-  }
-  for (auto& thread : read_threads) {
+  for (auto & thread : write_threads) {
     thread.join();
   }
 
-  db->Close();
+  for (auto & thread : read_threads) {
+    //thread.join();
+  }
 
-  std::cout << "Start test scan" << std::endl;
+  return;
+
+  //db->Reset();
+
+  std::cout << "Start test get" << std::endl;
 
   for (int i = 0; i < thread_num; ++i) {
     check_threads[i] = std::thread(CheckThread, db);
@@ -431,7 +416,6 @@ void DoTest(std::string test_name) {
 
   delete db;
 }
-
 // Note that whole DBTest and its child classes disable fsync on files
 // and directories for speed.
 // If fsync needs to be covered in a test, put it in other places.
