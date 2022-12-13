@@ -197,6 +197,7 @@ void RemoveChildren(InnerNode* parent, InnerNode* child) {
     }
 
     GetNodeAllocator()->DeallocateNode(support_node->nvm_node_);
+    UpdateAllocatedSpace(-(int64_t)sizeof(InnerNode));
     delete support_node;
   }
 

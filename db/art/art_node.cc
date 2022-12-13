@@ -17,6 +17,8 @@
 
 namespace ROCKSDB_NAMESPACE {
 
+std::atomic<int64_t> AllocatedSpace{ 0 };
+
 ArtNodeType ChooseArtNodeType(size_t size) {
   // precalculate node type
   static int type[256] = {
@@ -44,6 +46,8 @@ ArtNodeType ChooseArtNodeType(size_t size) {
 ArtNode* AllocateArt4AndInsertNodes(
     const std::vector<InnerNode*>& inner_nodes,
     const std::vector<unsigned char>& c) {
+  AllocatedSpace += sizeof(ArtNode4);
+
   auto node4 = new ArtNode4;
   for (size_t i = 0; i < c.size(); ++i) {
     node4->children_[i] = inner_nodes[i];
@@ -59,6 +63,8 @@ ArtNode* AllocateArt4AndInsertNodes(
 ArtNode* AllocateArt16AndInsertNodes(
     const std::vector<InnerNode*>& inner_nodes,
     const std::vector<unsigned char>& c) {
+  AllocatedSpace += sizeof(ArtNode16);
+
   auto node16 = new ArtNode16;
   for (size_t i = 0; i < c.size(); ++i) {
     node16->keys_[i] = c[i];
@@ -74,6 +80,8 @@ ArtNode* AllocateArt16AndInsertNodes(
 ArtNode* AllocateArt48AndInsertNodes(
     const std::vector<InnerNode*>& inner_nodes,
     const std::vector<unsigned char>& c) {
+  AllocatedSpace += sizeof(ArtNode48);
+
   auto node48 = new ArtNode48;
   for (size_t i = 0; i < c.size(); ++i) {
     node48->keys_[c[i]] = i + 1;
@@ -89,6 +97,8 @@ ArtNode* AllocateArt48AndInsertNodes(
 ArtNode* AllocateArt256AndInsertNodes(
     const std::vector<InnerNode*>& inner_nodes,
     const std::vector<unsigned char>& c) {
+  AllocatedSpace += sizeof(ArtNode256);
+
   auto node256 = new ArtNode256;
   for (size_t i = 0; i < c.size(); ++i) {
     node256->children_[c[i]] = inner_nodes[i];
@@ -143,6 +153,8 @@ ArtNode* AllocateArtNode(ArtNodeType node_type) {
 }
 
 ArtNode* ReallocateArtNode16(ArtNode* art) {
+  AllocatedSpace += sizeof(ArtNode16);
+
   auto new_art = AllocateArtNode(kNode16);
   auto node16 = (ArtNode16*)new_art;
   auto node4 = (ArtNode4*)art;
@@ -155,6 +167,8 @@ ArtNode* ReallocateArtNode16(ArtNode* art) {
 }
 
 ArtNode* ReallocateArtNode48(ArtNode* art) {
+  AllocatedSpace += sizeof(ArtNode48);
+
   auto new_art = AllocateArtNode(kNode48);
   auto node48 = (ArtNode48*)new_art;
   auto node16 = (ArtNode16*)art;
@@ -169,6 +183,8 @@ ArtNode* ReallocateArtNode48(ArtNode* art) {
 }
 
 ArtNode* ReallocateArtNode256(ArtNode* art) {
+  AllocatedSpace += sizeof(ArtNode256);
+
   auto new_art = AllocateArtNode(kNode256);
   auto node256 = (ArtNode256*)new_art;
   auto node48 = (ArtNode48*)art;
@@ -491,35 +507,43 @@ void InsertToArtNode(InnerNode* current, InnerNode* leaf,
 
 void DeleteArtNode(ArtNode* art) {
   if (art->art_type_ == kNode4) {
+    AllocatedSpace -= sizeof(ArtNode4);
     auto art4 = (ArtNode4*)art;
     for (int i = 0; i < art->num_children_; ++i) {
       auto inner_node = art4->children_[i];
       if (inner_node) {
+        AllocatedSpace -= sizeof(InnerNode);
         GetNodeAllocator()->DeallocateNode(inner_node->nvm_node_);
         delete inner_node;
       }
     }
   } else if (art->art_type_ == kNode16) {
+    AllocatedSpace -= sizeof(ArtNode16);
     auto art16 = (ArtNode16*)art;
     for (int i = 0; i < art->num_children_; ++i) {
       auto inner_node = art16->children_[i];
       if (inner_node) {
+        AllocatedSpace -= sizeof(InnerNode);
         GetNodeAllocator()->DeallocateNode(inner_node->nvm_node_);
         delete inner_node;
       }
     }
   } else if (art->art_type_ == kNode48) {
+    AllocatedSpace -= sizeof(ArtNode48);
     auto art48 = (ArtNode48*)art;
     for (auto child : art48->children_) {
       if (child) {
+        AllocatedSpace -= sizeof(InnerNode);
         GetNodeAllocator()->DeallocateNode(child->nvm_node_);
         delete child;
       }
     }
   } else {
+    AllocatedSpace -= sizeof(ArtNode256);
     auto art256 = (ArtNode256*)art;
     for (auto child : art256->children_) {
       if (child) {
+        AllocatedSpace -= sizeof(InnerNode);
         GetNodeAllocator()->DeallocateNode(child->nvm_node_);
         delete child;
       }
@@ -545,6 +569,7 @@ void DeleteInnerNode(InnerNode* inner_node, uint64_t* inode_vptrs, int count) {
     nvm_node->meta.node_info = inner_node->estimated_size_;
     FLUSH(nvm_node->temp_buffer, 256);
     inner_node->opt_lock_.unlock();
+    AllocatedSpace -= sizeof(InnerNode);
     delete inner_node;
     return;
   }
@@ -558,30 +583,47 @@ void DeleteInnerNode(InnerNode* inner_node, uint64_t* inode_vptrs, int count) {
 
   auto art = inner_node->art;
   if (art->art_type_ == kNode4) {
+    AllocatedSpace -= sizeof(ArtNode4);
     auto art4 = (ArtNode4*)art;
     for (int i = 0; i < art->num_children_; ++i) {
       DeleteInnerNode(art4->children_[i], inode_vptrs, count);
     }
   } else if (art->art_type_ == kNode16) {
+    AllocatedSpace -= sizeof(ArtNode16);
     auto art16 = (ArtNode16*)art;
     for (int i = 0; i < art->num_children_; ++i) {
       DeleteInnerNode(art16->children_[i], inode_vptrs, count);
     }
   } else if (art->art_type_ == kNode48) {
+    AllocatedSpace -= sizeof(ArtNode48);
     auto art48 = (ArtNode48*)art;
     for (auto& child : art48->children_) {
       DeleteInnerNode(child, inode_vptrs, count);
     }
   } else {
+    AllocatedSpace -= sizeof(ArtNode256);
     auto art256 = (ArtNode256*)art;
     for (auto& child : art256->children_) {
       DeleteInnerNode(child, inode_vptrs, count);
     }
   }
 
+  AllocatedSpace -= sizeof(InnerNode);
+  if (inner_node->support_node) {
+    AllocatedSpace -= sizeof(InnerNode);
+  }
+
   delete inner_node->support_node;
-  delete art;
   delete inner_node;
+  delete art;
+}
+
+void UpdateAllocatedSpace(int64_t allocated) {
+  AllocatedSpace += allocated;
+}
+
+int64_t GetAllocatedSpace() {
+  return AllocatedSpace.load();
 }
 
 } // namespace ROCKSDB_NAMESPACE

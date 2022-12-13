@@ -58,6 +58,8 @@ InnerNode* AllocateLeafNode(uint8_t prefix_length,
                             unsigned char last_prefix,
                             InnerNode* next_node,
                             uint64_t init_tag) {
+  UpdateAllocatedSpace(sizeof(InnerNode));
+
   NodeAllocator* mgr = GetNodeAllocator();
 
   auto inode = new InnerNode();
@@ -80,6 +82,8 @@ InnerNode* AllocateLeafNode(uint8_t prefix_length,
 }
 
 InnerNode* RecoverInnerNode(NVMNode* nvm_node) {
+  UpdateAllocatedSpace(sizeof(InnerNode));
+
   auto inode = new InnerNode();
 
   memcpy(inode->buffer_, nvm_node->temp_buffer, 256);

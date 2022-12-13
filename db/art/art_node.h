@@ -82,4 +82,9 @@ void DeleteInnerNode(InnerNode* inner_node, uint64_t* inode_vptrs, int count);
 
 void DeleteArtNode(ArtNode* art);
 
+// allocated can be negative (e.g. delete nodes)
+void UpdateAllocatedSpace(int64_t allocated);
+
+int64_t GetAllocatedSpace();
+
 } // namespace ROCKSDB_NAMESPACE
