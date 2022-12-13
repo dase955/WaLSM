@@ -25,6 +25,7 @@
 #include <utility>
 #include <vector>
 
+#include "db/art/art_node.h"
 #include "db/art/timestamp.h"
 #include "db/art/logger.h"
 #include "db/art/node_allocator.h"
@@ -3875,6 +3876,9 @@ DB::~DB() {}
 
 Status DBImpl::Close() {
   printf("Get in nvm: %d, get in ssd: %d\n", get_in_nvm.load(), get_in_ssd.load());
+  int64_t allocated_space_bytes = GetAllocatedSpace();
+  float allocated_space_mb = (float)allocated_space_bytes / 1048576.f;
+  printf("Allocated = %.2fMib\n", allocated_space_mb);
 
   if (!closed_) {
     {
