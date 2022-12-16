@@ -10,8 +10,13 @@
 
 namespace ROCKSDB_NAMESPACE {
 
+#define TS_RESERVE_NUMBER 8
+
+static_assert(TS_RESERVE_NUMBER % 8 == 0,
+              "reserved number of ts must be a multiple of 8");
+
 struct Timestamps {
-  int32_t timestamps[8] = {0};
+  int32_t timestamps[TS_RESERVE_NUMBER] = {0};
   int32_t last_ts_;
   int32_t last_global_dec_;
   uint8_t size_;
