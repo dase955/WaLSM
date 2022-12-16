@@ -1213,7 +1213,7 @@ struct DBOptions {
   // default: 100
   int layer_ts_interval = 100;
 
-  int timestamp_factor = 7;
+  int timestamp_factor = 9;
 
   // Space for allocating nvm nodes.
   // default: 1G
