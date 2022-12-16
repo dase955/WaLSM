@@ -34,7 +34,7 @@ Timestamps::Timestamps(const Timestamps& rhs)
     : last_ts_(rhs.last_ts_), last_global_dec_(rhs.last_global_dec_),
       size_(rhs.size_), last_insert_(rhs.last_insert_),
       accumulate_(rhs.accumulate_) {
-  memcpy(timestamps, rhs.timestamps, 32);
+  memcpy(timestamps, rhs.timestamps, sizeof(int) * TS_RESERVE_NUMBER);
 }
 
 Timestamps& Timestamps::operator=(const Timestamps& rhs) {
@@ -47,7 +47,7 @@ Timestamps& Timestamps::operator=(const Timestamps& rhs) {
   size_ = rhs.size_;
   last_insert_ = rhs.last_insert_;
   accumulate_ = rhs.accumulate_;
-  memcpy(timestamps, rhs.timestamps, 32);
+  memcpy(timestamps, rhs.timestamps, sizeof(int) * TS_RESERVE_NUMBER);
   return *this;
 }
 
@@ -75,20 +75,19 @@ void Timestamps::DecayHeat() {
   last_global_dec_ = global_dec;
 
 #ifdef USE_AVX512F
-  _mm256_store_epi32(timestamps,
-                     _mm256_sub_epi32(_mm256_set1_epi32(global_dec),
-                                      _mm256_loadu_epi32(timestamps)));
+  for (int i = 0; i < TS_RESERVE_NUMBER; i += 8) {
+    _mm256_store_epi32(timestamps + i,
+                       _mm256_sub_epi32(_mm256_set1_epi32(global_dec),
+                                        _mm256_loadu_epi32((timestamps + i))));
+  }
 #else
-  _mm_storeu_si128(
-      (__m128i_u *)timestamps,
-      _mm_sub_epi32(
-          _mm_loadu_si128((__m128i_u *)timestamps),
-          _mm_set1_epi32(delta)));
-  _mm_storeu_si128(
-      (__m128i_u *)(timestamps + 4),
-      _mm_sub_epi32(
-          _mm_loadu_si128((__m128i_u *)(timestamps + 4)),
-          _mm_set1_epi32(delta)));
+  for (int i = 0; i < TS_RESERVE_NUMBER; i += 4) {
+    _mm_storeu_si128(
+        (__m128i_u *)(timestamps + i),
+        _mm_sub_epi32(
+            _mm_loadu_si128((__m128i_u *)(timestamps + i)),
+            _mm_set1_epi32(delta)));
+  }
 #endif
   accumulate_ *= GetDecayFactor(delta);
 }
@@ -108,14 +107,14 @@ bool Timestamps::UpdateHeat() {
   DecayHeat();
 
   cur_ts -= last_global_dec_;
-  if (size_ < 8) {
+  if (size_ < TS_RESERVE_NUMBER) {
     timestamps[size_++] = cur_ts;
     return true;
   }
 
   accumulate_ += CalculateHeat(timestamps[last_insert_]);
   timestamps[last_insert_++] = cur_ts;
-  last_insert_ %= 8;
+  last_insert_ %= TS_RESERVE_NUMBER;
 
   return true;
 }
@@ -147,8 +146,8 @@ void Timestamps::EstimateBound(float& lower_bound, float& upper_bound) {
 
     len = (size_ + 1) / 2;
     begin_ts = timestamps[last_insert_];
-    mid_ts = timestamps[(last_insert_ + size_ / 2) % 8];
-    end_ts = timestamps[(last_insert_ + size_ - 1) % 8];
+    mid_ts = timestamps[(last_insert_ + size_ / 2) % TS_RESERVE_NUMBER];
+    end_ts = timestamps[(last_insert_ + size_ - 1) % TS_RESERVE_NUMBER];
   }
 
   float h1 = CalculateHeat(begin_ts);
