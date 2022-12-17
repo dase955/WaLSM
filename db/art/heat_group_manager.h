@@ -27,6 +27,10 @@ class HeatGroupManager : public BackgroundThread {
 
   void InsertIntoLayer(HeatGroup* inserted, int level);
 
+  float CountDramUsageMib() const {
+    return group_queue_.CountDramUsageMib();
+  }
+
  private:
   void BGWork() override;
 

@@ -3882,7 +3882,8 @@ DB::~DB() {}
 Status DBImpl::Close() {
   printf("Get in nvm: %d, get in ssd: %d\n", get_in_nvm.load(), get_in_ssd.load());
   int64_t allocated_space_bytes = GetAllocatedSpace();
-  float allocated_space_mb = (float)allocated_space_bytes / 1048576.f;
+  float allocated_space_mb = (float)allocated_space_bytes / 1048576.f
+                             + group_manager_->CountDramUsageMib();
   printf("Allocated = %.2fMib\n", allocated_space_mb);
 
   if (!closed_) {
