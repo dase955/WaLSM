@@ -117,6 +117,18 @@ struct MultiLayerGroupQueue {
     }
     printf("Group counts: %s\n", ss.str().c_str());
   }
+
+  float CountDramUsageMib() const {
+    int64_t used_bytes = 0;
+    for (int l = -2; l < MAX_LAYERS; ++l) {
+      auto cur = heads[l]->next;
+      while (cur != tails[l]) {
+        used_bytes += sizeof(HeatGroup);
+        cur = cur->next;
+      }
+    }
+    return (float) used_bytes / 1048576.f;
+  }
 };
 
 inline float CalculateHeat(int32_t ts) {
