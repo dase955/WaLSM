@@ -123,7 +123,8 @@ struct MultiLayerGroupQueue {
     for (int l = -2; l < MAX_LAYERS; ++l) {
       auto cur = heads[l]->next;
       while (cur != tails[l]) {
-        used_bytes += sizeof(HeatGroup);
+        // used_bytes += sizeof(HeatGroup);
+        used_bytes += (cur->ts.size_ * 4);
         cur = cur->next;
       }
     }

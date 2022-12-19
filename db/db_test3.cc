@@ -266,10 +266,13 @@ class YCSBLoadGenerator : public KeyGenerator {
 };
 
 int thread_num = 8;
-int total_count = 40000000;
+int total_count = 80000000;
 int count_per_thread = total_count / thread_num;
 std::atomic<int64_t> counter{0};
+std::atomic<int64_t> check_counter{0};
 std::vector<uint64_t> written(total_count);
+std::atomic<bool> written_done{ false };
+KeyGenerator* zipf;
 
 std::string NumToKey(uint64_t key_num) {
   std::string s = std::to_string(key_num);
@@ -288,25 +291,6 @@ std::string GenerateValueFromKey(std::string& key) {
   return value;
 }
 
-unsigned long fnvhash64(int64_t val) {
-  //from http://en.wikipedia.org/wiki/Fowler_Noll_Vo_hash
-  static int64_t FNV_OFFSET_BASIS_64 = 0xCBF29CE484222325LL;
-  static int64_t FNV_PRIME_64 = 1099511628211L;
-
-  int64_t hashval = FNV_OFFSET_BASIS_64;
-
-  for (int i = 0; i < 8; i++) {
-    int64_t octet = val & 0x00ff;
-    val = val >> 8;
-
-    hashval = hashval ^ octet;
-    hashval = hashval * FNV_PRIME_64;
-    //hashval = hashval ^ octet;
-  }
-  return hashval > 0 ? hashval : -hashval;
-}
-
-YCSBZipfianGenerator* zipf;
 
 void ZipfianPutThread(DB *db) {
   for (int i = 0; i < count_per_thread; ++i) {
@@ -347,7 +331,6 @@ void GetThread(DB *db) {
   }
 }
 
-std::atomic<int64_t> check_counter{0};
 
 void CheckThread(DB* db) {
   for (int i = 0; i < count_per_thread; ++i) {
@@ -365,6 +348,21 @@ void CheckThread(DB* db) {
   }
 }
 
+void StatisticsThread() {
+  int cur_time = 0;
+  int prev_op = 0;
+  int interval = 1;
+
+  while (!written_done) {
+    int cur_op = counter.load();
+    int ops = (cur_op - prev_op) / interval;
+    prev_op = cur_op;
+    printf("[%ds] total: %d (%d op/s)\n", cur_time, cur_op, ops);
+    sleep(interval);
+    cur_time += interval;
+  }
+}
+
 void DoTest(std::string test_name) {
   setbuf(stdout, NULL);
 
@@ -373,16 +371,18 @@ void DoTest(std::string test_name) {
   options.use_direct_io_for_flush_and_compaction = true;
   options.use_direct_reads = true;
   options.enable_pipelined_write = true;
-  options.nvm_path = "/mnt/chen/nodememory";
+  options.nvm_path = "/mnt/chen/nodememory2";
   options.compression = rocksdb::kNoCompression;
+  options.compaction_style = kCompactionStyleLevel;
   options.IncreaseParallelism(16);
 
-  zipf = new YCSBZipfianGenerator(
-      100000000, 320000000, 1000000000ULL, 0.98, 26.4);
+  zipf = new YCSBLoadGenerator(100000000, 1000000000ULL);
   zipf->Prepare();
 
   DB* db;
   DB::Open(options, "/mnt/nvme/chen/hotness_test", &db);
+
+  std::thread st = std::thread(StatisticsThread);
 
   std::thread read_threads[thread_num];
   std::thread write_threads[thread_num];
@@ -399,6 +399,11 @@ void DoTest(std::string test_name) {
   for (auto & thread : read_threads) {
     //thread.join();
   }
+
+  written_done = true;
+  st.join();
+
+  db->Close();
 
   return;
 

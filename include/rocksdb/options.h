@@ -1171,7 +1171,7 @@ struct DBOptions {
 
   // Number of maximum number of parallel running compaction.
   // Default: 4
-  int num_parallel_compactions = 32;
+  int num_parallel_compactions = 4;
 
   // Amount of data in global memtable before trigger compaction.
   // Default: 5G
@@ -1180,12 +1180,12 @@ struct DBOptions {
   // Maximum size of a group,
   // group larger than this will be split.
   // Default: 12M
-  int group_split_threshold = 1536 << 10;
+  int group_split_threshold = 12288 << 10;
 
   // A threshold for the min size of a group,
   // Groups whose size smaller than this will not be chosen to do compaction.
   // Default: 4096K
-  int group_min_size = 512 << 10;
+  int group_min_size = 4096 << 10;
 
   // Size of vlog file.
   // Default: 7G
