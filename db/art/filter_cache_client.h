@@ -8,6 +8,9 @@
 
 namespace ROCKSDB_NAMESPACE {
 
+// global mutex to control global level recorder, ... 
+static std::mutex global_recorder_mutex_;
+
 class FilterCacheClient;
 
 class FilterCacheClient {
@@ -38,13 +41,26 @@ private:
     static void do_make_adjustment();
 
     // background thread part of batch_insert_segments
-    static void do_batch_insert_segments(std::vector<uint32_t> merged_segment_ids, std::vector<uint32_t> new_segment_ids,
-                                         std::map<uint32_t, std::unordered_map<uint32_t, double>> inherit_infos_recorder,
-                                         std::map<uint32_t, uint16_t> level_recorder, const uint32_t& level_0_base_count,
-                                         std::map<uint32_t, std::vector<RangeRatePair>> segment_ranges_recorder);
+    static void do_batch_insert_segments(std::vector<uint32_t>& merged_segment_ids, std::vector<uint32_t>& new_segment_ids,
+                                         std::map<uint32_t, std::unordered_map<uint32_t, double>>& inherit_infos_recorder,
+                                         std::map<uint32_t, uint16_t>& level_recorder, const uint32_t& level_0_base_count,
+                                         std::map<uint32_t, std::vector<RangeRatePair>>& segment_ranges_recorder);
+
+    // background thread part of batch_delete_segments
+    void do_batch_delete_segments(std::vector<uint32_t>& merged_segment_ids, std::map<uint32_t, uint16_t>& level_recorder);
+
+    // background thread part of batch_move_segments
+    void do_batch_move_segments(std::vector<uint32_t>& moved_segment_ids,
+                                std::map<uint32_t, uint16_t>& old_level_recorder,
+                                std::map<uint32_t, uint16_t>& move_level_recorder,
+                                std::map<uint32_t, std::vector<RangeRatePair>>& move_segment_ranges_recorder);
 public:
     FilterCacheClient() {
         heat_buckets_ready_ = false;
+    }
+
+    std::vector<std::string>& range_seperators() {
+        return filter_cache_manager_.range_seperators();
     }
 
     // corresponding to FilterCacheManager.make_heat_buckets_ready
@@ -78,7 +94,7 @@ public:
     // heap based adjustment
     void make_adjustment();
 
-    // batch insert segments into filter cache manager
+    // batch insert segments into filter cache manager, will also delete merged segments
     void batch_insert_segments(std::vector<uint32_t> merged_segment_ids, std::vector<uint32_t> new_segment_ids,
                                std::map<uint32_t, std::unordered_map<uint32_t, double>> inherit_infos_recorder,
                                std::map<uint32_t, uint16_t> level_recorder, const uint32_t& level_0_base_count,
@@ -86,6 +102,15 @@ public:
     
     // for test only
     void test_cfd(ColumnFamilyData* cfd); 
+
+    // batch delete segments from filter cache manager
+    void batch_delete_segments(std::vector<uint32_t> merged_segment_ids, std::map<uint32_t, uint16_t> level_recorder);
+
+    // batch of moving segments to one level
+    void batch_move_segments(std::vector<uint32_t> moved_segment_ids,
+                             std::map<uint32_t, uint16_t> old_level_recorder,
+                             std::map<uint32_t, uint16_t> move_level_recorder,
+                             std::map<uint32_t, std::vector<RangeRatePair>> move_segment_ranges_recorder);
 };
 
 }

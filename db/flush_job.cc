@@ -308,6 +308,7 @@ void FlushJob::Cancel() {
   base_->Unref();
 }
 
+//               also we need to call filter cache func to update filter cache after BuildTable() succeed?
 Status FlushJob::WriteLevel0Table() {
   AutoThreadOperationStageUpdater stage_updater(
       ThreadStatus::STAGE_FLUSH_WRITE_L0);

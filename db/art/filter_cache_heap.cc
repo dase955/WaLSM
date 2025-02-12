@@ -156,7 +156,7 @@ void FilterCacheHeap::batch_delete(std::vector<uint32_t>& segment_ids) {
     // delete nodes that is_alive == false
     auto it = heap_.begin();
     FilterCacheHeapNode node = nullptr;
-    while(it != heap_.end()) {
+    while (it != heap_.end()) {
         node = (*it);
         if (node->is_alive == false) {
             // need delete

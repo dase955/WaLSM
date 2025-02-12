@@ -33,7 +33,7 @@ void GreedyAlgo::solve(std::map<uint32_t, SegmentAlgoInfo>& segment_algo_infos,
 
     // current used space size (bits) of filter cache
     uint32_t current_cache_size = 0; 
-    while(!segment_algo_helper_heap.empty()) {
+    while (!segment_algo_helper_heap.empty()) {
         // std::cout << "segment id : " << segment_algo_helper_heap[0].segment_id << std::endl;
 
         const size_t size = segment_algo_helper_heap.size();

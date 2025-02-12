@@ -11,7 +11,7 @@ class LGBModel():
         self.__model = None
         # one unit is 4 bits-per-key, class = 2 mean bits-per-key = 4 * 2 = 8
         # the default bits-per-key value of previous benchmark is 10
-        self.__default_class = 2
+        self.__default_class = 4
         self.__bits_per_key = 4 # bits_per_key for one filter unit
         self.__num_probes = math.floor(self.__bits_per_key * 0.69) # 4 * 0.69 = 2.76 -> 2
         self.__rate_per_unit = math.pow(1.0 - math.exp(-self.__num_probes/self.__bits_per_key), self.__num_probes) # false positive rate of one unit
@@ -45,7 +45,7 @@ class LGBModel():
             pred_cost += math.pow(self.__rate_per_unit, preds_list[i]) * count_list[i]
         
         # print("best cost : " + str(best_cost) + ", pred cost: " + str(pred_cost))
-        return math.fabs((pred_cost-best_cost)/best_cost) < self.__rate_per_unit
+        return math.fabs((pred_cost-best_cost)/best_cost) < self.__cost_rate_line
         
     def train(self, dataset: str) -> str:
         df = pd.read_csv(dataset)

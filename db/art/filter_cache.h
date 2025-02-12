@@ -238,6 +238,20 @@ public:
                          std::map<uint32_t, uint16_t>& level_recorder, const uint32_t& level_0_base_count,
                          std::map<uint32_t, std::vector<RangeRatePair>>& segment_ranges_recorder);
 
+    // in func insert_segments above, we will also remove merged segments, this work well for normal compaction and flush
+    // but we found that WaLSM also do delete compaction (only delete segments)
+    // which not fit to func insert_segments, so we need a alone func delete_segments
+    // this func only delete merged segments
+    // we only need argument merged_segment_ids (all merged segments' ids)
+    // and level_recorder which only include merged segments' level
+    void delete_segments(std::vector<uint32_t>& merged_segment_ids, std::map<uint32_t, uint16_t>& level_recorder);
+
+    // move segments to another level, used for trivial move compaction
+    void move_segments(std::vector<uint32_t>& moved_segment_ids,
+                       std::map<uint32_t, uint16_t>& old_level_recorder,
+                       std::map<uint32_t, uint16_t>& move_level_recorder,
+                       std::map<uint32_t, std::vector<RangeRatePair>>& move_segment_ranges_recorder);
+
     // make filter unit adjustment based on two heaps (benefit of enabling one unit & cost of disabling one unit)
     // simply, we disable one unit of one segment and enable one unit of another segment and guarantee cost < benefit
     // dont mind these two units size are not equal
@@ -250,6 +264,9 @@ public:
     // only for test
     ColumnFamilyData* cfd = nullptr;
     // std::mutex cfd_mutex;
+    std::vector<std::string>& range_seperators() {
+        return heat_buckets_.seperators();
+    }
 };
 
 }

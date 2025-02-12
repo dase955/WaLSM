@@ -183,13 +183,13 @@ namespace ROCKSDB_NAMESPACE {
 // micros for filter cache
 
 // before model work, we enable DEFAULT_UNITS_NUM units for every segments
-#define DEFAULT_UNITS_NUM 2
+#define DEFAULT_UNITS_NUM 4
 // bits-per-key for every filter unit of every segment, 
 // found default bits-per-key = DEFAULT_UNITS_NUM * BITS_PER_KEY_PER_UNIT = 10
 // equal to primary value of paper benchmark config value
 #define BITS_PER_KEY_PER_UNIT 4
 // max unit nums for every segment, we only generate MAX_UNITS_NUM units for every segment
-#define MAX_UNITS_NUM 6
+#define MAX_UNITS_NUM 8
 // we enable 0 unit for coldest segments
 #define MIN_UNITS_NUM 0
 // default max size of cache space : 8 * 1024 * 1024 * 128 = 1073741824 bit = 128 MB
@@ -201,12 +201,14 @@ namespace ROCKSDB_NAMESPACE {
 // visit cnt update bound
 #define VISIT_CNT_UPDATE_BOUND 10
 // filter cache map threshold
-#define FULL_RATE 0.98
-#define READY_RATE 0.70
+#define FULL_RATE 0.95
+#define READY_RATE 0.60
 // default init L0 counts
 #define INIT_LEVEL_0_COUNT 0
 // default size of one filter unit (bits)
 #define DEFAULT_UNIT_SIZE 0
+// inherit remain factor
+#define INHERIT_REMAIN_FACTOR 0.5
 
 // filter cache client background threads num
 #define FILTER_CACHE_THREADS_NUM 10

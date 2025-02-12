@@ -1777,9 +1777,9 @@ Status DBImpl::GetImpl(const ReadOptions& read_options, const Slice& key,
   // std::cout << "ready for get" << std::endl;
 // WaLSM+: add hotness estimating
 #ifdef ART
+#ifdef ART_PLUS
   std::string art_key(key.data(), key.size());
   filter_cache_.get_updating_work(art_key);
-#ifdef ART_PLUS
   // ready to estimate hotness, update heat buckets
   /*
   if (heat_buckets_.is_ready()) {
