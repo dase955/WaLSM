@@ -70,6 +70,7 @@ public:
     // (we can modify micro SAMPLES_MAXCNT to fit in the YCSB load period, simply, SAMPLES_MAXCNT should be at least 50%-75% of load data num ???)
     // set SAMPLES_MAXCNT < YCSB load kv nums, to make sure that we can make heat_buckets ready in YCSB load period
     // if segment_info_recorder is empty, try default key ranges num and divide
+    // segment_info_recorder should be empty !!!
     bool prepare_heat_buckets(const std::string& key, std::unordered_map<uint32_t, std::vector<std::string>>* const segment_info_recorder);
 
     // correspinding to FilterCacheManager work: monitor manager ready_work(), call manager make_clf_model_ready and train first model
@@ -79,6 +80,8 @@ public:
     // please ensure that 3 recorders need to keep the same segments set, or error will occur in train func
     // you can use mutex in compaction and flushing to guarantee this
     // then when every long period end, try to retrain a new model or keep last model
+    // unit_size_recorder should be empty !!!
+    // features_nums_except_level_0 empty !!!
     void retrain_or_keep_model(std::vector<uint16_t>* const features_nums_except_level_0, 
                                std::map<uint32_t, uint16_t>* const level_recorder,
                                std::map<uint32_t, std::vector<RangeRatePair>>* const segment_ranges_recorder,

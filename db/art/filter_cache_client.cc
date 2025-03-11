@@ -109,7 +109,7 @@ void FilterCacheClient::do_batch_insert_segments(std::vector<uint32_t>& merged_s
                                                  std::map<uint32_t, uint16_t>& level_recorder, const uint32_t& level_0_base_count,
                                                  std::map<uint32_t, std::vector<RangeRatePair>>& segment_ranges_recorder) {
     filter_cache_manager_.insert_segments(merged_segment_ids, new_segment_ids, inherit_infos_recorder,
-                                          level_recorder, level_0_base_count, segment_ranges_recorder);
+                                          level_recorder, 0, segment_ranges_recorder);
 }
 
 void FilterCacheClient::batch_insert_segments(std::vector<uint32_t> merged_segment_ids, std::vector<uint32_t> new_segment_ids,

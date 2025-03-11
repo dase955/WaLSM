@@ -151,16 +151,6 @@ void LeveldbDB::GetOptions(const utils::Properties &props, leveldb::Options *opt
   }
 }
 
-void LeveldbDB::SerializeRow(const std::vector<Field> &values, std::string *data) {
-  for (const Field &field : values) {
-    uint32_t len = field.name.size();
-    data->append(reinterpret_cast<char *>(&len), sizeof(uint32_t));
-    data->append(field.name.data(), field.name.size());
-    len = field.value.size();
-    data->append(reinterpret_cast<char *>(&len), sizeof(uint32_t));
-    data->append(field.value.data(), field.value.size());
-  }
-}
 
 void LeveldbDB::DeserializeRowFilter(std::vector<Field> *values, const std::string &data,
                                      const std::vector<std::string> &fields) {

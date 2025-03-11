@@ -693,7 +693,7 @@ void FilterCacheManager::move_segments(std::vector<uint32_t>& moved_segment_ids,
     std::sort(moved_segment_ids.begin(), moved_segment_ids.end());
 
     // pick up merged or new level 0 segments, but this type of compaction must not move to level 0,
-    // so we may only move level 0 to level below
+    // so we may only move level 0 to higher level
     assert(moved_segment_ids.size() == old_level_recorder.size());
     assert(moved_segment_ids.size() == move_level_recorder.size());
     assert(moved_segment_ids.size() == move_segment_ranges_recorder.size());

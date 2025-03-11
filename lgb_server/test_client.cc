@@ -8,6 +8,8 @@
 #include <chrono>
 #include <thread>
 
+// you need to modify features num in lgb_server and filter cache!!!
+
 void write_debug_dataset(std::string& path) {
     // ready for writer
     std::ofstream stream(path);

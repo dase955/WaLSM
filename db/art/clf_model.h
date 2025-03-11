@@ -79,7 +79,7 @@ public:
     // we set features_num_ to largest feature num
     void make_ready(std::vector<uint16_t>& features_nums) { 
         if (features_nums.empty()) {
-            feature_num_ = 41; // debug feature num, see ../lgb_server files
+            feature_num_ = MAX_FEATURES_NUM; // debug feature num, see ../lgb_server files
         } else {
             // we may limit feature_num_ because of the socket transmit size limit is 1024 bytes
             // so feature_num_ may be limit to at most about 3 * 30 + 1 = 91
