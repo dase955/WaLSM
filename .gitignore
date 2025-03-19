@@ -92,3 +92,5 @@ clang-format-diff.py
 
 cmake-build-debug
 cmake-build-release
+
+*_example

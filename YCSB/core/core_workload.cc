@@ -68,7 +68,7 @@ const string CoreWorkload::REQUEST_DISTRIBUTION_PROPERTY = "requestdistribution"
 const string CoreWorkload::REQUEST_DISTRIBUTION_DEFAULT = "uniform";
 
 const string CoreWorkload::ZERO_PADDING_PROPERTY = "zeropadding";
-const string CoreWorkload::ZERO_PADDING_DEFAULT = "1";
+const string CoreWorkload::ZERO_PADDING_DEFAULT = "96";
 
 const string CoreWorkload::MIN_SCAN_LENGTH_PROPERTY = "minscanlength";
 const string CoreWorkload::MIN_SCAN_LENGTH_DEFAULT = "1";

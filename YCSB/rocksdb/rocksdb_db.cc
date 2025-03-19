@@ -72,10 +72,10 @@ namespace {
   const std::string PROP_L0_STOP_TRIGGER_DEFAULT = "0";
 
   const std::string PROP_USE_DIRECT_WRITE = "rocksdb.use_direct_io_for_flush_compaction";
-  const std::string PROP_USE_DIRECT_WRITE_DEFAULT = "false";
+  const std::string PROP_USE_DIRECT_WRITE_DEFAULT = "true";
 
   const std::string PROP_USE_DIRECT_READ = "rocksdb.use_direct_reads";
-  const std::string PROP_USE_DIRECT_READ_DEFAULT = "false";
+  const std::string PROP_USE_DIRECT_READ_DEFAULT = "true";
 
   const std::string PROP_USE_MMAP_WRITE = "rocksdb.allow_mmap_writes";
   const std::string PROP_USE_MMAP_WRITE_DEFAULT = "false";
@@ -86,17 +86,20 @@ namespace {
   const std::string PROP_CACHE_SIZE = "rocksdb.cache_size";
   const std::string PROP_CACHE_SIZE_DEFAULT = "0";
 
-  const std::string PROP_COMPRESSED_CACHE_SIZE = "rocksdb.compressed_cache_size";
-  const std::string PROP_COMPRESSED_CACHE_SIZE_DEFAULT = "0";
+  // const std::string PROP_COMPRESSED_CACHE_SIZE = "rocksdb.compressed_cache_size";
+  // const std::string PROP_COMPRESSED_CACHE_SIZE_DEFAULT = "0";
 
   const std::string PROP_BLOOM_BITS = "rocksdb.bloom_bits";
   const std::string PROP_BLOOM_BITS_DEFAULT = "0";
 
   const std::string PROP_INCREASE_PARALLELISM = "rocksdb.increase_parallelism";
-  const std::string PROP_INCREASE_PARALLELISM_DEFAULT = "false";
+  const std::string PROP_INCREASE_PARALLELISM_DEFAULT = "true";
 
   const std::string PROP_OPTIMIZE_LEVELCOMP = "rocksdb.optimize_level_style_compaction";
   const std::string PROP_OPTIMIZE_LEVELCOMP_DEFAULT = "false";
+
+  const std::string PROP_COMPACTION_UNIVERSAL = "rocksdb.universal_compaction";
+  const std::string PROP_COMPACTION_UNIVERSAL_DEFAULT = "yes";
 
   const std::string PROP_OPTIONS_FILE = "rocksdb.optionsfile";
   const std::string PROP_OPTIONS_FILE_DEFAULT = "";
@@ -332,18 +335,31 @@ void RocksdbDB::GetOptions(const utils::Properties &props, rocksdb::Options *opt
       opt->allow_mmap_reads = true;
     }
 
+    // default option
+    opt->memtable_prefix_bloom_size_ratio = 0.02;
+
     rocksdb::BlockBasedTableOptions table_options;
+
+    // set default option for BlockBasedTableOptions
+    table_options.pin_top_level_index_and_filter = false;
+    table_options.pin_l0_filter_and_index_blocks_in_cache = false;
+    table_options.cache_index_and_filter_blocks_with_high_priority = false;
+    table_options.index_type = rocksdb::BlockBasedTableOptions::kTwoLevelIndexSearch;
+    table_options.partition_filters = true;
+    table_options.cache_index_and_filter_blocks = true;
+
+
     size_t cache_size = std::stoul(props.GetProperty(PROP_CACHE_SIZE, PROP_CACHE_SIZE_DEFAULT));
     if (cache_size > 0) {
       block_cache = rocksdb::NewLRUCache(cache_size);
       table_options.block_cache = block_cache;
     }
-    size_t compressed_cache_size = std::stoul(props.GetProperty(PROP_COMPRESSED_CACHE_SIZE,
-                                                                PROP_COMPRESSED_CACHE_SIZE_DEFAULT));
-    if (compressed_cache_size > 0) {
-      block_cache_compressed = rocksdb::NewLRUCache(cache_size);
-      table_options.block_cache_compressed = rocksdb::NewLRUCache(compressed_cache_size);
-    }
+    // size_t compressed_cache_size = std::stoul(props.GetProperty(PROP_COMPRESSED_CACHE_SIZE,
+    //                                                             PROP_COMPRESSED_CACHE_SIZE_DEFAULT));
+    // if (compressed_cache_size > 0) {
+    //   block_cache_compressed = rocksdb::NewLRUCache(cache_size);
+    //   table_options.block_cache_compressed = rocksdb::NewLRUCache(compressed_cache_size);
+    // }
     int bloom_bits = std::stoul(props.GetProperty(PROP_BLOOM_BITS, PROP_BLOOM_BITS_DEFAULT));
     if (bloom_bits > 0) {
       table_options.filter_policy.reset(rocksdb::NewBloomFilterPolicy(bloom_bits));
@@ -351,10 +367,13 @@ void RocksdbDB::GetOptions(const utils::Properties &props, rocksdb::Options *opt
     opt->table_factory.reset(rocksdb::NewBlockBasedTableFactory(table_options));
 
     if (props.GetProperty(PROP_INCREASE_PARALLELISM, PROP_INCREASE_PARALLELISM_DEFAULT) == "true") {
-      opt->IncreaseParallelism();
+      opt->IncreaseParallelism(64);
     }
     if (props.GetProperty(PROP_OPTIMIZE_LEVELCOMP, PROP_OPTIMIZE_LEVELCOMP_DEFAULT) == "true") {
       opt->OptimizeLevelStyleCompaction();
+    }
+    if (props.GetProperty(PROP_COMPACTION_UNIVERSAL, PROP_COMPACTION_UNIVERSAL_DEFAULT) == "true") {
+      opt->compaction_style = rocksdb::kCompactionStyleUniversal;
     }
   }
 }

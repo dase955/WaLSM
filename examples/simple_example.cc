@@ -414,7 +414,7 @@ void ParseOptions(Options& options) {
          options.group_split_threshold / 1048576);
 }
 
-void DoTest(std::string test_name) {
+void DoTest() {
   int thread_num = 8;
   int total_count = 320000000;
   int sample_range = 1000000000;
@@ -425,10 +425,10 @@ void DoTest(std::string test_name) {
   options.use_direct_reads = true;
   options.enable_pipelined_write = true;
   options.compression = rocksdb::kNoCompression;
-  options.nvm_path = "/mnt/chen/nodememory";
+  options.nvm_path = "/home/guoteng_20241228_135/pmem2/WaLSM";
   options.IncreaseParallelism(16);
 
-  std::string db_path = "/tmp/tmp_data/db_test_" + test_name;
+  std::string db_path = "/mnt/nvme0n1/guoteng/WaLSM+";
 
   DB* db;
   DB::Open(options, db_path, &db);
@@ -444,7 +444,7 @@ void DoTest(std::string test_name) {
 }
 
 int main(int argc, char* argv[]) {
-  DoTest("art");
+  DoTest();
 
   return 0;
 }

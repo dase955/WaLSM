@@ -43,3 +43,13 @@ We use the following settings for testing performance:
 ```
 
 Note that our compacting algorithm is based on `Universal Compaction`, using other RocksDB default compacting algorithm may cause unexpected behaviors.
+
+## 测试须知
+
+ - 设置YCSB的zero_padding为96，来固定100B key
+
+ - YCSB的threadcount为8，打开show status，然后先load再run
+
+ - 改下YCSB中rocksdb.cc里的options，务必与上面一样
+
+ - examples/walsm_benchmark.cc里有案例

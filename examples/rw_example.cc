@@ -258,11 +258,11 @@ int main() {
   options.use_direct_io_for_flush_and_compaction = true;
   options.use_direct_reads = true;
   options.enable_pipelined_write = true;
-  options.nvm_path = "/mnt/chen/nodememory";
+  options.nvm_path = "/home/guoteng_20241228_135/pmem2/WaLSM";
   options.compression = rocksdb::kNoCompression;
 
   DB* db;
-  DB::Open(options, "/tmp/tmp_data/db_test_art", &db);
+  DB::Open(options, "/mnt/nvme0n1/guoteng/WaLSM+", &db);
 
   std::thread read_threads[thread_num];
   std::thread write_threads[thread_num];
