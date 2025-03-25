@@ -69,6 +69,9 @@ void HeatBuckets::update() {
     // mark already updated, after current_cnt_ more than PERIOD_COUNT / MAGIC_FACTOR, updated_ will be reset to false;
     // we need guarantee that in one period (one constant time span), db gets are much larger than PERIOD_COUNT / MAGIC_FACTOR;
     // usually in server, exec get requests PERIOD_COUNT / MAGIC_FACTOR times only account for a very very short time.
+    if (updated_)
+        return;
+    
     updated_ = true; 
     
     assert(mutex_ptrs_.size() == buckets_.size());
