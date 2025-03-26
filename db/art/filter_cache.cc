@@ -159,6 +159,9 @@ void FilterCacheManager::hit_heat_buckets(const std::string& key) {
         if (period_cnt_ - last_long_period_ >= TRAIN_PERIODS) {
             last_long_period_ = period_cnt_;
             update_count_recorder();
+            std::map<uint32_t, uint32_t> estimate_count_recorder;
+            estimate_counts_for_all(estimate_count_recorder);
+            heap_manager_.sync_visit_cnt(estimate_count_recorder);
             train_signal_ = true;
         }
 
