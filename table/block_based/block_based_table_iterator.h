@@ -15,6 +15,7 @@
 
 namespace ROCKSDB_NAMESPACE {
 // Iterates over the contents of BlockBasedTable.
+// iterator for index, not related to our work WaLSM+
 class BlockBasedTableIterator : public InternalIteratorBase<Slice> {
   // compaction_readahead_size: its value will only be used if for_compaction =
   // true

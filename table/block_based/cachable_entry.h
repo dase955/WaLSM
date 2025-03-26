@@ -43,6 +43,7 @@ class CachableEntry {
 public:
   CachableEntry() = default;
 
+  // init method
   CachableEntry(T* value, Cache* cache, Cache::Handle* cache_handle,
     bool own_value)
     : value_(value)
@@ -56,9 +57,11 @@ public:
     assert(!cache_handle_ || !own_value_);
   }
 
+  // disable copy assignment
   CachableEntry(const CachableEntry&) = delete;
   CachableEntry& operator=(const CachableEntry&) = delete;
-
+  
+  // enable move assignment
   CachableEntry(CachableEntry&& rhs)
     : value_(rhs.value_)
     , cache_(rhs.cache_)
@@ -72,7 +75,7 @@ public:
 
     rhs.ResetFields();
   }
-
+  // enable move assignment
   CachableEntry& operator=(CachableEntry&& rhs) {
     if (UNLIKELY(this == &rhs)) {
       return *this;
@@ -98,28 +101,29 @@ public:
   ~CachableEntry() {
     ReleaseResource();
   }
-
+  // return true when all member vars are empty
   bool IsEmpty() const {
     return value_ == nullptr && cache_ == nullptr && cache_handle_ == nullptr &&
       !own_value_;
   }
-
+  // check whether cached
   bool IsCached() const {
     assert(!!cache_ == !!cache_handle_);
 
     return cache_handle_ != nullptr;
   }
-
+  // return member vars,
+  // T is actually value in a cache entry if it own this value
   T* GetValue() const { return value_; }
   Cache* GetCache() const { return cache_; }
   Cache::Handle* GetCacheHandle() const { return cache_handle_; }
   bool GetOwnValue() const { return own_value_; }
-
+  // reset method
   void Reset() {
     ReleaseResource();
     ResetFields();
   }
-
+  // transfer to cleanable entry and make ready for cleanup job
   void TransferTo(Cleanable* cleanable) {
     if (cleanable) {
       if (cache_handle_ != nullptr) {
@@ -132,7 +136,8 @@ public:
 
     ResetFields();
   }
-
+  // set value
+  // set own_value_ to true -> this entry has ownership of this value
   void SetOwnedValue(T* value) {
     assert(value != nullptr);
 
@@ -146,7 +151,8 @@ public:
     value_ = value;
     own_value_ = true;
   }
-
+  // set value
+  // set own_value_ to true -> this entry does not have ownership of this value
   void SetUnownedValue(T* value) {
     assert(value != nullptr);
 
@@ -160,7 +166,8 @@ public:
     value_ = value;
     assert(!own_value_);
   }
-
+  // set value, cache, cache_handle
+  // set own_value_ to true -> this entry does not have ownership of this value
   void SetCachedValue(T* value, Cache* cache, Cache::Handle* cache_handle) {
     assert(value != nullptr);
     assert(cache != nullptr);
@@ -180,6 +187,7 @@ public:
   }
 
 private:
+  // release cache entry in cache or release owned value
   void ReleaseResource() {
     if (LIKELY(cache_handle_ != nullptr)) {
       assert(cache_ != nullptr);
@@ -188,14 +196,14 @@ private:
       delete value_;
     }
   }
-
+  // reset all member fields to null
   void ResetFields() {
     value_ = nullptr;
     cache_ = nullptr;
     cache_handle_ = nullptr;
     own_value_ = false;
   }
-
+  // release cache entry in cache
   static void ReleaseCacheHandle(void* arg1, void* arg2) {
     Cache* const cache = static_cast<Cache*>(arg1);
     assert(cache);
@@ -206,6 +214,7 @@ private:
     cache->Release(cache_handle);
   }
 
+  // delete value liked arg1
   static void DeleteValue(void* arg1, void* /* arg2 */) {
     delete static_cast<T*>(arg1);
   }

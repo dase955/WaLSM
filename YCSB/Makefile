@@ -10,12 +10,18 @@
 #---------------------build config-------------------------
 
 DEBUG_BUILD ?= 0
-EXTRA_CXXFLAGS ?= -I../include -I../include/rocksdb
-EXTRA_LDFLAGS ?= -L../ -lpmem -ldl -lz -lbz2 -lsnappy -llz4 -lzstd
+EXTRA_CXXFLAGS ?= -I../include -I../include/rocksdb 
+EXTRA_LDFLAGS ?= -L../ -lpmem -ldl
 
 BIND_ROCKSDB ?= 1
 BIND_LEVELDB ?= 0
 BIND_LMDB ?= 0
+
+EXTRA_LDFLAGS += -lstdc++
+EXTRA_LDFLAGS += -lsocket++
+# EXTRA_LDFLAGS += -lpython3.12
+# EXTRA_CXXFLAGS += -I$(PYTHON_INCLUDE_PATH)
+# EXTRA_CXXFLAGS += -L$(PYTHON_LIBRARY_PATH)
 
 #----------------------------------------------------------
 

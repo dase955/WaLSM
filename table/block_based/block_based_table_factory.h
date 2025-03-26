@@ -39,6 +39,7 @@ class TailPrefetchStats {
   size_t num_records_ = 0;
 };
 
+// only init TableReader and TableBuilder
 class BlockBasedTableFactory : public TableFactory {
  public:
   explicit BlockBasedTableFactory(

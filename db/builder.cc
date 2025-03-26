@@ -352,6 +352,7 @@ Status BuildTable(
   return s;
 }
 
+// TODO(WaLSM+): what to do with our info recorders? we need pass global recorders pointers first
 Status BuildTableFromArt(
     SingleCompactionJob *job,
     const std::string& dbname, Env* env, FileSystem* fs,
@@ -420,6 +421,7 @@ Status BuildTableFromArt(
         ioptions.statistics, ioptions.listeners,
         ioptions.file_checksum_gen_factory));
 
+    // TODO(WaLSM+): pass temp recorders ptrs to builder (should be blocked based table)
     builder = NewTableBuilder(
         ioptions, mutable_cf_options, internal_comparator,
         int_tbl_prop_collector_factories, column_family_id,
@@ -440,6 +442,7 @@ Status BuildTableFromArt(
   }
 
   TEST_SYNC_POINT("BuildTable:BeforeFinishBuildTable");
+  // TODO(WaLSM+): we will get temp recorders after finishing
   s = builder->Finish();
   *io_status = builder->io_status();
   if (s.ok()) {

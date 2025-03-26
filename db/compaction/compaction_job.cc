@@ -560,6 +560,7 @@ void CompactionJob::GenSubcompactionBoundaries() {
   }
 }
 
+// TODO(WaLSM+): pass temp recorders ptr and update
 Status CompactionJob::Run() {
   AutoThreadOperationStageUpdater stage_updater(
       ThreadStatus::STAGE_COMPACTION_RUN);
@@ -581,7 +582,8 @@ Status CompactionJob::Run() {
 
   // Always schedule the first subcompaction (whether or not there are also
   // others) in the current thread to be efficient with resources
-  ProcessKeyValueCompaction(&compact_->sub_compact_states[0]);
+  // TODO(WaLSM+): pass temp recorders ptr and update
+  ProcessKeyValueCompaction(&compact_->sub_compact_states[0]); 
 
   // Wait for all other threads (if there are any) to finish execution
   for (auto& thread : thread_pool) {
@@ -845,6 +847,7 @@ Status CompactionJob::Install(const MutableCFOptions& mutable_cf_options) {
   return status;
 }
 
+// TODO(WaLSM+): pass temp recorders ptr and update
 void CompactionJob::ProcessKeyValueCompaction(SubcompactionState* sub_compact) {
   assert(sub_compact != nullptr);
 
@@ -983,7 +986,8 @@ void CompactionJob::ProcessKeyValueCompaction(SubcompactionState* sub_compact) {
         break;
       }
     }
-    status = sub_compact->AddToBuilder(key, value);
+    // TODO(WaLSM+): pass temp recorders ptr and update
+    status = sub_compact->AddToBuilder(key, value); 
     if (!status.ok()) {
       break;
     }
@@ -1095,8 +1099,9 @@ void CompactionJob::ProcessKeyValueCompaction(SubcompactionState* sub_compact) {
   // close the output file.
   if (sub_compact->builder != nullptr) {
     CompactionIterationStats range_del_out_stats;
+    // TODO(WaLSM+): pass temp recorders ptr and update
     Status s = FinishCompactionOutputFile(status, sub_compact, &range_del_agg,
-                                          &range_del_out_stats);
+                                          &range_del_out_stats); 
     if (!s.ok() && status.ok()) {
       status = s;
     }

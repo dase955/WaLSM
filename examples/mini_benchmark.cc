@@ -593,7 +593,7 @@ int main(int argc, char* argv[]) {
   options.use_direct_reads = true;
   options.enable_pipelined_write = true;
   options.compression = rocksdb::kNoCompression;
-  options.nvm_path = "/mnt/chen/nodememory";
+  options.nvm_path = "/pg_wal/ycc/memory_art";
   options.IncreaseParallelism(16);
 
   std::remove(options.nvm_path.c_str());

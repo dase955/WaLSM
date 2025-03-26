@@ -645,6 +645,7 @@ Version::~Version() {
       assert(f->refs > 0);
       f->refs--;
       if (f->refs <= 0) {
+        // TODO: update filter cache (WaLSM+)
         assert(cfd_ != nullptr);
         uint32_t path_id = f->fd.GetPathId();
         assert(path_id < cfd_->ioptions()->cf_paths.size());
@@ -1831,6 +1832,183 @@ void Version::Get(const ReadOptions& read_options, const LookupKey& k,
   }
 }
 
+#ifdef ART_PLUS
+void Version::Get(FilterCacheClient& filter_cache,
+                  const ReadOptions& read_options, const LookupKey& k,
+                  PinnableSlice* value, std::string* timestamp, Status* status,
+                  MergeContext* merge_context,
+                  SequenceNumber* max_covering_tombstone_seq, bool* value_found,
+                  bool* key_exists, SequenceNumber* seq, ReadCallback* callback,
+                  bool* is_blob, bool do_merge) {
+  Slice ikey = k.internal_key();
+  Slice user_key = k.user_key();
+
+  assert(status->ok() || status->IsMergeInProgress());
+
+  if (key_exists != nullptr) {
+    // will falsify below if not found
+    *key_exists = true;
+  }
+
+  PinnedIteratorsManager pinned_iters_mgr;
+  uint64_t tracing_get_id = BlockCacheTraceHelper::kReservedGetId;
+  if (vset_ && vset_->block_cache_tracer_ &&
+      vset_->block_cache_tracer_->is_tracing_enabled()) {
+    tracing_get_id = vset_->block_cache_tracer_->NextGetId();
+  }
+  // determine hit partition
+  auto* hit_partition = storage_info_.GetHitPartition(user_key);
+  GetContext get_context(
+      user_comparator(), merge_operator_, info_log_, db_statistics_, nullptr,
+      status->ok() ? GetContext::kNotFound : GetContext::kMerge, user_key,
+      do_merge ? value : nullptr, do_merge ? timestamp : nullptr, value_found,
+      merge_context, do_merge, max_covering_tombstone_seq, this->env_, seq,
+      merge_operator_ ? &pinned_iters_mgr : nullptr, callback, is_blob,
+      tracing_get_id);
+
+  // Pin blocks that we read to hold merge operands
+  if (merge_operator_) {
+    pinned_iters_mgr.StartPinning();
+  }
+
+  std::vector<FileMetaData*> hit_files[storage_info_.num_levels_];
+  hit_files[0] = storage_info_.files_[0];
+  for (int i = 1; i < storage_info_.num_levels_; i++) {
+    hit_files[i] = hit_partition->files_[i];
+  }
+  FilePicker fp(hit_files, user_key, ikey, &storage_info_.level_files_brief_,
+                static_cast<unsigned int>(storage_info_.num_levels_),
+                &storage_info_.file_indexer_, user_comparator(),
+                internal_comparator());
+  FileMetaData* f = fp.GetNextFile();
+
+  int prev_level = 0;
+  while (f != nullptr) {
+    if (fp.GetCurrentLevel() != prev_level) {
+      prev_level = fp.GetCurrentLevel();
+      hit_partition->queries[prev_level]++;
+    }
+    if (*max_covering_tombstone_seq > 0) {
+      // The remaining files we look at will only contain covered keys, so we
+      // stop here.
+      break;
+    }
+    if (get_context.sample()) {
+      sample_file_read_inc(f);
+    }
+
+    // set counter
+    if (hit_partition->is_compaction_work[fp.GetCurrentLevel()]) {
+      get_context.SetSearchCount(
+          &hit_partition->search_counter[fp.GetCurrentLevel()]);
+    } else {
+      get_context.SetSearchCount(nullptr);
+    }
+
+    bool timer_enabled =
+        GetPerfLevel() >= PerfLevel::kEnableTimeExceptForMutex &&
+        get_perf_context()->per_level_perf_context_enabled;
+    StopWatchNano timer(env_, timer_enabled /* auto_start */);
+    // we only add filter_cache argument in this new Get method
+    *status = table_cache_->Get(
+        filter_cache,
+        read_options, *internal_comparator(), *f, ikey, &get_context,
+        mutable_cf_options_.prefix_extractor.get(),
+        cfd_->internal_stats()->GetFileReadHist(fp.GetHitFileLevel()),
+        IsFilterSkipped(static_cast<int>(fp.GetHitFileLevel()),
+                        fp.IsHitFileLastInLevel()),
+        fp.GetHitFileLevel(), max_file_size_for_l0_meta_pin_);
+    // TODO: examine the behavior for corrupted key
+    if (timer_enabled) {
+      PERF_COUNTER_BY_LEVEL_ADD(get_from_table_nanos, timer.ElapsedNanos(),
+                                fp.GetHitFileLevel());
+    }
+    if (!status->ok()) {
+      return;
+    }
+
+    // report the counters before returning
+    if (get_context.State() != GetContext::kNotFound &&
+        get_context.State() != GetContext::kMerge &&
+        db_statistics_ != nullptr) {
+      get_context.ReportCounters();
+    }
+    if (db_statistics_ != nullptr) {
+      if (fp.GetCurrentLevel() == 0) {
+        RecordTick(db_statistics_, GET_MISS_L0);
+      } else if (fp.GetCurrentLevel() == 1) {
+        RecordTick(db_statistics_, GET_MISS_L1);
+      } else if (fp.GetCurrentLevel() >= 2) {
+        RecordTick(db_statistics_, GET_MISS_L2_AND_UP);
+      }
+    }
+    switch (get_context.State()) {
+      case GetContext::kNotFound:
+        // Keep searching in other files
+        break;
+      case GetContext::kMerge:
+        // TODO: update per-level perfcontext user_key_return_count for kMerge
+        break;
+      case GetContext::kFound:
+        if (fp.GetHitFileLevel() == 0) {
+          RecordTick(db_statistics_, GET_HIT_L0);
+        } else if (fp.GetHitFileLevel() == 1) {
+          RecordTick(db_statistics_, GET_HIT_L1);
+        } else if (fp.GetHitFileLevel() >= 2) {
+          RecordTick(db_statistics_, GET_HIT_L2_AND_UP);
+        }
+        PERF_COUNTER_BY_LEVEL_ADD(user_key_return_count, 1,
+                                  fp.GetHitFileLevel());
+        return;
+      case GetContext::kDeleted:
+        // Use empty error message for speed
+        *status = Status::NotFound();
+        return;
+      case GetContext::kCorrupt:
+        *status = Status::Corruption("corrupted key for ", user_key);
+        return;
+      case GetContext::kBlobIndex:
+        ROCKS_LOG_ERROR(info_log_, "Encounter unexpected blob index.");
+        *status = Status::NotSupported(
+            "Encounter unexpected blob index. Please open DB with "
+            "ROCKSDB_NAMESPACE::blob_db::BlobDB instead.");
+        return;
+    }
+    f = fp.GetNextFile();
+  }
+  if (db_statistics_ != nullptr) {
+    get_context.ReportCounters();
+  }
+  if (GetContext::kMerge == get_context.State()) {
+    if (!do_merge) {
+      *status = Status::OK();
+      return;
+    }
+    if (!merge_operator_) {
+      *status = Status::InvalidArgument(
+          "merge_operator is not properly initialized.");
+      return;
+    }
+    // merge_operands are in saver and we hit the beginning of the key history
+    // do a final merge of nullptr and operands;
+    std::string* str_value = value != nullptr ? value->GetSelf() : nullptr;
+    *status = MergeHelper::TimedFullMerge(
+        merge_operator_, user_key, nullptr, merge_context->GetOperands(),
+        str_value, info_log_, db_statistics_, env_,
+        nullptr /* result_operand */, true);
+    if (LIKELY(value != nullptr)) {
+      value->PinSelf();
+    }
+  } else {
+    if (key_exists != nullptr) {
+      *key_exists = false;
+    }
+    *status = Status::NotFound();  // Use an empty error message for speed
+  }
+}
+#endif
+
+// TODO: WaLSM+ Benchmark dont use MultiGet interface
 void Version::MultiGet(const ReadOptions& read_options, MultiGetRange* range,
                        ReadCallback* callback, bool* is_blob) {
   PinnedIteratorsManager pinned_iters_mgr;

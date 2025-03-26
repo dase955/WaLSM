@@ -21,6 +21,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <iostream>
 
 #include "rocksdb/slice.h"
 #include "util/fastrange.h"
@@ -56,6 +57,38 @@ extern uint32_t Hash(const char* data, size_t n, uint32_t seed);
 // TODO: consider rename to LegacyBloomHash32
 inline uint32_t BloomHash(const Slice& key) {
   return Hash(key.data(), key.size(), 0xbc9f1d34);
+}
+
+inline uint32_t BloomHashId(const Slice& key, int id) {
+  switch(id){
+    case 0:
+    return Hash(key.data(), key.size(), 0xbc9f1d34);
+    case 1:
+    return Hash(key.data(), key.size(), 0x34f1d34b);
+    case 2:
+    return Hash(key.data(), key.size(), 0x251d34bc);  
+    case 3:
+    return Hash(key.data(), key.size(), 0x01d34bc9);  
+    case 4:
+    return Hash(key.data(), key.size(), 0x1934bc9f);  
+    case 5:
+    return Hash(key.data(), key.size(), 0x934bc9f1);  
+    case 6:
+    return Hash(key.data(), key.size(), 0x4bc9f193);  
+    case 7:
+    return Hash(key.data(), key.size(), 0x51c2578a);  
+    case 8:
+    return Hash(key.data(), key.size(), 0xda23562f);  
+    case 9:
+    return Hash(key.data(), key.size(), 0x135254f2);  
+    case 10:
+    return Hash(key.data(), key.size(), 0xea1e4a48);  
+    case 11:
+    return Hash(key.data(), key.size(), 0x567925f1);  
+    default:
+      std::cout << "BloomHash id error" << std::endl;
+      exit(1);
+  }
 }
 
 inline uint64_t GetSliceHash64(const Slice& key) {

@@ -24,6 +24,9 @@
 #include <unordered_map>
 #include <utility>
 #include <vector>
+#include <memory>
+#include <fstream>
+#include <thread>
 
 #include "db/art/timestamp.h"
 #include "db/art/logger.h"
@@ -240,6 +243,33 @@ DBImpl::DBImpl(const DBOptions& options, const std::string& dbname,
       closed_(false),
       error_handler_(this, immutable_db_options_, &mutex_),
       atomic_flush_install_cv_(&mutex_) {
+// WaLSM+
+#ifdef ART_PLUS
+  /*
+  get_cnt_ = 0;
+  period_cnt_ = 0;
+  last_train_period_ = 0;
+  */
+  segment_info_recorder_ = new std::unordered_map<uint32_t, std::vector<std::string>>;
+  level_recorder_ = new std::map<uint32_t, uint16_t>;
+  level_0_base_count_ = 0;
+
+  features_nums_except_level_0_ = new std::vector<uint16_t>;
+  uint16_t features_num = MAX_FEATURES_NUM;
+  if (features_num > 0) {
+    features_nums_except_level_0_->emplace_back(features_num);
+  }
+
+  segment_ranges_recorder_ = new std::map<uint32_t, std::vector<RangeRatePair>>;
+
+  unit_size_recorder_ = new std::map<uint32_t, uint32_t>;
+
+  filter_cache_.retrain_or_keep_model(features_nums_except_level_0_, 
+                                      level_recorder_,
+                                      segment_ranges_recorder_,
+                                      unit_size_recorder_);
+  filter_cache_.make_adjustment();
+#endif
   // !batch_per_trx_ implies seq_per_batch_ because it is only unset for
   // WriteUnprepared, which should use seq_per_batch_.
   assert(batch_per_txn_ || seq_per_batch_);
@@ -298,6 +328,10 @@ DBImpl::DBImpl(const DBOptions& options, const std::string& dbname,
 
   global_memtable_ = new GlobalMemtable(
       vlog_manager_, group_manager_, env_, recovery);
+
+  // heat_buckets_ = new HeatBuckets();
+  // std::cout << "Buckets_ address : ";
+  // std::cout << std::hex << heat_buckets_ << std::endl;
 
   Compactor::compaction_threshold_ = options.compaction_threshold;
 
@@ -1628,6 +1662,7 @@ class GetWithTimestampReadCallback : public ReadCallback {
 };
 }  // namespace
 
+// TODO: Modify GetImpl -- WaLSM+
 Status DBImpl::GetImpl(const ReadOptions& read_options, const Slice& key,
                        GetImplOptions& get_impl_options) {
   assert(get_impl_options.value != nullptr ||
@@ -1737,8 +1772,84 @@ Status DBImpl::GetImpl(const ReadOptions& read_options, const Slice& key,
   std::string* timestamp = ts_sz > 0 ? get_impl_options.timestamp : nullptr;
 
   // Change
+  // std::cout << "ready for get" << std::endl;
+// WaLSM+: add hotness estimating
 #ifdef ART
+#ifdef ART_PLUS
   std::string art_key(key.data(), key.size());
+  filter_cache_.get_updating_work(art_key);
+  // ready to estimate hotness, update heat buckets
+  /*
+  if (heat_buckets_.is_ready()) {
+    get_cnt_ += 1;
+    if (get_cnt_ >= PERIOD_COUNT) {
+      heat_buckets_.hit(art_key, true);
+      get_cnt_ = 0;
+      period_cnt_ += 1;
+    } else {
+      heat_buckets_.hit(art_key, false);
+    }
+  }
+
+  if (heat_buckets_.is_ready() && period_cnt_ > 0 &&  
+      period_cnt_ - last_train_period_ >= TRAIN_PERIODS) {
+    bool need_train = false;
+    train_mutex_.lock();
+    if (period_cnt_ - last_train_period_ >= TRAIN_PERIODS) {
+      need_train = true;
+      last_train_period_ = period_cnt_;
+    }
+    train_mutex_.unlock();
+    // only one thread can train model.
+    if (need_train) {
+      std::fstream f_model;
+      f_model.open("/pg_wal/ycc/model.log", std::ios::out | std::ios::app);
+      f_model << "[DEBUG] try to train models" << std::endl;
+      f_model << "[DEBUG] period_cnt_ : " << period_cnt_ << std::endl;
+      f_model << "[DEBUG] PERIOD_COUNT : " << PERIOD_COUNT << std::endl;
+      f_model << "[DEBUG] TRAIN_PERIODS : " << TRAIN_PERIODS << std::endl;
+        
+      if (!clf_model_.is_ready()) {
+        std::vector<uint16_t> feature_nums;
+        clf_model_.make_ready(feature_nums);
+      }
+
+      std::vector<std::vector<uint32_t>> datas;
+      std::vector<uint16_t> tags;
+      std::vector<uint32_t> get_cnts;
+      std::vector<uint16_t> preds;
+
+      // std::thread train_thread(make_train, clf_model_, datas, tags);
+		  // train_thread.detach();	
+      clf_model_.make_train(datas, tags, get_cnts);
+
+      clf_model_.make_predict(datas, preds);
+
+      f_model << "[DEBUG] debug predict result: " << std::endl;
+      for (uint16_t& pred : preds) {
+        f_model << pred << " ";
+      }
+      f_model << std::endl << std::endl << std::endl;
+      f_model.close();
+
+      std::fstream f_algo;
+      f_algo.open("/pg_wal/ycc/algo.log", std::ios::out | std::ios::app);
+      f_algo << "[DEBUG] greedy algo debug results : " << std::endl;
+      std::map<uint32_t, uint16_t> algo_solution;
+      uint32_t cache_size = CACHE_SPACE_SIZE;
+      GreedyAlgo greedy_algo;
+      greedy_algo.debug(algo_solution, cache_size);
+      for (auto it = algo_solution.begin(); it != algo_solution.end(); it++) {
+        f_algo << "[DEBUG] " << it->first << " -> " << it->second << std::endl;
+      }
+      f_algo.close();
+
+      filter_cache_heap_manager_.debug();
+    }    
+  }
+  */
+
+#endif
   done = global_memtable_->Get(art_key, *get_impl_options.value->GetSelf(), &s);
 #else
   if (!skip_memtable) {
@@ -1786,6 +1897,7 @@ Status DBImpl::GetImpl(const ReadOptions& read_options, const Slice& key,
 
   if (!done) {
     PERF_TIMER_GUARD(get_from_output_files_time);
+#ifndef ART_PLUS
     sv->current->Get(
         read_options, lkey, get_impl_options.value, timestamp, &s,
         &merge_context, &max_covering_tombstone_seq,
@@ -1794,6 +1906,17 @@ Status DBImpl::GetImpl(const ReadOptions& read_options, const Slice& key,
         get_impl_options.get_value ? get_impl_options.callback : nullptr,
         get_impl_options.get_value ? get_impl_options.is_blob_index : nullptr,
         get_impl_options.get_value);
+#else
+    sv->current->Get(
+        filter_cache_,
+        read_options, lkey, get_impl_options.value, timestamp, &s,
+        &merge_context, &max_covering_tombstone_seq,
+        get_impl_options.get_value ? get_impl_options.value_found : nullptr,
+        nullptr, nullptr,
+        get_impl_options.get_value ? get_impl_options.callback : nullptr,
+        get_impl_options.get_value ? get_impl_options.is_blob_index : nullptr,
+        get_impl_options.get_value);
+#endif
     RecordTick(stats_, MEMTABLE_MISS);
     get_in_ssd.fetch_add(1);
   } else {
@@ -1835,6 +1958,7 @@ Status DBImpl::GetImpl(const ReadOptions& read_options, const Slice& key,
   return s;
 }
 
+// TODO: WaLSM+ Benchmark dont use MultiGet interface
 std::vector<Status> DBImpl::MultiGet(
     const ReadOptions& read_options,
     const std::vector<ColumnFamilyHandle*>& column_family,

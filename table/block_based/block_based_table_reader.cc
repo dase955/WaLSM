@@ -2194,6 +2194,48 @@ bool BlockBasedTable::FullFilterKeyMayMatch(
   return may_match;
 }
 
+#ifdef ART_PLUS
+bool BlockBasedTable::FullFilterKeyMayMatch(
+    FilterCacheClient& filter_cache,
+    const ReadOptions& read_options, FilterBlockReader* filter,
+    const Slice& internal_key, const bool no_io,
+    const SliceTransform* prefix_extractor, GetContext* get_context,
+    BlockCacheLookupContext* lookup_context) const {
+  if (filter == nullptr || filter->IsBlockBased()) {
+    return true;
+  }
+  Slice user_key = ExtractUserKey(internal_key);
+  const Slice* const const_ikey_ptr = &internal_key;
+  bool may_match = true;
+  if (rep_->whole_key_filtering) {
+    size_t ts_sz =
+        rep_->internal_comparator.user_comparator()->timestamp_size();
+    Slice user_key_without_ts = StripTimestampFromUserKey(user_key, ts_sz);
+    // add filter_cache argument here
+    may_match =
+        filter->KeyMayMatch(filter_cache,
+                            user_key_without_ts, prefix_extractor, kNotValid,
+                            no_io, const_ikey_ptr, get_context, lookup_context);
+  } else if (!read_options.total_order_seek && prefix_extractor &&
+             rep_->table_properties->prefix_extractor_name.compare(
+                 prefix_extractor->Name()) == 0 &&
+             prefix_extractor->InDomain(user_key) &&
+             !filter->PrefixMayMatch(prefix_extractor->Transform(user_key),
+                                     prefix_extractor, kNotValid, no_io,
+                                     const_ikey_ptr, get_context,
+                                     lookup_context)) {
+    // WaLSM+ dont use prefix filter, so this branch will not reach
+    may_match = false;
+  }
+  if (may_match) {
+    RecordTick(rep_->ioptions.statistics, BLOOM_FILTER_FULL_POSITIVE);
+    PERF_COUNTER_BY_LEVEL_ADD(bloom_filter_full_positive, 1, rep_->level);
+  }
+  return may_match;
+}
+#endif
+
+// TODO: not used in WaLSM+ Benchmark, meybe used in MultiGet interface ?
 void BlockBasedTable::FullFilterKeysMayMatch(
     const ReadOptions& read_options, FilterBlockReader* filter,
     MultiGetRange* range, const bool no_io,
@@ -2291,14 +2333,14 @@ Status BlockBasedTable::Get(const ReadOptions& read_options, const Slice& key,
     bool done = false;
     for (iiter->Seek(key); iiter->Valid() && !done; iiter->Next()) {
       IndexValue v = iiter->value();
-
+      // WaLSM+ dont use BlockBasedFilter, so not_exist_in_filter always false
       bool not_exist_in_filter =
           filter != nullptr && filter->IsBlockBased() == true &&
           !filter->KeyMayMatch(ExtractUserKeyAndStripTimestamp(key, ts_sz),
                                prefix_extractor, v.handle.offset(), no_io,
                                /*const_ikey_ptr=*/nullptr, get_context,
                                &lookup_context);
-
+                               
       if (not_exist_in_filter) {
         // Not found
         // TODO: think about interaction with Merge. If a user key cannot
@@ -2420,6 +2462,196 @@ Status BlockBasedTable::Get(const ReadOptions& read_options, const Slice& key,
   return s;
 }
 
+#ifdef ART_PLUS
+Status BlockBasedTable::Get(FilterCacheClient& filter_cache,
+                            const ReadOptions& read_options, const Slice& key,
+                            GetContext* get_context,
+                            const SliceTransform* prefix_extractor,
+                            bool skip_filters) {
+  assert(key.size() >= kNumInternalBytes);  // key must be internal key
+  assert(get_context != nullptr);
+  Status s;
+  const bool no_io = read_options.read_tier == kBlockCacheTier;
+
+  FilterBlockReader* const filter =
+      !skip_filters ? rep_->filter.get() : nullptr;
+
+  // First check the full filter
+  // If full filter not useful, Then go into each block
+  uint64_t tracing_get_id = get_context->get_tracing_get_id();
+  BlockCacheLookupContext lookup_context{
+      TableReaderCaller::kUserGet, tracing_get_id,
+      /*get_from_user_specified_snapshot=*/read_options.snapshot != nullptr};
+  if (block_cache_tracer_ && block_cache_tracer_->is_tracing_enabled()) {
+    // Trace the key since it contains both user key and sequence number.
+    lookup_context.referenced_key = key.ToString();
+    lookup_context.get_from_user_specified_snapshot =
+        read_options.snapshot != nullptr;
+  }
+  TEST_SYNC_POINT("BlockBasedTable::Get:BeforeFilterMatch");
+  // add filter_cache argument here
+  const bool may_match =
+      FullFilterKeyMayMatch(filter_cache, 
+                            read_options, filter, key, no_io, prefix_extractor,
+                            get_context, &lookup_context);
+  TEST_SYNC_POINT("BlockBasedTable::Get:AfterFilterMatch");
+  if (!may_match) {
+    RecordTick(rep_->ioptions.statistics, BLOOM_FILTER_USEFUL);
+    PERF_COUNTER_BY_LEVEL_ADD(bloom_filter_useful, 1, rep_->level);
+  } else {
+    IndexBlockIter iiter_on_stack;
+    // if prefix_extractor found in block differs from options, disable
+    // BlockPrefixIndex. Only do this check when index_type is kHashSearch.
+    bool need_upper_bound_check = false;
+    if (rep_->index_type == BlockBasedTableOptions::kHashSearch) {
+      need_upper_bound_check = PrefixExtractorChanged(
+          rep_->table_properties.get(), prefix_extractor);
+    }
+    auto iiter =
+        NewIndexIterator(read_options, need_upper_bound_check, &iiter_on_stack,
+                         get_context, &lookup_context);
+    std::unique_ptr<InternalIteratorBase<IndexValue>> iiter_unique_ptr;
+    if (iiter != &iiter_on_stack) {
+      iiter_unique_ptr.reset(iiter);
+    }
+
+    size_t ts_sz =
+        rep_->internal_comparator.user_comparator()->timestamp_size();
+    bool matched = false;  // if such user key matched a key in SST
+    bool done = false;
+    for (iiter->Seek(key); iiter->Valid() && !done; iiter->Next()) {
+      IndexValue v = iiter->value();
+      // WaLSM+ dont use BlockBasedFilter, so not_exist_in_filter always false
+      bool not_exist_in_filter =
+          filter != nullptr && filter->IsBlockBased() == true &&
+          !filter->KeyMayMatch(ExtractUserKeyAndStripTimestamp(key, ts_sz),
+                               prefix_extractor, v.handle.offset(), no_io,
+                               /*const_ikey_ptr=*/nullptr, get_context,
+                               &lookup_context);
+                               
+      if (not_exist_in_filter) {
+        // Not found
+        // TODO: think about interaction with Merge. If a user key cannot
+        // cross one data block, we should be fine.
+        RecordTick(rep_->ioptions.statistics, BLOOM_FILTER_USEFUL);
+        PERF_COUNTER_BY_LEVEL_ADD(bloom_filter_useful, 1, rep_->level);
+        break;
+      }
+
+      if (!v.first_internal_key.empty() && !skip_filters &&
+          UserComparatorWrapper(rep_->internal_comparator.user_comparator())
+                  .Compare(ExtractUserKey(key),
+                           ExtractUserKey(v.first_internal_key)) < 0) {
+        // The requested key falls between highest key in previous block and
+        // lowest key in current block.
+        break;
+      }
+
+      BlockCacheLookupContext lookup_data_block_context{
+          TableReaderCaller::kUserGet, tracing_get_id,
+          /*get_from_user_specified_snapshot=*/read_options.snapshot !=
+              nullptr};
+      bool does_referenced_key_exist = false;
+      DataBlockIter biter;
+      uint64_t referenced_data_size = 0;
+      NewDataBlockIterator<DataBlockIter>(
+          read_options, v.handle, &biter, BlockType::kData, get_context,
+          &lookup_data_block_context,
+          /*s=*/Status(), /*prefetch_buffer*/ nullptr);
+
+      if (no_io && biter.status().IsIncomplete()) {
+        // couldn't get block from block_cache
+        // Update Saver.state to Found because we are only looking for
+        // whether we can guarantee the key is not there when "no_io" is set
+        get_context->MarkKeyMayExist();
+        break;
+      }
+      if (!biter.status().ok()) {
+        s = biter.status();
+        break;
+      }
+
+      bool may_exist = biter.SeekForGet(key);
+      // If user-specified timestamp is supported, we cannot end the search
+      // just because hash index lookup indicates the key+ts does not exist.
+      if (!may_exist && ts_sz == 0) {
+        // HashSeek cannot find the key this block and the the iter is not
+        // the end of the block, i.e. cannot be in the following blocks
+        // either. In this case, the seek_key cannot be found, so we break
+        // from the top level for-loop.
+        done = true;
+      } else {
+        // Call the *saver function on each entry/block until it returns false
+        for (; biter.Valid(); biter.Next()) {
+          ParsedInternalKey parsed_key;
+          if (ParseInternalKey(biter.key(), &parsed_key) != Status::OK()) {
+            s = Status::Corruption(Slice());
+          }
+
+          if (!get_context->SaveValue(
+                  parsed_key, biter.value(), &matched,
+                  biter.IsValuePinned() ? &biter : nullptr)) {
+            if (get_context->State() == GetContext::GetState::kFound) {
+              does_referenced_key_exist = true;
+              referenced_data_size = biter.key().size() + biter.value().size();
+            }
+            done = true;
+            break;
+          }
+        }
+        s = biter.status();
+      }
+      // Write the block cache access record.
+      if (block_cache_tracer_ && block_cache_tracer_->is_tracing_enabled()) {
+        // Avoid making copy of block_key, cf_name, and referenced_key when
+        // constructing the access record.
+        Slice referenced_key;
+        if (does_referenced_key_exist) {
+          referenced_key = biter.key();
+        } else {
+          referenced_key = key;
+        }
+        BlockCacheTraceRecord access_record(
+            rep_->ioptions.env->NowMicros(),
+            /*block_key=*/"", lookup_data_block_context.block_type,
+            lookup_data_block_context.block_size, rep_->cf_id_for_tracing(),
+            /*cf_name=*/"", rep_->level_for_tracing(),
+            rep_->sst_number_for_tracing(), lookup_data_block_context.caller,
+            lookup_data_block_context.is_cache_hit,
+            lookup_data_block_context.no_insert,
+            lookup_data_block_context.get_id,
+            lookup_data_block_context.get_from_user_specified_snapshot,
+            /*referenced_key=*/"", referenced_data_size,
+            lookup_data_block_context.num_keys_in_block,
+            does_referenced_key_exist);
+        // TODO: Should handle status here?
+        block_cache_tracer_
+            ->WriteBlockAccess(access_record,
+                               lookup_data_block_context.block_key,
+                               rep_->cf_name_for_tracing(), referenced_key)
+            .PermitUncheckedError();
+      }
+
+      if (done) {
+        // Avoid the extra Next which is expensive in two-level indexes
+        break;
+      }
+    }
+    if (matched && filter != nullptr && !filter->IsBlockBased()) {
+      RecordTick(rep_->ioptions.statistics, BLOOM_FILTER_FULL_TRUE_POSITIVE);
+      PERF_COUNTER_BY_LEVEL_ADD(bloom_filter_full_true_positive, 1,
+                                rep_->level);
+    }
+    if (s.ok() && !iiter->status().IsNotFound()) {
+      s = iiter->status();
+    }
+  }
+
+  return s;
+}
+#endif
+
+// TODO: WaLSM+ Benchmark dont use MultiGet interface
 using MultiGetRange = MultiGetContext::Range;
 void BlockBasedTable::MultiGet(const ReadOptions& read_options,
                                const MultiGetRange* mget_range,

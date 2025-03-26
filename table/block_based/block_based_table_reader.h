@@ -9,8 +9,11 @@
 
 #pragma once
 
+#include <memory>
+#include "db/art/filter_cache_client.h"
 #include "db/range_tombstone_fragmenter.h"
 #include "file/filename.h"
+#include "rocksdb/comparator.h"
 #include "table/block_based/block_based_table_factory.h"
 #include "table/block_based/block_type.h"
 #include "table/block_based/cachable_entry.h"
@@ -87,6 +90,7 @@ class BlockBasedTable : public TableReader {
   //    are set.
   // @param force_direct_prefetch if true, always prefetching to RocksDB
   //    buffer, rather than calling RandomAccessFile::Prefetch().
+  // WaLSM+ Note: call new_table->PrefetchIndexAndFilterBlocks()
   static Status Open(const ReadOptions& ro, const ImmutableCFOptions& ioptions,
                      const EnvOptions& env_options,
                      const BlockBasedTableOptions& table_options,
@@ -103,7 +107,7 @@ class BlockBasedTable : public TableReader {
                      TailPrefetchStats* tail_prefetch_stats = nullptr,
                      BlockCacheTracer* const block_cache_tracer = nullptr,
                      size_t max_file_size_for_l0_meta_pin = 0);
-
+  // WaLSM+ Note: call filter->RangeMayExist()
   bool PrefixMayMatch(const Slice& internal_key,
                       const ReadOptions& read_options,
                       const SliceTransform* options_prefix_extractor,
@@ -128,10 +132,22 @@ class BlockBasedTable : public TableReader {
       const ReadOptions& read_options) override;
 
   // @param skip_filters Disables loading/accessing the filter block
+  // WaLSM+ Note: call FullFilterKeyMayMatch() method in this file
+  // PERF count False Positive in the end
   Status Get(const ReadOptions& readOptions, const Slice& key,
              GetContext* get_context, const SliceTransform* prefix_extractor,
              bool skip_filters = false) override;
 
+#ifdef ART_PLUS
+  Status Get(FilterCacheClient& filter_cache,
+             const ReadOptions& readOptions, const Slice& key,
+             GetContext* get_context, const SliceTransform* prefix_extractor,
+             bool skip_filters = false) override;
+#endif
+
+  // WaLSM+ Note: call FullFilterKeyMayMatch() method in this file
+  // PERF count False Positive in the end
+  // TODO: WaLSM+ Benchmark dont use MultiGet interface
   void MultiGet(const ReadOptions& readOptions,
                 const MultiGetContext::Range* mget_range,
                 const SliceTransform* prefix_extractor,
@@ -172,9 +188,11 @@ class BlockBasedTable : public TableReader {
 
   std::shared_ptr<const TableProperties> GetTableProperties() const override;
 
+  // WaLSM+ Note: call filter->ApproximateMemoryUsage()
   size_t ApproximateMemoryUsage() const override;
 
   // convert SST file to a human readable form
+  // WaLSM+ Note: call filter->ToString()
   Status DumpTable(WritableFile* out_file) override;
 
   Status VerifyChecksum(const ReadOptions& readOptions,
@@ -266,6 +284,7 @@ class BlockBasedTable : public TableReader {
   static std::atomic<uint64_t> next_cache_key_id_;
   BlockCacheTracer* const block_cache_tracer_;
 
+  // WaLSM+ Note: update filter cache event cnt
   void UpdateCacheHitMetrics(BlockType block_type, GetContext* get_context,
                              size_t usage) const;
   void UpdateCacheMissMetrics(BlockType block_type,
@@ -392,13 +411,24 @@ class BlockBasedTable : public TableReader {
                            BlockCacheLookupContext* lookup_context,
                            std::unique_ptr<IndexReader>* index_reader);
 
+  // WaLSM+ Note: filter->PrefixesMayMatch() or filter->KeyMayMatch()
   bool FullFilterKeyMayMatch(const ReadOptions& read_options,
                              FilterBlockReader* filter, const Slice& user_key,
                              const bool no_io,
                              const SliceTransform* prefix_extractor,
                              GetContext* get_context,
                              BlockCacheLookupContext* lookup_context) const;
-
+#ifdef ART_PLUS
+  bool FullFilterKeyMayMatch(FilterCacheClient& filter_cache,
+                             const ReadOptions& read_options,
+                             FilterBlockReader* filter, const Slice& user_key,
+                             const bool no_io,
+                             const SliceTransform* prefix_extractor,
+                             GetContext* get_context,
+                             BlockCacheLookupContext* lookup_context) const;
+#endif
+  // TODO: not used in WaLSM+ Benchmark, meybe used in MultiGet interface ?
+  // WaLSM+ Note: filter->PrefixesMayMatch() or filter->KeyMayMatch()
   void FullFilterKeysMayMatch(const ReadOptions& read_options,
                               FilterBlockReader* filter, MultiGetRange* range,
                               const bool no_io,
@@ -429,6 +459,7 @@ class BlockBasedTable : public TableReader {
                            InternalIterator* meta_iter,
                            const InternalKeyComparator& internal_comparator,
                            BlockCacheLookupContext* lookup_context);
+  // WaLSM+ Note: filter->CacheDependencies()
   Status PrefetchIndexAndFilterBlocks(
       const ReadOptions& ro, FilePrefetchBuffer* prefetch_buffer,
       InternalIterator* meta_iter, BlockBasedTable* new_table,
@@ -443,6 +474,7 @@ class BlockBasedTable : public TableReader {
                                 InternalIteratorBase<IndexValue>* index_iter);
 
   // Create the filter from the filter block.
+  // WaLSM+ Note: FullFilterBlockReader::Create()
   std::unique_ptr<FilterBlockReader> CreateFilterBlockReader(
       const ReadOptions& ro, FilePrefetchBuffer* prefetch_buffer,
       bool use_cache, bool prefetch, bool pin,
@@ -516,6 +548,9 @@ struct BlockBasedTable::Rep {
         table_options(_table_opt),
         filter_policy(skip_filters ? nullptr : _table_opt.filter_policy.get()),
         internal_comparator(_internal_comparator),
+        #ifdef ART_PLUS
+        segment_id_removing_comparator(SegmentIdRemovingComparator(_internal_comparator.user_comparator())),
+        #endif
         filter_type(FilterType::kNoFilter),
         index_type(BlockBasedTableOptions::IndexType::kBinarySearch),
         hash_index_allow_collision(false),
@@ -531,6 +566,9 @@ struct BlockBasedTable::Rep {
   const BlockBasedTableOptions table_options;
   const FilterPolicy* const filter_policy;
   const InternalKeyComparator& internal_comparator;
+  #ifdef ART_PLUS
+  std::unique_ptr<Comparator> segment_id_removing_comparator;
+  #endif
   Status status;
   std::unique_ptr<RandomAccessFileReader> file;
   char cache_key_prefix[kMaxCacheKeyPrefixSize];

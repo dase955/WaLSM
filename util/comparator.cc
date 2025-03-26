@@ -207,6 +207,58 @@ class ReverseBytewiseComparatorImpl : public BytewiseComparatorImpl {
 };
 }// namespace
 
+#ifdef ART_PLUS
+// Remove the last 4 bytes of the key to be compared
+// before performing the comparison
+// (WaLSM+)
+class SegmentIdRemovingComparatorImpl : public Comparator {
+ public:
+  SegmentIdRemovingComparatorImpl(const Comparator* comparator)
+      : real_comparator(comparator) {}
+
+  const char* Name() const override {
+    return "walsmplus.SegmentIdRemovingComparator";
+  }
+
+  int Compare(const Slice& a, const Slice& b) const override {
+    return real_comparator->Compare(Slice(a.data(), a.size() - 4),
+                                    Slice(b.data(), b.size() - 4));
+  }
+
+  bool Equal(const Slice& a, const Slice& b) const override {
+    return real_comparator->Equal(Slice(a.data(), a.size() - 4),
+                                  Slice(b.data(), b.size() - 4));
+  }
+
+  void FindShortestSeparator(std::string* start,
+                             const Slice& limit) const override {
+    real_comparator->FindShortestSeparator(start, limit);
+  }
+
+  void FindShortSuccessor(std::string* key) const override {
+    real_comparator->FindShortSuccessor(key);
+  }
+
+  bool IsSameLengthImmediateSuccessor(const Slice& s,
+                                      const Slice& t) const override {
+    return real_comparator->IsSameLengthImmediateSuccessor(
+        Slice(s.data(), s.size() - 4), Slice(t.data(), t.size() - 4));
+  }
+
+  bool CanKeysWithDifferentByteContentsBeEqual() const override {
+    return real_comparator->CanKeysWithDifferentByteContentsBeEqual();
+  }
+
+  int CompareWithoutTimestamp(const Slice& a, bool a_has_ts, const Slice& b,
+                              bool b_has_ts) const override {
+    return CompareWithoutTimestamp(a, a_has_ts, b, b_has_ts);
+  }
+
+ private:
+  const Comparator* real_comparator;
+};
+#endif
+
 const Comparator* BytewiseComparator() {
   static BytewiseComparatorImpl bytewise;
   return &bytewise;
@@ -216,5 +268,13 @@ const Comparator* ReverseBytewiseComparator() {
   static ReverseBytewiseComparatorImpl rbytewise;
   return &rbytewise;
 }
+
+#ifdef ART_PLUS
+std::unique_ptr<Comparator> SegmentIdRemovingComparator(
+    const Comparator* real_comparator) {
+  return std::unique_ptr<Comparator>(
+      new SegmentIdRemovingComparatorImpl(real_comparator));
+}
+#endif
 
 }  // namespace ROCKSDB_NAMESPACE

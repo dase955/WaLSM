@@ -1255,6 +1255,7 @@ void ColumnFamilyData::InstallSuperVersion(
   return InstallSuperVersion(sv_context, db_mutex, mutable_cf_options_);
 }
 
+// TODO: update filter cache (WaLSM+)
 void ColumnFamilyData::InstallSuperVersion(
     SuperVersionContext* sv_context, InstrumentedMutex* db_mutex,
     const MutableCFOptions& mutable_cf_options) {

@@ -31,6 +31,7 @@
 #include <utility>
 #include <vector>
 
+#include "db/art/filter_cache_client.h"
 #include "db/blob/blob_file_meta.h"
 #include "db/column_family.h"
 #include "db/compaction/compaction.h"
@@ -892,6 +893,16 @@ class Version {
            SequenceNumber* seq = nullptr, ReadCallback* callback = nullptr,
            bool* is_blob = nullptr, bool do_merge = true);
 
+#ifdef ART_PLUS
+  void Get(FilterCacheClient& filter_cache,
+           const ReadOptions&, const LookupKey& key, PinnableSlice* value,
+           std::string* timestamp, Status* status, MergeContext* merge_context,
+           SequenceNumber* max_covering_tombstone_seq,
+           bool* value_found = nullptr, bool* key_exists = nullptr,
+           SequenceNumber* seq = nullptr, ReadCallback* callback = nullptr,
+           bool* is_blob = nullptr, bool do_merge = true);
+#endif
+  // TODO: WaLSM+ Benchmark dont use MultiGet interface
   void MultiGet(const ReadOptions&, MultiGetRange* range,
                 ReadCallback* callback = nullptr, bool* is_blob = nullptr);
 

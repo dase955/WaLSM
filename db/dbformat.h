@@ -174,6 +174,14 @@ inline Slice ExtractUserKey(const Slice& internal_key) {
   return Slice(internal_key.data(), internal_key.size() - kNumInternalBytes);
 }
 
+#ifdef ART_PLUS
+// Returns the internal bytes portion of an internal key. (WaLSM+)
+inline Slice ExtractInternalBytes(const Slice& internal_key) {
+  assert(internal_key.size() >= kNumInternalBytes);
+  return Slice(internal_key.data() + internal_key.size(), kNumInternalBytes);
+}
+#endif
+
 inline Slice ExtractUserKeyAndStripTimestamp(const Slice& internal_key,
                                              size_t ts_sz) {
   assert(internal_key.size() >= kNumInternalBytes + ts_sz);

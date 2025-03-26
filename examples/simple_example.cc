@@ -388,7 +388,8 @@ void ParseOptions(Options& options) {
   options.use_direct_io_for_flush_and_compaction = true;
   options.use_direct_reads = true;
   options.enable_pipelined_write = true;
-  options.OptimizeLevelStyleCompaction();
+  // options.OptimizeLevelStyleCompaction();
+  options.OptimizeUniversalStyleCompaction();
 
   std::ifstream option_file("options.txt", std::ios::in);
   std::string line;
@@ -425,7 +426,7 @@ void DoTest(std::string test_name) {
   options.use_direct_reads = true;
   options.enable_pipelined_write = true;
   options.compression = rocksdb::kNoCompression;
-  options.nvm_path = "/mnt/chen/nodememory";
+  options.nvm_path = "/mnt/walsm/node_memory";
   options.IncreaseParallelism(16);
 
   std::string db_path = "/tmp/tmp_data/db_test_" + test_name;

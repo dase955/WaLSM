@@ -18,11 +18,19 @@
 #include <string>
 #include <utility>
 #include <vector>
+#include <ctime>
 
 #include "db/art/compactor.h"
 #include "db/art/heat_group_manager.h"
 #include "db/art/global_memtable.h"
 #include "db/art/vlog_manager.h"
+#include "db/art/heat_buckets.h"
+#include "db/art/clf_model.h"
+#include "db/art/filter_cache_item.h"
+#include "db/art/filter_cache_heap.h"
+#include "db/art/filter_cache.h"
+#include "db/art/filter_cache_client.h"
+#include "db/art/greedy_algo.h"
 #include "db/column_family.h"
 #include "db/compaction/compaction_job.h"
 #include "db/dbformat.h"
@@ -1513,6 +1521,7 @@ class DBImpl : public DB {
                                       WriteBatch* my_batch);
 
   // REQUIRES: mutex locked and in write thread.
+  // WaLSM+ Note: updating max memtable ID of every column families, then call schedule func
   Status ScheduleFlushes(WriteContext* context);
 
   void MaybeFlushStatsCF(autovector<ColumnFamilyData*>* cfds);
@@ -1897,6 +1906,79 @@ class DBImpl : public DB {
 
   HeatGroupManager* group_manager_;
 
+#ifdef ART_PLUS
+  // TODO: add necessary filter cache info structures
+  FilterCacheClient filter_cache_; // already contain FilterCacheManager
+
+  // TODO: mutex for updating these recorders below
+  //       will be locked when updating these recorders below, and unlock after updating ends
+  std::mutex filter_cache_mutex_;
+
+  // these global recorders need to be latest after every flush or compaction:
+  // std::map<uint32_t, uint16_t>* level_recorder_
+  // std::map<uint32_t, std::vector<RangeRatePair>>* segment_ranges_recorder_
+  // std::map<uint32_t, uint32_t>* unit_size_recorder_
+  // you may need filter_cache_.range_seperators() to receive key range seperators
+  // exactly, if key k < seperators[i+1] and key k >= seperators[i], then key k hit key range i
+  // HeatBuckets::locate(const std::string& key) will tell you how to binary search corresponding key range for one key
+
+  // segment_info_recorder save every segments' min key and max key
+  // but we only need to pass empty segment_info_recorder now
+  // TODO: it should contain all levels segments' min key and max key, then pass to filter cache client, but not used now
+  // this recorder will help decide the key ranges' num, but it dont work in current work
+  // you can try to modify macro DEFAULT_BUCKETS_NUM to decide the key ranges' num
+  std::unordered_map<uint32_t, std::vector<std::string>>* segment_info_recorder_;
+
+  // record every alive segments' level
+  // TODO: need to be latest all the time
+  std::map<uint32_t, uint16_t>* level_recorder_;
+
+  // record features num of every segments
+  // we choose max features num to define model feature num
+  // if you want to use a default features num, set MAX_FEATURES_NUM to non-zero value
+  // then do not insert any entry into this vector later
+  // TODO: we dont use this vector, so we set MAX_FEATURES_NUM to non-zero value
+  std::vector<uint16_t>* features_nums_except_level_0_;
+
+  // should be based level 0 visit cnt in a total long period
+  // simply we set level_0_base_count to 0, and use macro INIT_LEVEL_0_COUNT
+  // we can set this macro to ( PERIOD_COUNT * TRAIN_PERIODS ) * ( level 0 sorted runs num ) / ( max level 0 segments num ) 
+  // TODO: modify INIT_LEVEL_0_COUNT to proper value
+  uint32_t level_0_base_count_;
+
+  // record interacting ranges and their rates of alive segments
+  // TODO: should be latest all the time
+  std::map<uint32_t, std::vector<RangeRatePair>>* segment_ranges_recorder_;
+                                         
+  // every segment's filter unit size is the same
+  // this recorder should hold all alive segment
+  // simply, you can also use default macro DEFAULT_UNIT_SIZE for all segments, just leave this recorder empty
+  // TODO: modify DEFAULT_UNIT_SIZE
+  std::map<uint32_t, uint32_t>* unit_size_recorder_;
+
+  /*
+  HeatBuckets heat_buckets_;
+
+  ClfModel clf_model_;
+
+  FilterCacheHeapManager filter_cache_heap_manager_;
+
+  // monitor low-level segments min key and max key
+  std::vector<std::vector<std::string>> segments_info_;
+
+  // record get cnt in current period, when equal to PERIOD_COUNT, start next period
+  uint32_t get_cnt_;
+
+  // record period cnt, if period_cnt_ - last_train_period_ >= TRAIN_PERIODS, start to evaluate or retrain model-
+  uint32_t period_cnt_;
+
+  // record in which period last model trained.
+  uint32_t last_train_period_;
+
+  // train mutex, preventing model trained more than one time
+  std::mutex train_mutex_;
+  */
+#endif
   // Offset of last record written by leader writer.
   uint64_t last_record_offset_;
 

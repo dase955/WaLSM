@@ -92,3 +92,15 @@ clang-format-diff.py
 
 cmake-build-debug
 cmake-build-release
+
+*_example
+inode_vptrs
+.cache/
+.conda/
+*.txt
+__pycache__/
+*.csv
+
+include/csv2/
+debug.*
+*.log

@@ -14,6 +14,7 @@
 #include <vector>
 #include <stdint.h>
 
+#include "db/art/filter_cache_client.h"
 #include "db/dbformat.h"
 #include "db/range_del_aggregator.h"
 #include "options/cf_options.h"
@@ -96,6 +97,17 @@ class TableCache {
              HistogramImpl* file_read_hist = nullptr, bool skip_filters = false,
              int level = -1, size_t max_file_size_for_l0_meta_pin = 0);
 
+#ifdef ART_PLUS
+  Status Get(FilterCacheClient& filter_cache,
+             const ReadOptions& options,
+             const InternalKeyComparator& internal_comparator,
+             const FileMetaData& file_meta, const Slice& k,
+             GetContext* get_context,
+             const SliceTransform* prefix_extractor = nullptr,
+             HistogramImpl* file_read_hist = nullptr, bool skip_filters = false,
+             int level = -1, size_t max_file_size_for_l0_meta_pin = 0);
+#endif
+
   Status InitFileTableReader(const ReadOptions& options,
                              const InternalKeyComparator& internal_comparator,
                              FileMetaData& file_meta);
@@ -117,6 +129,7 @@ class TableCache {
   //                   in the embedded GetContext
   // @param skip_filters Disables loading/accessing the filter block
   // @param level The level this table is at, -1 for "not set / don't know"
+  // TODO: WaLSM+ Benchmark dont use MultiGet interface
   Status MultiGet(const ReadOptions& options,
                   const InternalKeyComparator& internal_comparator,
                   const FileMetaData& file_meta,

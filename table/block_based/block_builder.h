@@ -17,6 +17,8 @@
 
 namespace ROCKSDB_NAMESPACE {
 
+// seems for kv to build index?
+// not related to our work WaLSM+
 class BlockBuilder {
  public:
   BlockBuilder(const BlockBuilder&) = delete;

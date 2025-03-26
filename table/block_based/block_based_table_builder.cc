@@ -247,6 +247,7 @@ class BlockBasedTableBuilder::BlockBasedTablePropertiesCollector
   bool prefix_filtering_;
 };
 
+// WaLSM+ Note: init filter_builder
 struct BlockBasedTableBuilder::Rep {
   const ImmutableCFOptions ioptions;
   const MutableCFOptions moptions;

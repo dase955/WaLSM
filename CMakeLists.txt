@@ -256,6 +256,7 @@ endif(CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64|AARCH64")
 set(CMAKE_CXX_FLAGS "-mavx2 -lpmem ${CMAKE_CXX_FLAGS}")
 add_definitions(-DART)
 add_definitions(-DUSE_PMEM)
+add_definitions(-DART_PLUS)
 
 option(PORTABLE "build a portable binary" OFF)
 option(FORCE_SSE42 "force building with SSE4.2, even when PORTABLE=ON" OFF)
@@ -589,6 +590,13 @@ set(SOURCES
         db/art/art_node.cc
         db/art/compactor.cc
         db/art/global_memtable.cc
+        db/art/heat_buckets.cc
+        db/art/clf_model.cc
+        db/art/filter_cache_heap.cc
+        db/art/filter_cache_item.cc
+        db/art/filter_cache.cc
+        db/art/filter_cache_client.cc
+        db/art/greedy_algo.cc
         db/art/heat_group.cc
         db/art/lock.cc
         db/art/logger.cc

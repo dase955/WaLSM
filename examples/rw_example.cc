@@ -258,7 +258,7 @@ int main() {
   options.use_direct_io_for_flush_and_compaction = true;
   options.use_direct_reads = true;
   options.enable_pipelined_write = true;
-  options.nvm_path = "/mnt/chen/nodememory";
+  options.nvm_path = "/pg_wal/ycc/memory_art";
   options.compression = rocksdb::kNoCompression;
 
   DB* db;

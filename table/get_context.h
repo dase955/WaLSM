@@ -20,6 +20,7 @@ class PinnedIteratorsManager;
 // Data structure for accumulating statistics during a point lookup. At the
 // end of the point lookup, the corresponding ticker stats are updated. This
 // avoids the overhead of frequent ticker stats updates
+// WaLSM+ Note: related filter counter
 struct GetContextStats {
   uint64_t num_cache_hit = 0;
   uint64_t num_cache_index_hit = 0;

@@ -64,6 +64,7 @@ class BlockBasedTableBuilder : public TableBuilder {
   // Add key,value to the table being constructed.
   // REQUIRES: key is after any previously added key according to comparator.
   // REQUIRES: Finish(), Abandon() have not been called
+  // WaLSM+ Note: call filter_builder->add()
   void Add(const Slice& key, const Slice& value) override;
 
   // Return non-ok iff some error has been detected.
@@ -75,6 +76,7 @@ class BlockBasedTableBuilder : public TableBuilder {
   // Finish building the table.  Stops using the file passed to the
   // constructor after this function returns.
   // REQUIRES: Finish(), Abandon() have not been called
+  // WaLSM+ Note: call WriteFilterBlock()
   Status Finish() override;
 
   // Indicate that the contents of this builder should be abandoned.  Stops
@@ -115,6 +117,7 @@ class BlockBasedTableBuilder : public TableBuilder {
   // Transition state from buffered to unbuffered. See `Rep::State` API comment
   // for details of the states.
   // REQUIRES: `rep_->state == kBuffered`
+  // WaLSM+ Note: call filter_builder->add()
   void EnterUnbuffered();
 
   // Call block's Finish() method
@@ -122,6 +125,8 @@ class BlockBasedTableBuilder : public TableBuilder {
   void WriteBlock(BlockBuilder* block, BlockHandle* handle, bool is_data_block);
 
   // Compress and write block content to the file.
+  // WaLSM+ Note: call filter_builder->StartBlock()
+  // however StartBlock() not implemented in FullFilterBlock
   void WriteBlock(const Slice& block_contents, BlockHandle* handle,
                   bool is_data_block);
   // Directly write data to the file.
@@ -130,7 +135,7 @@ class BlockBasedTableBuilder : public TableBuilder {
   Status InsertBlockInCache(const Slice& block_contents,
                             const CompressionType type,
                             const BlockHandle* handle);
-
+  // WaLSM+ Note: call filter_builder->Finish() and write to SST                            
   void WriteFilterBlock(MetaIndexBuilder* meta_index_builder);
   void WriteIndexBlock(MetaIndexBuilder* meta_index_builder,
                        BlockHandle* index_block_handle);
@@ -171,6 +176,7 @@ class BlockBasedTableBuilder : public TableBuilder {
       CompressionType* result_compression_type, Status* out_status);
 
   // Get compressed blocks from BGWorkCompression and write them into SST
+  // WaLSM+ Note: call filter_builder->StartBlock() and call filter_builder->add()
   void BGWorkWriteRawBlock();
 };
 

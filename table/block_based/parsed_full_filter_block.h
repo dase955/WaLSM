@@ -17,19 +17,24 @@ class FilterPolicy;
 // The sharable/cachable part of the full filter.
 class ParsedFullFilterBlock {
  public:
+  // mainly get FilterBitsReader from filter_policy
   ParsedFullFilterBlock(const FilterPolicy* filter_policy,
                         BlockContents&& contents);
   ~ParsedFullFilterBlock();
 
+  // noticed unique_ptr point to FilterBitsReader, 
+  // thus this method return the FilterBitsReader filter_bits_reader_ pointed to
   FilterBitsReader* filter_bits_reader() const {
     return filter_bits_reader_.get();
   }
 
+  // not implemented
   // TODO: consider memory usage of the FilterBitsReader
   size_t ApproximateMemoryUsage() const {
     return block_contents_.ApproximateMemoryUsage();
   }
-
+  // not implemented
+  // TODO
   bool own_bytes() const { return block_contents_.own_bytes(); }
 
  private:

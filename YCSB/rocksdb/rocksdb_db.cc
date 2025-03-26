@@ -18,6 +18,7 @@
 #include <rocksdb/status.h>
 #include <rocksdb/utilities/options_util.h>
 #include <rocksdb/write_batch.h>
+#include <fstream>
 
 namespace {
   const std::string PROP_NAME = "rocksdb.dbname";
@@ -97,6 +98,9 @@ namespace {
 
   const std::string PROP_OPTIMIZE_LEVELCOMP = "rocksdb.optimize_level_style_compaction";
   const std::string PROP_OPTIMIZE_LEVELCOMP_DEFAULT = "false";
+
+  const std::string PROP_OPTIMIZE_UNIVERSALCOMP = "rocksdb.optimize_universal_style_compaction";
+  const std::string PROP_OPTIMIZE_UNIVERSALCOMP_DEFAULT = "false";
 
   const std::string PROP_OPTIONS_FILE = "rocksdb.optionsfile";
   const std::string PROP_OPTIONS_FILE_DEFAULT = "";
@@ -351,10 +355,13 @@ void RocksdbDB::GetOptions(const utils::Properties &props, rocksdb::Options *opt
     opt->table_factory.reset(rocksdb::NewBlockBasedTableFactory(table_options));
 
     if (props.GetProperty(PROP_INCREASE_PARALLELISM, PROP_INCREASE_PARALLELISM_DEFAULT) == "true") {
-      opt->IncreaseParallelism();
+      opt->IncreaseParallelism(32);
     }
     if (props.GetProperty(PROP_OPTIMIZE_LEVELCOMP, PROP_OPTIMIZE_LEVELCOMP_DEFAULT) == "true") {
       opt->OptimizeLevelStyleCompaction();
+    }
+    if (props.GetProperty(PROP_OPTIMIZE_UNIVERSALCOMP, PROP_OPTIMIZE_UNIVERSALCOMP_DEFAULT) == "true") {
+      opt->OptimizeUniversalStyleCompaction();
     }
   }
 }
@@ -424,6 +431,12 @@ DB::Status RocksdbDB::ReadSingle(const std::string &table, const std::string &ke
                                  std::vector<Field> &result) {
   std::string data;
   rocksdb::Status s = db_->Get(rocksdb::ReadOptions(), key, &data);
+  #ifdef GEN_WORKLOAD
+  std::fstream f;
+	f.open("../workload/workload", std::ios::out | std::ios::app);
+	f << key <<std::endl;
+	f.close();
+  #endif
   if (s.IsNotFound()) {
     return kNotFound;
   } else if (!s.ok()) {
@@ -461,6 +474,7 @@ DB::Status RocksdbDB::ScanSingle(const std::string &table, const std::string &ke
 
 DB::Status RocksdbDB::UpdateSingle(const std::string &table, const std::string &key,
                                    std::vector<Field> &values) {
+  /*
   std::string data;
   rocksdb::Status s = db_->Get(rocksdb::ReadOptions(), key, &data);
   if (s.IsNotFound()) {
@@ -491,6 +505,9 @@ DB::Status RocksdbDB::UpdateSingle(const std::string &table, const std::string &
     throw utils::Exception(std::string("RocksDB Put: ") + s.ToString());
   }
   return kOK;
+  */
+  // use insert, not read-modify-write
+  return InsertSingle(table, key, values);
 }
 
 DB::Status RocksdbDB::MergeSingle(const std::string &table, const std::string &key,

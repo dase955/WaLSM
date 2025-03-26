@@ -10,6 +10,8 @@
 #include "table/block_based/block_based_table_reader.h"
 
 namespace ROCKSDB_NAMESPACE {
+// only prefetch data block, for scans operator
+// not related to our work WaLSM+
 class BlockPrefetcher {
  public:
   explicit BlockPrefetcher(size_t compaction_readahead_size)

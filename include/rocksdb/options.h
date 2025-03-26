@@ -1224,7 +1224,7 @@ struct DBOptions {
   bool enable_rewrite = true;
 
   // Path for nvm file, don't pass directory.
-  std::string nvm_path = "/mnt/chen/nodememory";
+  std::string nvm_path = "/pg_wal/ycc/memory_art";
 };
 
 // Options to control the behavior of a database (passed to DB::Open)

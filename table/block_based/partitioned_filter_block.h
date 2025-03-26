@@ -5,10 +5,14 @@
 
 #pragma once
 
+#include <atomic>
+#include <cstdint>
 #include <list>
 #include <string>
 #include <unordered_map>
+#include <vector>
 #include "db/dbformat.h"
+#include "db/art/filter_cache_client.h"
 #include "index_builder.h"
 #include "rocksdb/options.h"
 #include "rocksdb/slice.h"
@@ -45,10 +49,19 @@ class PartitionedFilterBlockBuilder : public FullFilterBlockBuilder {
   struct FilterEntry {
     std::string key;
     Slice filter;
+    #ifdef ART_PLUS
+    uint32_t segment_id;
+    #endif
   };
+  #ifdef ART_PLUS
+  std::vector<std::list<FilterEntry>> filters;  // list of partitioned indexes and their keys
+  std::unique_ptr<IndexBuilder> value;
+  std::vector<std::vector<std::unique_ptr<const char[]>>> filter_gc;
+  #else
   std::list<FilterEntry> filters;  // list of partitioned indexes and their keys
   std::unique_ptr<IndexBuilder> value;
   std::vector<std::unique_ptr<const char[]>> filter_gc;
+  #endif
   bool finishing_filters =
       false;  // true if Finish is called once but not complete yet.
   // The policy of when cut a filter block and Finish it
@@ -63,6 +76,14 @@ class PartitionedFilterBlockBuilder : public FullFilterBlockBuilder {
   // The number of keys added to the last partition so far
   uint32_t keys_added_to_partition_;
   BlockHandle last_encoded_handle_;
+
+  #ifdef ART_PLUS
+  // The number of filter builders(hash functions) for each segment. (WaLSM+)
+  int filter_count_;
+  // When Finish() is called, return filters[filter_index].front() (WaLSM+)
+  int finishing_filter_index_;
+  static std::atomic<uint32_t> segment_id_base_;
+  #endif
 };
 
 class PartitionedFilterBlockReader : public FilterBlockReaderCommon<Block> {
@@ -80,11 +101,20 @@ class PartitionedFilterBlockReader : public FilterBlockReaderCommon<Block> {
                    uint64_t block_offset, const bool no_io,
                    const Slice* const const_ikey_ptr, GetContext* get_context,
                    BlockCacheLookupContext* lookup_context) override;
+#ifdef ART_PLUS
+  bool KeyMayMatch(FilterCacheClient& filter_cache,
+                   const Slice& key, const SliceTransform* prefix_extractor,
+                   uint64_t block_offset, const bool no_io,
+                   const Slice* const const_ikey_ptr, GetContext* get_context,
+                   BlockCacheLookupContext* lookup_context);
+#endif
+  // TODO: not used in WaLSM+ Benchmark, meybe used in MultiGet interface ?
   void KeysMayMatch(MultiGetRange* range,
                     const SliceTransform* prefix_extractor,
                     uint64_t block_offset, const bool no_io,
                     BlockCacheLookupContext* lookup_context) override;
 
+  // not use prefix filter in WaLSM+ experiments
   bool PrefixMayMatch(const Slice& prefix,
                       const SliceTransform* prefix_extractor,
                       uint64_t block_offset, const bool no_io,
@@ -117,6 +147,15 @@ class PartitionedFilterBlockReader : public FilterBlockReaderCommon<Block> {
                 GetContext* get_context,
                 BlockCacheLookupContext* lookup_context,
                 FilterFunction filter_function) const;
+#ifdef ART_PLUS
+  bool MayMatch(FilterCacheClient& filter_cache,
+                const Slice& slice, const SliceTransform* prefix_extractor,
+                uint64_t block_offset, bool no_io, const Slice* const_ikey_ptr,
+                GetContext* get_context,
+                BlockCacheLookupContext* lookup_context,
+                FilterFunction filter_function) const;
+#endif
+  // TODO: used when calling MultiGet, but we dont use MultiGet in WaLSM+ Benchmark
   using FilterManyFunction = void (FullFilterBlockReader::*)(
       MultiGetRange* range, const SliceTransform* prefix_extractor,
       uint64_t block_offset, const bool no_io,

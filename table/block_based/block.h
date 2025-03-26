@@ -37,6 +37,9 @@ class DataBlockIter;
 class IndexBlockIter;
 class BlockPrefixIndex;
 
+// Block not suitable for Filter
+// so these classes under this line not related to our work WaLSM+
+
 // BlockReadAmpBitmap is a bitmap that map the ROCKSDB_NAMESPACE::Block data
 // bytes to a bitmap with ratio bytes_per_bit. Whenever we access a range of
 // bytes in the Block we update the bitmap and increment

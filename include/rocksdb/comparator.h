@@ -8,6 +8,7 @@
 
 #pragma once
 
+#include <memory>
 #include <string>
 
 #include "rocksdb/rocksdb_namespace.h"
@@ -133,5 +134,11 @@ extern const Comparator* BytewiseComparator();
 // Return a builtin comparator that uses reverse lexicographic byte-wise
 // ordering.
 extern const Comparator* ReverseBytewiseComparator();
+
+#ifdef ART_PLUS
+// Create a comparator that uses the given comparator to perform the comparison
+// but ignoring the last 4 bytes of the given key. (WaLSM+)
+extern std::unique_ptr<Comparator> SegmentIdRemovingComparator(const Comparator* real_comparator);
+#endif
 
 }  // namespace ROCKSDB_NAMESPACE

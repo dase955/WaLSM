@@ -22,6 +22,7 @@ class FilePrefetchBuffer;
 template <typename TBlocklike>
 class FilterBlockReaderCommon : public FilterBlockReader {
  public:
+  // init method
   FilterBlockReaderCommon(const BlockBasedTable* t,
                           CachableEntry<TBlocklike>&& filter_block)
       : table_(t), filter_block_(std::move(filter_block)) {
@@ -29,22 +30,32 @@ class FilterBlockReaderCommon : public FilterBlockReader {
   }
 
  protected:
+  // input table, call table->RetrieveBlock() and return status
   static Status ReadFilterBlock(const BlockBasedTable* table,
                                 FilePrefetchBuffer* prefetch_buffer,
                                 const ReadOptions& read_options, bool use_cache,
                                 GetContext* get_context,
                                 BlockCacheLookupContext* lookup_context,
                                 CachableEntry<TBlocklike>* filter_block);
-
+  // return table_
   const BlockBasedTable* table() const { return table_; }
+  // not used in our work
   const SliceTransform* table_prefix_extractor() const;
+  // return table_->get_rep()->whole_key_filtering;
   bool whole_key_filtering() const;
+  // return table_->get_rep()->table_options.cache_index_and_filter_blocks;
+  // return true when cache filter in block cache
+  // should return false in WaLSM+, we will design new cache space for filter
   bool cache_filter_blocks() const;
-
+  // if cached, because filter_block_ already own the cache value
+  // we only need to call filter_block->SetUnownedValue(filter_block_.GetValue());
+  // so filter_block only have the reference of cached entry
+  // if not cached, we read from block, load into filter block(owned) 
+  // and return status.
   Status GetOrReadFilterBlock(bool no_io, GetContext* get_context,
                               BlockCacheLookupContext* lookup_context,
                               CachableEntry<TBlocklike>* filter_block) const;
-
+  // if GetOwnValue() = true，return Usage，otherwise 0
   size_t ApproximateFilterBlockMemoryUsage() const;
 
  private:
