@@ -26,7 +26,6 @@
 #include "db/art/vlog_manager.h"
 #include "db/art/heat_buckets.h"
 #include "db/art/clf_model.h"
-#include "db/art/filter_cache_item.h"
 #include "db/art/filter_cache_heap.h"
 #include "db/art/filter_cache.h"
 #include "db/art/filter_cache_client.h"

@@ -122,7 +122,7 @@ PlainTableBuilder::~PlainTableBuilder() {
   io_status_.PermitUncheckedError();
 }
 
-void PlainTableBuilder::Add(const Slice& key, const Slice& value) {
+void PlainTableBuilder::Add(const Slice& key, const Slice& value, uint32_t /*segment_id*/) {
   // temp buffer for metadata bytes between key and value.
   char meta_bytes_buf[6];
   size_t meta_bytes_buf_size = 0;

@@ -2,6 +2,7 @@
 #include <iostream>
 #include <mutex>
 #include <ostream>
+#include "table/block_based/parsed_full_filter_block.h"
 
 namespace ROCKSDB_NAMESPACE {
 
@@ -82,10 +83,9 @@ void FilterCacheClient::do_hit_count_recorder(const uint32_t& segment_id) {
     filter_cache_manager_.hit_count_recorder(segment_id);
 }
 
-bool FilterCacheClient::check_key(const uint32_t& segment_id, const std::string& key) {
-    bool result = filter_cache_manager_.check_key(segment_id, key);
+std::vector<CachableEntry<ParsedFullFilterBlock>> FilterCacheClient::get_filter_blocks(uint32_t segment_id) {
     pool_.submit_detach(do_hit_count_recorder, segment_id);
-    return result;
+    return filter_cache_manager_.get_filter_blocks(segment_id);
 }
 
 void FilterCacheClient::do_hit_heat_buckets(const std::string& key) {
@@ -110,39 +110,32 @@ void FilterCacheClient::make_adjustment() {
 void FilterCacheClient::do_batch_insert_segments(std::vector<uint32_t>& merged_segment_ids, std::vector<uint32_t>& new_segment_ids,
                                                  std::map<uint32_t, std::unordered_map<uint32_t, double>>& inherit_infos_recorder,
                                                  std::map<uint32_t, uint16_t>& level_recorder, const uint32_t& level_0_base_count,
-                                                 std::map<uint32_t, std::vector<RangeRatePair>>& segment_ranges_recorder) {
+                                                 std::map<uint32_t, std::vector<RangeRatePair>>& segment_ranges_recorder,
+                                                 std::map<uint32_t, std::vector<BlockHandle>> block_handles_map
+                                                ) {
     filter_cache_manager_.insert_segments(merged_segment_ids, new_segment_ids, inherit_infos_recorder,
-                                          level_recorder, level_0_base_count, segment_ranges_recorder);
+                                          level_recorder, level_0_base_count, segment_ranges_recorder, block_handles_map);
 }
 
 void FilterCacheClient::batch_insert_segments(std::vector<uint32_t> merged_segment_ids, std::vector<uint32_t> new_segment_ids,
                                               std::map<uint32_t, std::unordered_map<uint32_t, double>> inherit_infos_recorder,
                                               std::map<uint32_t, uint16_t> level_recorder, const uint32_t& level_0_base_count,
-                                              std::map<uint32_t, std::vector<RangeRatePair>> segment_ranges_recorder) {
+                                              std::map<uint32_t, std::vector<RangeRatePair>> segment_ranges_recorder,
+                                              std::map<uint32_t, std::vector<BlockHandle>> block_handles_map
+                                            ) {
     assert(merged_segment_ids.size() > 0 && new_segment_ids.size() > 0);
     assert(new_segment_ids.size() == inherit_infos_recorder.size());
     assert(merged_segment_ids.size() + new_segment_ids.size() == level_recorder.size());
     assert(new_segment_ids.size() == segment_ranges_recorder.size());
     if (level_0_base_count == 0) {
-        pool_.submit_detach(do_batch_insert_segments, merged_segment_ids, new_segment_ids, inherit_infos_recorder, level_recorder, INIT_LEVEL_0_COUNT, segment_ranges_recorder);
+        pool_.submit_detach(do_batch_insert_segments, merged_segment_ids, new_segment_ids, inherit_infos_recorder, level_recorder, INIT_LEVEL_0_COUNT, segment_ranges_recorder, block_handles_map);
     } else {
-        pool_.submit_detach(do_batch_insert_segments, merged_segment_ids, new_segment_ids, inherit_infos_recorder, level_recorder, level_0_base_count, segment_ranges_recorder);
+        pool_.submit_detach(do_batch_insert_segments, merged_segment_ids, new_segment_ids, inherit_infos_recorder, level_recorder, level_0_base_count, segment_ranges_recorder, block_handles_map);
     }
 }
 
-void FilterCacheClient::test_cfd(ColumnFamilyData* cfd) {
-    // std::lock_guard<std::mutex> guard(filter_cache_manager_.cfd_mutex);
-    if (filter_cache_manager_.cfd == nullptr) {
-        std::cout << "first time cfd: " << cfd << std::endl;
-        filter_cache_manager_.cfd = cfd;
-    } else if (filter_cache_manager_.cfd == cfd) {
-        // do nothing
-    } else {
-        std::cout << "hold cfd: " << filter_cache_manager_.cfd << std::endl;
-        std::cout << "new cfd:  " << cfd << std::endl;
-        std::cout << "error: cfd replaced" << std::endl;
-        assert(0);
-    }
+void FilterCacheClient::update_cfd_ptr_if_needed(ColumnFamilyData* cfd) {
+    filter_cache_manager_.update_cfd(cfd);
 }
 void FilterCacheClient::do_batch_delete_segments(std::vector<uint32_t>& merged_segment_ids, std::map<uint32_t, uint16_t>& level_recorder) {
     filter_cache_manager_.delete_segments(merged_segment_ids, level_recorder);
@@ -167,6 +160,10 @@ void FilterCacheClient::batch_move_segments(std::vector<uint32_t> moved_segment_
     assert(moved_segment_ids.size() == move_level_recorder.size());
     assert(moved_segment_ids.size() == move_segment_ranges_recorder.size());
     pool_.submit_detach(do_batch_move_segments, moved_segment_ids, old_level_recorder, move_level_recorder, move_segment_ranges_recorder);                                     
+}
+
+void FilterCacheClient::init_segment(uint32_t segment_id, const BlockBasedTable* table, const std::vector<BlockHandle>& block_handles) {
+    filter_cache_manager_.init_segment(segment_id, table, block_handles);
 }
 
 }

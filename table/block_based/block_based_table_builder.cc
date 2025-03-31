@@ -265,7 +265,7 @@ struct BlockBasedTableBuilder::Rep {
   // compressing any data blocks.
   // TODO(ajkr): ideally we don't buffer all keys and all uncompressed data
   // blocks as it's redundant, but it's easier to implement for now.
-  std::vector<std::pair<std::string, std::vector<std::string>>>
+  std::vector<std::tuple<std::string, std::vector<std::string>, std::vector<uint32_t>>>
       data_block_and_keys_buffers;
   BlockBuilder range_del_block;
 
@@ -711,7 +711,7 @@ BlockBasedTableBuilder::~BlockBasedTableBuilder() {
   delete rep_;
 }
 
-void BlockBasedTableBuilder::Add(const Slice& key, const Slice& value) {
+void BlockBasedTableBuilder::Add(const Slice& key, const Slice& value, uint32_t segment_id) {
   Rep* r = rep_;
   assert(rep_->state != Rep::State::kClosed);
   if (!ok()) return;
@@ -761,7 +761,7 @@ void BlockBasedTableBuilder::Add(const Slice& key, const Slice& value) {
         if (r->filter_builder != nullptr) {
           size_t ts_sz =
               r->internal_comparator.user_comparator()->timestamp_size();
-          r->filter_builder->Add(ExtractUserKeyAndStripTimestamp(key, ts_sz));
+          r->filter_builder->Add(ExtractUserKeyAndStripTimestamp(key, ts_sz), segment_id);
         }
       }
     }
@@ -774,7 +774,9 @@ void BlockBasedTableBuilder::Add(const Slice& key, const Slice& value) {
       if (r->data_block_and_keys_buffers.empty() || should_flush) {
         r->data_block_and_keys_buffers.emplace_back();
       }
-      r->data_block_and_keys_buffers.back().second.emplace_back(key.ToString());
+      // r->data_block_and_keys_buffers.back().second.emplace_back(key.ToString());
+      std::get<1>(r->data_block_and_keys_buffers.back()).emplace_back(key.ToString());
+      std::get<2>(r->data_block_and_keys_buffers.back()).emplace_back(segment_id);
     } else {
       if (r->compression_opts.parallel_threads == 1) {
         r->index_builder->OnKeyAdded(key);
@@ -889,8 +891,10 @@ void BlockBasedTableBuilder::WriteBlock(const Slice& raw_block_contents,
   if (r->state == Rep::State::kBuffered) {
     assert(is_data_block);
     assert(!r->data_block_and_keys_buffers.empty());
-    r->data_block_and_keys_buffers.back().first = raw_block_contents.ToString();
-    r->data_begin_offset += r->data_block_and_keys_buffers.back().first.size();
+    // r->data_block_and_keys_buffers.back().first = raw_block_contents.ToString();
+    // r->data_begin_offset += r->data_block_and_keys_buffers.back().first.size();
+    std::get<0>(r->data_block_and_keys_buffers.back()) = raw_block_contents.ToString();
+    r->data_begin_offset += std::get<0>(r->data_block_and_keys_buffers.back()).size();
     return;
   }
   Status compress_status;
@@ -1156,6 +1160,7 @@ void BlockBasedTableBuilder::WriteRawBlock(const Slice& block_contents,
   }
 }
 
+// WaLSM+: only used in parallel compaction, which is not supported in WaLSM+
 void BlockBasedTableBuilder::BGWorkWriteRawBlock() {
   Rep* r = rep_;
   ParallelCompressionRep::BlockRepSlot* slot;
@@ -1520,11 +1525,16 @@ void BlockBasedTableBuilder::EnterUnbuffered() {
       size_t rand_idx =
           static_cast<size_t>(
               generator.Uniform(r->data_block_and_keys_buffers.size()));
+      // size_t copy_len =
+      //     std::min(kSampleBytes - compression_dict_samples.size(),
+      //              r->data_block_and_keys_buffers[rand_idx].first.size());
       size_t copy_len =
           std::min(kSampleBytes - compression_dict_samples.size(),
-                   r->data_block_and_keys_buffers[rand_idx].first.size());
+                   std::get<0>(r->data_block_and_keys_buffers[rand_idx]).size());
+      // compression_dict_samples.append(
+      //     r->data_block_and_keys_buffers[rand_idx].first, 0, copy_len);
       compression_dict_samples.append(
-          r->data_block_and_keys_buffers[rand_idx].first, 0, copy_len);
+          std::get<0>(r->data_block_and_keys_buffers[rand_idx]), 0, copy_len);
       compression_dict_sample_lens.emplace_back(copy_len);
     }
   }
@@ -1546,11 +1556,16 @@ void BlockBasedTableBuilder::EnterUnbuffered() {
                 r->compression_type == kZSTDNotFinalCompression));
 
   for (size_t i = 0; ok() && i < r->data_block_and_keys_buffers.size(); ++i) {
-    auto& data_block = r->data_block_and_keys_buffers[i].first;
-    auto& keys = r->data_block_and_keys_buffers[i].second;
+    // auto& data_block = r->data_block_and_keys_buffers[i].first;
+    // auto& keys = r->data_block_and_keys_buffers[i].second;
+    auto& data_block = std::get<0>(r->data_block_and_keys_buffers[i]);
+    auto& keys = std::get<1>(r->data_block_and_keys_buffers[i]);
+    auto& segment_ids = std::get<2>(r->data_block_and_keys_buffers[i]);
     assert(!data_block.empty());
     assert(!keys.empty());
+    assert(!segment_ids.empty());
 
+    // WaLSM+: no parallel compression for now, so no need to modify?
     if (r->compression_opts.parallel_threads > 1) {
       ParallelCompressionRep::BlockRep* block_rep = nullptr;
       r->pc_rep->block_rep_pool.pop(block_rep);
@@ -1561,10 +1576,13 @@ void BlockBasedTableBuilder::EnterUnbuffered() {
       block_rep->compression_type = r->compression_type;
 
       block_rep->keys->SwapAssign(keys);
+      // assign segment_ids here if needed
 
       if (i + 1 < r->data_block_and_keys_buffers.size()) {
+        // block_rep->first_key_in_next_block->assign(
+        //     r->data_block_and_keys_buffers[i + 1].second.front());
         block_rep->first_key_in_next_block->assign(
-            r->data_block_and_keys_buffers[i + 1].second.front());
+            std::get<1>(r->data_block_and_keys_buffers[i + 1]).front());
       } else {
         if (r->first_key_in_next_block == nullptr) {
           block_rep->first_key_in_next_block.reset(nullptr);
@@ -1608,19 +1626,24 @@ void BlockBasedTableBuilder::EnterUnbuffered() {
             lock, [r] { return !r->pc_rep->first_block; });
       }
     } else {
-      for (const auto& key : keys) {
+      assert(key.size() == segment_ids.size());
+      for (size_t j = 0; j < keys.size(); ++j) {
+        const auto& key = keys[j];
+        const auto segment_id = segment_ids[j];
         if (r->filter_builder != nullptr) {
           size_t ts_sz =
               r->internal_comparator.user_comparator()->timestamp_size();
-          r->filter_builder->Add(ExtractUserKeyAndStripTimestamp(key, ts_sz));
+          r->filter_builder->Add(ExtractUserKeyAndStripTimestamp(key, ts_sz), segment_id);
         }
         r->index_builder->OnKeyAdded(key);
       }
       WriteBlock(Slice(data_block), &r->pending_handle,
                  true /* is_data_block */);
       if (ok() && i + 1 < r->data_block_and_keys_buffers.size()) {
+        // Slice first_key_in_next_block =
+        //     r->data_block_and_keys_buffers[i + 1].second.front();
         Slice first_key_in_next_block =
-            r->data_block_and_keys_buffers[i + 1].second.front();
+            std::get<1>(r->data_block_and_keys_buffers[i + 1]).front();
         Slice* first_key_in_next_block_ptr = &first_key_in_next_block;
         r->index_builder->AddIndexEntry(
             &keys.back(), first_key_in_next_block_ptr, r->pending_handle);
@@ -1760,6 +1783,10 @@ const char* BlockBasedTableBuilder::GetFileChecksumFuncName() const {
   } else {
     return kUnknownFileChecksumFuncName;
   }
+}
+
+SegmentBuilderResult BlockBasedTableBuilder::GetSegmentBuilderResult() {
+  return rep_->filter_builder->GetSegmentBuilderResult();
 }
 
 const std::string BlockBasedTable::kFilterBlockPrefix = "filter.";

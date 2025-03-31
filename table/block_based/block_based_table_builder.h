@@ -19,6 +19,7 @@
 #include "rocksdb/listener.h"
 #include "rocksdb/options.h"
 #include "rocksdb/status.h"
+#include "table/block_based/filter_block.h"
 #include "table/meta_blocks.h"
 #include "table/table_builder.h"
 #include "util/compression.h"
@@ -65,7 +66,7 @@ class BlockBasedTableBuilder : public TableBuilder {
   // REQUIRES: key is after any previously added key according to comparator.
   // REQUIRES: Finish(), Abandon() have not been called
   // WaLSM+ Note: call filter_builder->add()
-  void Add(const Slice& key, const Slice& value) override;
+  void Add(const Slice& key, const Slice& value, uint32_t segment_id) override;
 
   // Return non-ok iff some error has been detected.
   Status status() const override;
@@ -110,6 +111,8 @@ class BlockBasedTableBuilder : public TableBuilder {
 
   // Get file checksum function name
   const char* GetFileChecksumFuncName() const override;
+
+  SegmentBuilderResult GetSegmentBuilderResult() override;
 
  private:
   bool ok() const { return status().ok(); }

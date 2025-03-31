@@ -27,7 +27,7 @@ FullFilterBlockBuilder::FullFilterBlockBuilder(
   filter_bits_builder_.reset(filter_bits_builder);
 }
 
-void FullFilterBlockBuilder::Add(const Slice& key) {
+void FullFilterBlockBuilder::Add(const Slice& key, uint32_t segment_id) {
   const bool add_prefix = prefix_extractor_ && prefix_extractor_->InDomain(key);
   if (whole_key_filtering_) {
     if (!add_prefix) {

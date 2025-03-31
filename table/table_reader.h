@@ -8,9 +8,12 @@
 // found in the LICENSE file. See the AUTHORS file for names of contributors.
 
 #pragma once
+#include <map>
 #include <memory>
+#include <vector>
 #include "db/range_tombstone_fragmenter.h"
 #include "rocksdb/slice_transform.h"
+#include "table/format.h"
 #include "table/get_context.h"
 #include "table/internal_iterator.h"
 #include "table/multiget_context.h"
@@ -145,6 +148,10 @@ class TableReader {
   virtual Status VerifyChecksum(const ReadOptions& /*read_options*/,
                                 TableReaderCaller /*caller*/) {
     return Status::NotSupported("VerifyChecksum() not supported");
+  }
+
+  virtual std::map<uint32_t, std::vector<BlockHandle>> GetSegmentBlockHandles() const {
+    return {};
   }
 };
 

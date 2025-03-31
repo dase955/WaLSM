@@ -19,6 +19,7 @@
 #include "monitoring/perf_context_imp.h"
 #include "monitoring/thread_status_updater.h"
 #include "monitoring/thread_status_util.h"
+#include "table/block_based/filter_block.h"
 #include "test_util/sync_point.h"
 #include "util/cast_util.h"
 #include "util/concurrent_task_limiter_impl.h"
@@ -2710,11 +2711,11 @@ void DBImpl::SyncCallFlush(std::vector<SingleCompactionJob*>& jobs) {
     auto new_range_it = new_segment_ranges_recorder->begin();
     auto new_units_it = new_unit_size_recorder->begin();
     while (new_level_it != new_level_recorder->end()) {
-      level_recorder_.insert(std::make_pair(new_level_it->first, new_level_it->second));
+      level_recorder_->insert(std::make_pair(new_level_it->first, new_level_it->second));
       new_level_it ++;
     }
     while (new_range_it != new_segment_ranges_recorder->end()) {
-      segment_ranges_recorder_.insert(std::make_pair(new_range_it->first, new_range_it->second));
+      segment_ranges_recorder_->insert(std::make_pair(new_range_it->first, new_range_it->second));
       new_range_it ++;
     }
     while (new_units_it != new_unit_size_recorder->end()) {
@@ -2728,8 +2729,8 @@ void DBImpl::SyncCallFlush(std::vector<SingleCompactionJob*>& jobs) {
     assert(merged_segment_ids->empty());
     assert(inherit_infos_recorder->empty());
     std::vector<uint32_t> merged_segment_ids_vec, new_segment_ids_vec;
-    merged_segment_ids_vec.assign(merged_segment_ids.begin(), merged_segment_ids.end());
-    new_segment_ids_vec.assign(new_segment_ids.begin(), new_segment_ids.end());
+    merged_segment_ids_vec.assign(merged_segment_ids->begin(), merged_segment_ids->end());
+    new_segment_ids_vec.assign(new_segment_ids->begin(), new_segment_ids->end());
     filter_cache_.batch_insert_segments(merged_segment_ids_vec, new_segment_ids_vec, *inherit_infos_recorder,
                                         *new_level_recorder, 0, *new_segment_ranges_recorder);
     
@@ -3091,6 +3092,9 @@ Status DBImpl::BackgroundCompaction(bool* made_progress,
   int compaction_flag = 0; // 0 = not defined, 1 = delete compaction, 2 = trivial compaction, 3 = other
 #endif
 
+  // WaLSM+: result from compaction
+  SegmentBuilderResult segment_builder_result;
+
   IOStatus io_s;
   if (!c) {
     // Nothing to do
@@ -3293,7 +3297,9 @@ Status DBImpl::BackgroundCompaction(bool* made_progress,
     TEST_SYNC_POINT_CALLBACK(
         "DBImpl::BackgroundCompaction:NonTrivial:BeforeRun", nullptr);
     // Should handle erorr?
+    compaction_job.SetFilterCacheClient(&filter_cache_);
     compaction_job.Run().PermitUncheckedError();
+    segment_builder_result = compaction_job.GetSegmentBuilderResult();
     TEST_SYNC_POINT("DBImpl::BackgroundCompaction:NonTrivial:AfterRun");
     mutex_.Lock();
 
@@ -3488,7 +3494,7 @@ Status DBImpl::BackgroundCompaction(bool* made_progress,
     // new segments id empty, that will not fit in batch_insert_segments
     // we need a new method batch_delete_segments to only delete merge segments
     std::vector<uint32_t> merged_segment_ids_vec;
-    merged_segment_ids_vec.assign(merged_segment_ids.begin(), merged_segment_ids.end());
+    merged_segment_ids_vec.assign(merged_segment_ids->begin(), merged_segment_ids->end());
     filter_cache_.batch_delete_segments(merged_segment_ids_vec, merged_level_recorder);
       
     // temp recorders below:
@@ -3531,7 +3537,7 @@ Status DBImpl::BackgroundCompaction(bool* made_progress,
     }
     while (range_it != segment_ranges_recorder_->end()) {
       if (merged_segment_ids->count(range_it->first) > 0) {
-        new_segment_ranges_recorder->insert(std::make_pair(range_it->first, range->second));
+        new_segment_ranges_recorder->insert(std::make_pair(range_it->first, range_it->second));
         range_it = segment_ranges_recorder_->erase(range_it);
       } else {
         range_it ++;
@@ -3570,7 +3576,7 @@ Status DBImpl::BackgroundCompaction(bool* made_progress,
     // call filter cache client DBImpl::filter_cache_ update work 
     // we need a new filter cache operation to support moving segments to a new level 
     std::vector<uint32_t> merged_segment_ids_vec;
-    merged_segment_ids_vec.assign(merged_segment_ids.begin(), merged_segment_ids.end());
+    merged_segment_ids_vec.assign(merged_segment_ids->begin(), merged_segment_ids->end());
     filter_cache_.batch_move_segments(merged_segment_ids_vec, old_level_recorder, *new_level_recorder, *new_segment_ranges_recorder);
       
     // temp recorders below:
@@ -3595,6 +3601,29 @@ Status DBImpl::BackgroundCompaction(bool* made_progress,
     delete inherit_infos_recorder;
 
   } else if (compaction_flag == 3) {
+    // get SegmentBuilderResult from compaction job
+    
+    // update merged_segment_ids and new_segment_ids
+    for (const auto& id : segment_builder_result.merged_segment_ids) {
+      merged_segment_ids->insert(id);
+    }
+    for (const auto& id : segment_builder_result.new_segment_ids) {
+      new_segment_ids->insert(id);
+    }
+
+    // update new_level_recorder 
+    for (const auto id : segment_builder_result.new_segment_ids) {
+      new_level_recorder->insert(std::make_pair(id, segment_builder_result.output_level));
+    }
+
+    // update new_segment_ranges_recorder and inherit_infos_recorder
+    for (const auto& per_segment_result : segment_builder_result.per_segment_results) {
+      const auto segment_id = per_segment_result.segment_id;
+      (*new_segment_ranges_recorder)[segment_id] = per_segment_result.range_rate_pairs;
+      (*inherit_infos_recorder)[segment_id] = per_segment_result.inherit_recorder;
+    }
+
+
     // it is normal compaction (merge->split)
     std::map<uint32_t, uint16_t> merged_level_recorder;
 
@@ -3607,7 +3636,7 @@ Status DBImpl::BackgroundCompaction(bool* made_progress,
     auto units_it = unit_size_recorder_->begin();
     while (level_it != level_recorder_->end()) {
       if (merged_segment_ids->count(level_it->first) > 0) {
-        merged_level_recorder.insert(std::make_pair(level_it->first, level_it->second))
+        merged_level_recorder.insert(std::make_pair(level_it->first, level_it->second));
         level_it = level_recorder_->erase(level_it);
       } else {
         level_it ++;
@@ -3635,11 +3664,11 @@ Status DBImpl::BackgroundCompaction(bool* made_progress,
     auto new_range_it = new_segment_ranges_recorder->begin();
     auto new_units_it = new_unit_size_recorder->begin();
     while (new_level_it != new_level_recorder->end()) {
-      level_recorder_.insert(std::make_pair(new_level_it->first, new_level_it->second));
+      level_recorder_->insert(std::make_pair(new_level_it->first, new_level_it->second));
       new_level_it ++;
     }
     while (new_range_it != new_segment_ranges_recorder->end()) {
-      segment_ranges_recorder_.insert(std::make_pair(new_range_it->first, new_range_it->second));
+      segment_ranges_recorder_->insert(std::make_pair(new_range_it->first, new_range_it->second));
       new_range_it ++;
     }
     while (new_units_it != new_unit_size_recorder->end()) {
@@ -3662,8 +3691,8 @@ Status DBImpl::BackgroundCompaction(bool* made_progress,
     // call filter cache client DBImpl::filter_cache_ update work 
     assert(inherit_infos_recorder->size() == new_segment_ids->size());
     std::vector<uint32_t> merged_segment_ids_vec, new_segment_ids_vec;
-    merged_segment_ids_vec.assign(merged_segment_ids.begin(), merged_segment_ids.end());
-    new_segment_ids_vec.assign(new_segment_ids.begin(), new_segment_ids.end());
+    merged_segment_ids_vec.assign(merged_segment_ids->begin(), merged_segment_ids->end());
+    new_segment_ids_vec.assign(new_segment_ids->begin(), new_segment_ids->end());
     filter_cache_.batch_insert_segments(merged_segment_ids_vec, new_segment_ids_vec, *inherit_infos_recorder,
                                         *new_level_recorder, 0, *new_segment_ranges_recorder);
     

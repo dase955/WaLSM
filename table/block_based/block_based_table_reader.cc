@@ -11,6 +11,7 @@
 #include <algorithm>
 #include <array>
 #include <limits>
+#include <memory>
 #include <string>
 #include <utility>
 #include <vector>
@@ -32,6 +33,7 @@
 #include "rocksdb/iterator.h"
 #include "rocksdb/options.h"
 #include "rocksdb/statistics.h"
+#include "rocksdb/status.h"
 #include "rocksdb/table.h"
 #include "rocksdb/table_properties.h"
 #include "table/block_based/binary_search_index_reader.h"
@@ -39,7 +41,9 @@
 #include "table/block_based/block_based_filter_block.h"
 #include "table/block_based/block_based_table_factory.h"
 #include "table/block_based/block_based_table_iterator.h"
+#include "table/block_based/block_based_table_segment_aware_iterator.h"
 #include "table/block_based/block_prefix_index.h"
+#include "table/block_based/cachable_entry.h"
 #include "table/block_based/filter_block.h"
 #include "table/block_based/full_filter_block.h"
 #include "table/block_based/hash_index_reader.h"
@@ -2128,6 +2132,49 @@ InternalIterator* BlockBasedTable::NewIterator(
       need_upper_bound_check &&
           rep_->index_type == BlockBasedTableOptions::kHashSearch,
       /*input_iter=*/nullptr, /*get_context=*/nullptr, &lookup_context));
+
+  // WaLSM+ behavior: when compaction, return a SegmentAwareIterator
+  if (caller == TableReaderCaller::kCompaction) {
+    std::unique_ptr<InternalIterator> data_iter;
+    std::unique_ptr<IndexBlockIter> filter_index_iter;
+    CachableEntry<Block> filter_block;
+    Status s = GetFilterIndexBlock(read_options, true, nullptr, &lookup_context,
+                                   &filter_block);
+    assert(s.ok());
+    filter_index_iter.reset(filter_block.GetValue()->NewIndexIterator(
+        rep_->segment_id_removing_comparator.get(),
+        get_rep()->get_global_seqno(BlockType::kFilter), nullptr, nullptr,
+        true /* total_order_seek */, false /* have_first_key */,
+        rep_->index_key_includes_seq, rep_->index_value_is_full));
+    if (arena == nullptr) {
+      data_iter.reset(new BlockBasedTableIterator(
+          this, read_options, rep_->internal_comparator, std::move(index_iter),
+          !skip_filters && !read_options.total_order_seek &&
+              prefix_extractor != nullptr,
+          need_upper_bound_check, prefix_extractor, caller,
+          compaction_readahead_size, allow_unprepared_value));
+
+      return new BlockBasedTableSegmentAwareIterator(
+          std::move(data_iter), std::move(filter_index_iter),
+          rep_->internal_comparator, caller);
+    } else {
+      auto* mem = arena->AllocateAligned(sizeof(BlockBasedTableIterator));
+      data_iter.reset(new (mem) BlockBasedTableIterator(
+          this, read_options, rep_->internal_comparator, std::move(index_iter),
+          !skip_filters && !read_options.total_order_seek &&
+              prefix_extractor != nullptr,
+          need_upper_bound_check, prefix_extractor, caller,
+          compaction_readahead_size, allow_unprepared_value));
+
+      mem = arena->AllocateAligned(sizeof(BlockBasedTableSegmentAwareIterator));
+      return new BlockBasedTableSegmentAwareIterator(
+          std::move(data_iter), std::move(filter_index_iter),
+          rep_->internal_comparator, caller);
+    }
+
+    // unreachable
+  }
+
   if (arena == nullptr) {
     return new BlockBasedTableIterator(
         this, read_options, rep_->internal_comparator, std::move(index_iter),
@@ -3794,6 +3841,53 @@ void BlockBasedTable::DumpKeyValue(const Slice& key, const Slice& value,
 
   out_stream << "  ASCII  " << res_key << ": " << res_value << "\n";
   out_stream << "  ------\n";
+}
+
+Status BlockBasedTable::GetFilterIndexBlock(
+    const ReadOptions& read_options, bool use_cache, GetContext* get_context,
+    BlockCacheLookupContext* lookup_context,
+    CachableEntry<Block>* filter_block) const {
+  assert(filter_block);
+  assert(filter_block->IsEmpty());
+
+  const BlockBasedTable::Rep* const rep = get_rep();
+  assert(rep);
+
+  Status s = RetrieveBlock(
+      nullptr /* prefetch_buffer */, read_options, rep->filter_handle,
+      UncompressionDict::GetEmptyDict(), filter_block, BlockType::kFilter,
+      get_context, lookup_context, false /* for_compaction */, use_cache);
+
+  return s;
+}
+
+std::map<uint32_t, std::vector<BlockHandle>>
+BlockBasedTable::GetSegmentBlockHandles() const {
+  CachableEntry<Block> filter_block;
+  Status s =
+      GetFilterIndexBlock(ReadOptions(), true, nullptr, nullptr, &filter_block);
+  assert(s.ok());
+
+  std::unique_ptr<IndexBlockIter> filter_index_iter;
+  filter_index_iter.reset(filter_block.GetValue()->NewIndexIterator(
+      rep_->segment_id_removing_comparator.get(),
+      get_rep()->get_global_seqno(BlockType::kFilter), nullptr, nullptr,
+      true /* total_order_seek */, false /* have_first_key */,
+      rep_->index_key_includes_seq, rep_->index_value_is_full));
+
+  std::map<uint32_t, std::vector<BlockHandle>> segment_block_handles;
+  
+  filter_index_iter->SeekToFirst();
+  while (filter_index_iter->Valid()) {
+    BlockHandle block_handle = filter_index_iter->value().handle;
+    const auto filter_key = filter_index_iter->user_key();
+    uint32_t segment_id = DecodeFixed32R(filter_key.data() + filter_key.size() - 4);
+    segment_block_handles[segment_id].push_back(block_handle);
+
+    filter_index_iter->Next();
+  }
+
+  return segment_block_handles;
 }
 
 }  // namespace ROCKSDB_NAMESPACE

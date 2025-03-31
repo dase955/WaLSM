@@ -14,7 +14,6 @@
 #include <vector>
 #include <stdint.h>
 
-#include "db/art/filter_cache_client.h"
 #include "db/dbformat.h"
 #include "db/range_del_aggregator.h"
 #include "options/cf_options.h"
@@ -33,6 +32,7 @@ class Arena;
 struct FileDescriptor;
 class GetContext;
 class HistogramImpl;
+class FilterCacheClient;
 
 // Manages caching for TableReader objects for a column family. The actual
 // cache is allocated separately and passed to the constructor. TableCache

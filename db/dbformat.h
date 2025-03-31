@@ -9,6 +9,7 @@
 
 #pragma once
 #include <stdio.h>
+#include <cstdint>
 #include <memory>
 #include <string>
 #include <utility>
@@ -16,6 +17,7 @@
 #include "db/merge_context.h"
 #include "logging/logging.h"
 #include "monitoring/perf_context_imp.h"
+#include "port/port_posix.h"
 #include "rocksdb/comparator.h"
 #include "rocksdb/db.h"
 #include "rocksdb/filter_policy.h"
@@ -98,6 +100,8 @@ static const SequenceNumber kDisableGlobalSequenceNumber = port::kMaxUint64;
 
 constexpr uint64_t kNumInternalBytes = 8;
 
+constexpr uint32_t INVALID_SEGMENT_ID = port::kMaxUint32;
+
 // The data structure that represents an internal key in the way that user_key,
 // sequence number and type are stored in separated forms.
 struct ParsedInternalKey {
@@ -173,6 +177,16 @@ inline Slice ExtractUserKey(const Slice& internal_key) {
   assert(internal_key.size() >= kNumInternalBytes);
   return Slice(internal_key.data(), internal_key.size() - kNumInternalBytes);
 }
+
+#ifdef ART_PLUS
+Slice generate_modified_internal_key(std::unique_ptr<const char[]>& buf,
+                                     Slice original_internal_key,
+                                     int filter_index, int segment_id);
+
+Slice generate_modified_user_key(std::unique_ptr<const char[]>& buf,
+                            Slice original_user_key, int filter_index,
+                            int segment_id);
+#endif
 
 #ifdef ART_PLUS
 // Returns the internal bytes portion of an internal key. (WaLSM+)

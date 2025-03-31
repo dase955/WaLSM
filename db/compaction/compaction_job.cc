@@ -10,6 +10,7 @@
 #include "db/compaction/compaction_job.h"
 
 #include <algorithm>
+#include <cassert>
 #include <cinttypes>
 #include <functional>
 #include <list>
@@ -55,6 +56,7 @@
 #include "rocksdb/table.h"
 #include "table/block_based/block.h"
 #include "table/block_based/block_based_table_factory.h"
+#include "table/block_based/filter_block.h"
 #include "table/merging_iterator.h"
 #include "table/table_builder.h"
 #include "test_util/sync_point.h"
@@ -170,6 +172,9 @@ struct CompactionJob::SubcompactionState {
   uint64_t overlapped_bytes = 0;
   // A flag determine whether the key has been seen in ShouldStopBefore()
   bool seen_key = false;
+
+  // stores segment_builder_result for each subcompaction
+  SegmentBuilderResult segment_builder_result;
 
   SubcompactionState(Compaction* c, Slice* _start, Slice* _end, uint64_t size)
       : compaction(c), start(_start), end(_end), approx_size(size) {
@@ -720,6 +725,38 @@ Status CompactionJob::Run() {
   }
   compact_->compaction->SetOutputTableProperties(std::move(tp));
 
+  // aggregate SegmentBuilderResult from subcompactions
+  for (auto& state : compact_->sub_compact_states) {
+    auto& sub_result = state.segment_builder_result;
+    segment_builder_result_.new_segment_ids.insert(
+        sub_result.new_segment_ids.begin(),
+        sub_result.new_segment_ids.end());
+
+    segment_builder_result_.merged_segment_ids.insert(
+        sub_result.merged_segment_ids.begin(),
+        sub_result.merged_segment_ids.end());
+
+    for (auto& per_segment_result : sub_result.per_segment_results) {
+      segment_builder_result_.per_segment_results.push_back(
+          std::move(per_segment_result));
+    }
+  }
+  segment_builder_result_.output_level = compact_->compaction->output_level();
+
+  // insert all filter block handles to FilterCache
+  for (auto& state : compact_->sub_compact_states) {
+    for (auto& output : state.outputs) {
+      assert(output.meta.fd.table_reader != nullptr);
+      const BlockBasedTable* table =
+          static_cast<const BlockBasedTable*>(output.meta.fd.table_reader);
+      auto block_handles_map = table->GetSegmentBlockHandles();
+      for (const auto& segment_id_and_block_handles : block_handles_map) {
+        auto segment_id = segment_id_and_block_handles.first;
+        const auto& block_handles = segment_id_and_block_handles.second;
+        filter_cache_client_->init_segment(segment_id, table, block_handles);
+    }
+  }
+
   // Finish up all book-keeping to unify the subcompaction results
   AggregateStatistics();
   UpdateCompactionStats();
@@ -1093,6 +1130,11 @@ void CompactionJob::ProcessKeyValueCompaction(SubcompactionState* sub_compact) {
       sub_compact->outputs.size() == 0 && !range_del_agg.IsEmpty()) {
     // handle subcompaction containing only range deletions
     status = OpenCompactionOutputFile(sub_compact);
+  }
+
+  if (status.ok() && sub_compact->builder != nullptr) {
+    // TODO: get SegmentBuilderResult and update sub_compact status? (WaLSM+)
+    sub_compact->segment_builder_result = sub_compact->builder->GetSegmentBuilderResult();
   }
 
   // Call FinishCompactionOutputFile() even if status is not ok: it needs to

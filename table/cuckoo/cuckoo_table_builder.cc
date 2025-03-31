@@ -3,6 +3,7 @@
 //  COPYING file in the root directory) and Apache 2.0 License
 //  (found in the LICENSE.Apache file in the root directory).
 
+#include <cstdint>
 #ifndef ROCKSDB_LITE
 #include "table/cuckoo/cuckoo_table_builder.h"
 
@@ -84,7 +85,7 @@ CuckooTableBuilder::CuckooTableBuilder(
   properties_.db_session_id = db_session_id;
 }
 
-void CuckooTableBuilder::Add(const Slice& key, const Slice& value) {
+void CuckooTableBuilder::Add(const Slice& key, const Slice& value, uint32_t /*segment_id*/) {
   if (num_entries_ >= kMaxVectorIdx - 1) {
     status_ = Status::NotSupported("Number of keys in a file must be < 2^32-1");
     return;

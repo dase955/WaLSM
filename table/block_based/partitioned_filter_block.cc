@@ -4,14 +4,18 @@
 //  (found in the LICENSE.Apache file in the root directory).
 
 #include "table/block_based/partitioned_filter_block.h"
+#include <sys/types.h>
 
 #include <atomic>
 #include <cassert>
+#include <cstddef>
+#include <cstdint>
 #include <cstring>
 #include <iostream>
 #include <memory>
 #include <utility>
 
+#include "db/art/clf_model.h"
 #include "db/dbformat.h"
 #include "file/file_util.h"
 #include "monitoring/perf_context_imp.h"
@@ -23,22 +27,19 @@
 #include "rocksdb/status.h"
 #include "table/block_based/block.h"
 #include "table/block_based/block_based_table_reader.h"
+#include "table/block_based/index_builder.h"
 #include "table/format.h"
 #include "util/coding.h"
 
 namespace ROCKSDB_NAMESPACE {
-#ifdef ART_PLUS
-Slice generate_modified_internal_key(std::unique_ptr<const char[]>& buf,
-                                     Slice original_internal_key,
-                                     int filter_index, int segment_id);
-#endif
 
 PartitionedFilterBlockBuilder::PartitionedFilterBlockBuilder(
     const SliceTransform* _prefix_extractor, bool whole_key_filtering,
     FilterBitsBuilder* filter_bits_builder, int index_block_restart_interval,
     const bool use_value_delta_encoding,
     PartitionedIndexBuilder* const p_index_builder,
-    const uint32_t partition_size)
+    const uint32_t partition_size, const std::vector<std::string>& range_separators,
+    const InternalKeyComparator* const internal_comparator)
     : FullFilterBlockBuilder(_prefix_extractor, whole_key_filtering,
                              filter_bits_builder),
       index_on_filter_block_builder_(index_block_restart_interval,
@@ -48,7 +49,9 @@ PartitionedFilterBlockBuilder::PartitionedFilterBlockBuilder(
                                                  true /*use_delta_encoding*/,
                                                  use_value_delta_encoding),
       p_index_builder_(p_index_builder),
-      keys_added_to_partition_(0) {
+      keys_added_to_partition_(0),
+      range_separators_(range_separators),
+      internal_comparator_(internal_comparator) {
   keys_per_partition_ =
       filter_bits_builder_->CalculateNumEntry(partition_size);
   if (keys_per_partition_ < 1) {
@@ -76,13 +79,17 @@ PartitionedFilterBlockBuilder::PartitionedFilterBlockBuilder(
   filter_gc.resize(filter_count_);
   filters.resize(filter_count_);
   finishing_filter_index_ = 0;
+
+  keys_in_current_segment_.reserve(keys_per_partition_);
+  segment_ids_in_current_segment_.reserve(keys_per_partition_);
+  current_range_index_ = 0;
   #endif
 }
 
 PartitionedFilterBlockBuilder::~PartitionedFilterBlockBuilder() {}
 
 void PartitionedFilterBlockBuilder::MaybeCutAFilterBlock(
-    const Slice* next_key) {
+    const Slice* next_key, uint32_t next_key_segment_id) {
   // Use == to send the request only once
   if (keys_added_to_partition_ == keys_per_partition_) {
     // Currently only index builder is in charge of cutting a partition. We keep
@@ -106,25 +113,94 @@ void PartitionedFilterBlockBuilder::MaybeCutAFilterBlock(
   }
 
   #ifdef ART_PLUS
+  const uint32_t new_segment_id = segment_id_base_.fetch_add(1, std::memory_order_relaxed);
   for (int i = 0; i < filter_count_; ++i) {
     filter_gc[i].push_back(std::unique_ptr<const char[]>(nullptr));
     Slice filter = filter_bits_builder_->FinishWithId(&filter_gc[i].back(), i);
     std::string& index_key = p_index_builder_->GetPartitionKey();
-    filters[i].push_back({index_key, filter, segment_id_base_.fetch_add(1, std::memory_order_relaxed)});
+    filters[i].push_back({index_key, filter, new_segment_id});
   }
+  ProcessSegmentCut(new_segment_id);
   #else
   Slice filter = filter_bits_builder_->Finish(&filter_gc.back());
   std::string& index_key = p_index_builder_->GetPartitionKey();
   filters.push_back({index_key, filter});
   #endif
-  std::cerr << "keys_added_to_partition = " << keys_per_partition_ << "\n";
+  // std::cerr << "keys_added_to_partition = " << keys_per_partition_ << "\n";
   keys_added_to_partition_ = 0;
   Reset();
 }
 
-void PartitionedFilterBlockBuilder::Add(const Slice& key) {
-  MaybeCutAFilterBlock(&key);
-  FullFilterBlockBuilder::Add(key);
+void PartitionedFilterBlockBuilder::ProcessSegmentCut(uint32_t new_segment_id) {
+  assert(keys_in_current_segment_.size() ==
+         segment_ids_in_current_segment_.size());
+  size_t siz = keys_in_current_segment_.size();
+
+  // for range_recorder
+  std::vector<RangeRatePair> range_rate_pairs;
+  uint32_t cnt_in_current_range = 0;
+
+  // for inherit_infos_recorders
+
+  // <parent_segment_id, count>
+  std::map<uint32_t, double> inherit_counts;
+
+  for (size_t i = 0; i < siz; ++i) {
+    const Slice& key = keys_in_current_segment_[i];
+    const uint32_t source_segment_id = segment_ids_in_current_segment_[i];
+
+    // for merged_segment_ids
+    source_segment_ids_count[source_segment_id]++;
+
+    // for range_recorder
+    while (current_range_index_ + 1 < range_separators_.size() &&
+           internal_comparator_->Compare(
+               key, range_separators_[current_range_index_ + 1]) >= 0) {
+      current_range_index_++;
+      if (cnt_in_current_range > 0) {
+        range_rate_pairs.emplace_back(
+            RangeRatePair{uint32_t(current_range_index_),
+                          double(cnt_in_current_range) / siz});
+        cnt_in_current_range = 0;
+      }
+    }
+
+    // for inherit_infos_recorders
+    inherit_counts[source_segment_id]++;
+  }
+
+  // process the last range
+  if (current_range_index_ + 1 < range_separators_.size()) {
+    if (cnt_in_current_range > 0) {
+      range_rate_pairs.emplace_back(RangeRatePair{
+          uint32_t(current_range_index_), double(cnt_in_current_range) / siz});
+    }
+    cnt_in_current_range = 0;
+  }
+  
+  // update smallest & largest key
+  std::string smallest_key = keys_in_current_segment_[0].ToString();
+  std::string largest_key = keys_in_current_segment_.back().ToString();
+
+  // update result
+  // inherit_counts should be updated when GetSegmentBuilderResult() is called
+  segment_builder_result_.new_segment_ids.insert(new_segment_id);
+  segment_builder_result_.per_segment_results.emplace_back(
+      new_segment_id, std::move(range_rate_pairs), std::move(inherit_counts),
+    std::move(smallest_key), std::move(largest_key)
+  );
+
+  // clear
+  keys_in_current_segment_.clear();
+  segment_ids_in_current_segment_.clear();
+}
+
+void PartitionedFilterBlockBuilder::Add(const Slice& key, uint32_t segment_id) {
+  MaybeCutAFilterBlock(&key, segment_id);
+  FullFilterBlockBuilder::Add(key, segment_id);
+
+  keys_in_current_segment_.emplace_back(key);
+  segment_ids_in_current_segment_.emplace_back(segment_id);
 }
 
 void PartitionedFilterBlockBuilder::AddKey(const Slice& key) {
@@ -174,7 +250,7 @@ Slice PartitionedFilterBlockBuilder::Finish(
     filters.pop_front();
     #endif
   } else {
-    MaybeCutAFilterBlock(nullptr);
+    MaybeCutAFilterBlock(nullptr, INVALID_SEGMENT_ID);
   }
   // If there is no filter partition left, then return the index on filter
   // partitions
@@ -509,28 +585,26 @@ bool PartitionedFilterBlockReader::MayMatch(
     return false;
   }
 
-  assert(filter_key.size() >= 8); //   
-  // uint32_t segment_id = DecodeFixed32R(filter_key.data() + filter_key);
+  assert(filter_key.size() >= 8);
+  // TODO: validate we have stripped useless internal key suffix (WaLSM+)
+  uint32_t segment_id = DecodeFixed32R(filter_key.data() + filter_key.size() - 4);
 
   // TODO: get some filter blocks from the filter cache and check (WaLSM+)
-  CachableEntry<ParsedFullFilterBlock> filter_partition_block;
-  s = GetFilterPartitionBlock(nullptr /* prefetch_buffer */, filter_handle,
-                              no_io, get_context, lookup_context,
-                              &filter_partition_block);
-  if (UNLIKELY(!s.ok())) {
-    IGNORE_STATUS_IF_ERROR(s);
-    return true;
+  std::vector<CachableEntry<ParsedFullFilterBlock>> filter_partition_blocks =
+      std::move(filter_cache.get_filter_blocks(segment_id));
+
+  for (size_t hash_id = 0; hash_id < filter_partition_blocks.size(); ++hash_id) {
+    FullFilterBlockReader filter_partition(
+        table(), std::move(filter_partition_blocks[hash_id]), hash_id);
+    bool may_exist = (filter_partition.*filter_function)(
+        slice, prefix_extractor, block_offset, no_io, const_ikey_ptr,
+        get_context, lookup_context);
+    if (!may_exist) {
+      return false;
+    }
   }
 
-  FullFilterBlockReader filter_partition(table(),
-                                         std::move(filter_partition_block));
-  // initialize the reader with hash_id (WaLSM+)
-  // FullFilterBlockReader filter_partition(table(),
-                                        //  std::move(filter_partition_block),
-                                        //  1);
-  return (filter_partition.*filter_function)(
-      slice, prefix_extractor, block_offset, no_io, const_ikey_ptr, get_context,
-      lookup_context);
+  return true;
 }
 #endif
 
@@ -747,6 +821,26 @@ bool PartitionedFilterBlockReader::index_value_is_full() const {
 }
 
 #ifdef ART_PLUS
+
+// should be called only once
+SegmentBuilderResult PartitionedFilterBlockBuilder::GetSegmentBuilderResult() {
+  // update inherit_recorders
+  for (auto& segment_result : segment_builder_result_.per_segment_results) {
+    auto& inherit_counts = segment_result.inherit_recorder;
+    for (auto& inherit_count : inherit_counts) {
+      inherit_count.second /= source_segment_ids_count[inherit_count.first];
+    }
+  }
+
+  // update merged_segment_ids
+  for (const auto& source_segment_id_count : source_segment_ids_count) {
+    const auto segment_id = source_segment_id_count.first;
+    segment_builder_result_.merged_segment_ids.insert(segment_id);
+  }
+
+  return segment_builder_result_;
+}
+
 std::atomic<uint32_t> PartitionedFilterBlockBuilder::segment_id_base_{0};
 #endif
 
@@ -765,6 +859,23 @@ Slice generate_modified_internal_key(std::unique_ptr<const char[]>& buf, Slice o
   std::memcpy(modified_key_buf + 4, original_user_key.data(), original_user_key.size());
   EncodeFixed32R(modified_key_buf + 4 + original_user_key.size(), segment_id);
   std::memcpy(modified_key_buf + 4 + original_user_key.size() + 4, original_internal_bytes.data_, original_internal_bytes.size());
+  Slice modified_key = Slice(modified_key_buf, modified_key_buf_size);
+
+  buf.reset(modified_key_buf);
+  return modified_key;
+}
+
+Slice generate_modified_user_key(std::unique_ptr<const char[]>& buf, Slice original_user_key, int filter_index, int segment_id) {
+  // calculate modified_key (WaLSM+)
+  // +--------------+------------------------------------+------------+
+  // | filter_index | original_user_key                  | segment_id |
+  // |    4 bytes   | (key.size() - kInternalBytes) bytes|   4 bytes  |
+  // +--------------+------------------------------------+------------+
+  size_t modified_key_buf_size = 4 + original_user_key.size() + 4;
+  char *modified_key_buf = new char[modified_key_buf_size];
+  EncodeFixed32R(modified_key_buf, filter_index);
+  std::memcpy(modified_key_buf + 4, original_user_key.data(), original_user_key.size());
+  EncodeFixed32R(modified_key_buf + 4 + original_user_key.size(), segment_id);
   Slice modified_key = Slice(modified_key_buf, modified_key_buf_size);
 
   buf.reset(modified_key_buf);

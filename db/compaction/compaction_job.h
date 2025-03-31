@@ -39,6 +39,7 @@
 #include "rocksdb/env.h"
 #include "rocksdb/memtablerep.h"
 #include "rocksdb/transaction_log.h"
+#include "table/block_based/filter_block.h"
 #include "table/scoped_arena_iterator.h"
 #include "util/autovector.h"
 #include "util/stop_watch.h"
@@ -102,6 +103,15 @@ class CompactionJob {
 
   // Return the IO status
   IOStatus io_status() const { return io_status_; }
+
+  SegmentBuilderResult GetSegmentBuilderResult() const {
+    return segment_builder_result_;
+  }
+
+  // should be called before Run()
+  void SetFilterCacheClient(FilterCacheClient* filter_cache_client) {
+    filter_cache_client_ = filter_cache_client;
+  }
 
  private:
   struct SubcompactionState;
@@ -200,6 +210,9 @@ class CompactionJob {
   Env::WriteLifeTimeHint write_hint_;
   Env::Priority thread_pri_;
   IOStatus io_status_;
+
+  SegmentBuilderResult segment_builder_result_;
+  FilterCacheClient* filter_cache_client_;
 };
 
 }  // namespace ROCKSDB_NAMESPACE

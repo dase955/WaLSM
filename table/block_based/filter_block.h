@@ -20,10 +20,12 @@
 
 #include <stddef.h>
 #include <stdint.h>
+#include <sys/types.h>
 #include <cassert>
 #include <memory>
 #include <string>
 #include <vector>
+#include "db/art/clf_model.h"
 #include "db/art/filter_cache_client.h"
 #include "db/dbformat.h"
 #include "rocksdb/options.h"
@@ -42,6 +44,22 @@ class FilterPolicy;
 
 class GetContext;
 using MultiGetRange = MultiGetContext::Range;
+
+struct SegmentBuilderResult {
+  struct PerSegmentResult {
+    uint32_t segment_id;
+    std::vector<RangeRatePair> range_rate_pairs;
+    std::unordered_map<uint32_t, double> inherit_recorder;
+
+    std::string smallest_key;
+    std::string largest_key;
+  };
+
+  std::set<uint32_t> new_segment_ids;
+  std::vector<PerSegmentResult> per_segment_results;
+  std::set<uint32_t> merged_segment_ids;
+  int output_level;
+};
 
 // A FilterBlockBuilder is used to construct all of the filters for a
 // particular Table.  It generates a single string which is stored as
@@ -62,7 +80,7 @@ class FilterBlockBuilder {
 
   virtual bool IsBlockBased() = 0;                    // If is blockbased filter
   virtual void StartBlock(uint64_t block_offset) = 0;  // Start new block filter
-  virtual void Add(const Slice& key) = 0;      // Add a key to current filter
+  virtual void Add(const Slice& key, uint32_t segment_id = INVALID_SEGMENT_ID) = 0;      // Add a key to current filter
   virtual size_t NumAdded() const = 0;         // Number of keys added
   Slice Finish() {                             // Generate Filter
     const BlockHandle empty_handle;
@@ -72,6 +90,7 @@ class FilterBlockBuilder {
     return ret;
   }
   virtual Slice Finish(const BlockHandle& tmp, Status* status) = 0;
+  virtual SegmentBuilderResult GetSegmentBuilderResult() { return SegmentBuilderResult{}; }
 };
 
 // A FilterBlockReader is used to parse filter from SST table.
@@ -188,5 +207,6 @@ class FilterBlockReader {
                           lookup_context);
   }
 };
+
 
 }  // namespace ROCKSDB_NAMESPACE

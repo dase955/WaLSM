@@ -55,7 +55,7 @@ class FullFilterBlockBuilder : public FilterBlockBuilder {
   // not implemented in FullFilterBlock
   virtual void StartBlock(uint64_t /*block_offset*/) override {}
   // if not use prefix bloom, only call AddKey(key)
-  virtual void Add(const Slice& key) override;
+  virtual void Add(const Slice& key, uint32_t segment_id) override;
   // return num_added_, num of keys
   virtual size_t NumAdded() const override { return num_added_; }
   // only return the slice from LegacyBloomBitsBuilder(format version < 5)

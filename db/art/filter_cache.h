@@ -1,5 +1,6 @@
 #pragma once
 
+#include <atomic>
 #include <cstdint>
 #include <iostream>
 #include <fstream>
@@ -15,12 +16,16 @@
 #include "clf_model.h"
 #include "heat_buckets.h"
 #include "filter_cache_heap.h"
-#include "filter_cache_item.h"
+#include "rocksdb/cache.h"
+#include "table/block_based/block_based_table_reader.h"
+#include "table/block_based/cachable_entry.h"
+#include "table/block_based/parsed_full_filter_block.h"
 
 namespace ROCKSDB_NAMESPACE {
 
 class FilterCache;
 class FilterCacheManager;
+class FilterCacheEntry;
 
 // FilterCache main component is a STL Map, key -- segment id, value -- Structure of Filter Units （ called FilterCacheItem）
 // its main job is auto enable/disable filter units for one segment, and check whether one key exists in enabled units
@@ -30,9 +35,9 @@ class FilterCacheManager;
 // 3. check whether filter cache is approximately full
 // 4. check whether ready to train first model
 // 5. release FilterCacheItem of these merged (outdated) segments
-class FilterCache {
+class FilterCache : public Cache {
 private:
-    std::map<uint32_t, FilterCacheItem> filter_cache_;
+    std::map<uint32_t, FilterCacheEntry> filter_cache_;
     uint32_t used_space_size_;
     uint32_t level_0_used_space_size_;
     uint32_t cache_size_; // max size of cache
@@ -41,13 +46,13 @@ private:
 public:
     FilterCache() { filter_cache_.clear(); cache_size_ = CACHE_SPACE_SIZE; used_space_size_ = 0; level_0_used_space_size_ = 0; }
 
-    ~FilterCache() { /* do nothing */ }
+    ~FilterCache() override { /* do nothing */ }
 
     // other levels total cache size 
     uint32_t cache_size_except_level_0() { return cache_size_ * FULL_RATE - level_0_used_space_size_; }
 
-    // check whether one given key exist in one segment
-    bool check_key(const uint32_t& segment_id, const std::string& key);
+    // get all cached filter blocks of one segment
+    std::vector<CachableEntry<ParsedFullFilterBlock>> get_filter_blocks(const uint32_t segment_id);
 
     // enable / disable units for a batch of segments (one segment may not exist in FilterCache)
     // if enabled units num exceed given units num, it will disable units
@@ -59,6 +64,8 @@ public:
     void update_for_segments(std::unordered_map<uint32_t, uint16_t>& segment_units_num_recorder, const bool& is_forced,
                              std::set<uint32_t>& level_0_segment_ids, std::set<uint32_t>& failed_segment_ids);
 
+    // should be called in/after compaction, before any filter adjustment operation that may affect given segment
+    void init_segment(uint32_t segment_id, const BlockBasedTable* table, const std::vector<BlockHandle>& block_handles);
     // check whether filter cache is approximately full
     // actually, we will leave (1-FULL_RATE) * cache_size_ space for emergency usage
     bool is_full();
@@ -68,6 +75,74 @@ public:
 
     // release filter units of merged segments
     void release_for_segments(std::vector<uint32_t>& segment_ids, std::set<uint32_t>& level_0_segment_ids);
+
+    // The type of the Cache
+    virtual const char* Name() const override;
+
+    // overrides rocksdb::Cache but no nothing
+    Status Insert(const Slice& key, void* value, size_t charge,
+                            void (*deleter)(const Slice& key, void* value),
+                            Handle** handle = nullptr,
+                            Priority priority = Priority::LOW) override;
+
+    // overrides rocksdb::Cache but no nothing
+    Handle* Lookup(const Slice& key, Statistics* stats = nullptr) override;
+
+    // overrides rocksdb::Cache but no nothing
+    bool Ref(Handle* handle) override;
+
+    /**
+    * Release a mapping returned by a previous Lookup(). A released entry might
+    * still  remain in cache in case it is later looked up by others. If
+    * force_erase is set then it also erase it from the cache if there is no
+    * other reference to  it. Erasing it should call the deleter function that
+    * was provided when the
+    * entry was inserted.
+    *
+    * Returns true if the entry was also erased.
+    */
+    // REQUIRES: handle must not have been released yet.
+    // REQUIRES: handle must have been returned by a method on *this.
+    bool Release(Handle* handle, bool force_erase = false) override;
+
+    // overrides rocksdb::Cache but no nothing
+    void* Value(Handle* handle) override;
+
+    // overrides rocksdb::Cache but no nothing
+    void Erase(const Slice& key) override;
+    // overrides rocksdb::Cache but no nothing
+    uint64_t NewId() override;
+
+    // overrides rocksdb::Cache but no nothing
+    void SetCapacity(size_t capacity) override;
+
+    // overrides rocksdb::Cache but no nothing
+    void SetStrictCapacityLimit(bool strict_capacity_limit) override;
+
+    // overrides rocksdb::Cache but no nothing
+    bool HasStrictCapacityLimit() const override;
+
+    // overrides rocksdb::Cache but no nothing
+    size_t GetCapacity() const override;
+
+    // overrides rocksdb::Cache but no nothing
+    size_t GetUsage() const override;
+
+    // overrides rocksdb::Cache but no nothing
+    size_t GetUsage(Handle* handle) const override;
+
+    // overrides rocksdb::Cache but no nothing
+    size_t GetPinnedUsage() const override;
+
+    // overrides rocksdb::Cache but no nothing
+    size_t GetCharge(Handle* handle) const override;
+
+    // overrides rocksdb::Cache but no nothing
+    void ApplyToAllCacheEntries(void (*callback)(void*, size_t),
+                                        bool thread_safe) override;
+
+    // overrides rocksdb::Cache but no nothing
+    void EraseUnRefEntries() override;
 };
 
 // FilterCacheManager is combined of these components:
@@ -105,6 +180,7 @@ private:
     static std::mutex count_mutex_; // guarentee last_count_recorder and current_count_recorder treated orderedly
     static bool is_ready_; // check whether ready to use adaptive filter assignment
     static std::map<uint32_t, FileMetaData*> segment_in_file; // map segment_id to SST file
+    std::atomic<ColumnFamilyData*> cfd_; // In WaLSM+, we only support one column family
 public:
     FilterCacheManager() { get_cnt_ = 0; last_long_period_ = 0; last_short_period_ = 0; train_signal_ = false; }
 
@@ -125,7 +201,7 @@ public:
     // normal bloom filter units query, can we put hit_count_recorder outside this func? this will make get opt faster
     // will be called by a get operation, this will block get operation
     // remember to call hit_count_recorder in a background thread
-    bool check_key(const uint32_t& segment_id, const std::string& key);
+    std::vector<CachableEntry<ParsedFullFilterBlock>> get_filter_blocks(const uint32_t segment_id);
 
     // add 1 to get cnt of specified segment in current long period
     // will be called when calling check_key
@@ -236,9 +312,11 @@ public:
     void insert_segments(std::vector<uint32_t>& merged_segment_ids, std::vector<uint32_t>& new_segment_ids,
                          std::map<uint32_t, std::unordered_map<uint32_t, double>>& inherit_infos_recorder,
                          std::map<uint32_t, uint16_t>& level_recorder, const uint32_t& level_0_base_count,
-                         std::map<uint32_t, std::vector<RangeRatePair>>& segment_ranges_recorder);
+                         std::map<uint32_t, std::vector<RangeRatePair>>& segment_ranges_recorder,
+                         std::map<uint32_t, std::vector<BlockHandle>> block_handles_map
+                    );
 
-    // in func insert_segments above, we will also remove merged segments, this work well for normal compaction and flush
+// in func insert_segments above, we will also remove merged segments, this work well for normal compaction and flush
     // but we found that WaLSM also do delete compaction (only delete segments)
     // which not fit to func insert_segments, so we need a alone func delete_segments
     // this func only delete merged segments
@@ -261,12 +339,21 @@ public:
     // one background should exec this func and never stop
     bool adjust_cache_and_heap();
 
-    // only for test
-    ColumnFamilyData* cfd = nullptr;
-    // std::mutex cfd_mutex;
     std::vector<std::string>& range_seperators() {
         return heat_buckets_.seperators();
     }
+
+    inline void update_cfd(ColumnFamilyData* cfd) {
+        ColumnFamilyData* expected = nullptr;
+        cfd_.compare_exchange_strong(expected, cfd, std::memory_order_release);
+    }
+
+    inline ColumnFamilyData* get_cfd() {
+        return cfd_.load(std::memory_order_acquire);
+    }
+
+    // should be called in/after compaction, before any filter adjustment operation that may affect given segment
+    void init_segment(uint32_t segment_id, const BlockBasedTable* table, const std::vector<BlockHandle>& block_handles);
 };
 
 }

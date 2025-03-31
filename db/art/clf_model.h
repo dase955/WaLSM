@@ -37,9 +37,6 @@ bool RangeRatePairGreatorComparor(const RangeRatePair& pair_1, const RangeRatePa
 struct RangeRatePair {
     uint32_t range_id;
     double rate_in_segment;
-    RangeRatePair(const uint32_t& id, const double& rate) {
-        range_id = id; rate_in_segment = rate;
-    }
 };
 
 inline bool RangeRatePairLessorComparor(const RangeRatePair& pair_1, const RangeRatePair& pair_2) {

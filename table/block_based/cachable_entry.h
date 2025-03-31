@@ -186,6 +186,15 @@ public:
     assert(!own_value_);
   }
 
+#ifdef ART_PLUS
+  T* ReleaseValue() {
+    assert(own_value_);
+    T* value = value_;
+    ResetFields();
+    return value;
+  }
+#endif
+
 private:
   // release cache entry in cache or release owned value
   void ReleaseResource() {

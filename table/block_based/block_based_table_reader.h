@@ -9,8 +9,8 @@
 
 #pragma once
 
+#include <map>
 #include <memory>
-#include "db/art/filter_cache_client.h"
 #include "db/range_tombstone_fragmenter.h"
 #include "file/filename.h"
 #include "rocksdb/comparator.h"
@@ -42,6 +42,8 @@ struct BlockBasedTableOptions;
 struct EnvOptions;
 struct ReadOptions;
 class GetContext;
+class FilterCacheClient;
+class FilterCacheEntry;
 
 typedef std::vector<std::pair<std::string, std::string>> KVPairBlock;
 
@@ -143,6 +145,8 @@ class BlockBasedTable : public TableReader {
              const ReadOptions& readOptions, const Slice& key,
              GetContext* get_context, const SliceTransform* prefix_extractor,
              bool skip_filters = false);
+  
+  std::map<uint32_t, std::vector<BlockHandle>> GetSegmentBlockHandles() const override;
 #endif
 
   // WaLSM+ Note: call FullFilterKeyMayMatch() method in this file
@@ -261,6 +265,20 @@ class BlockBasedTable : public TableReader {
                                    CachableEntry<Block>& block,
                                    TBlockIter* input_iter, Status s) const;
 
+#ifdef ART_PLUS
+  // Similar to the above, with one crucial difference: it will retrieve the
+  // block from the file even if there are no caches configured (assuming the
+  // read options allow I/O).
+  template <typename TBlocklike>
+  Status RetrieveBlock(FilePrefetchBuffer* prefetch_buffer,
+                       const ReadOptions& ro, const BlockHandle& handle,
+                       const UncompressionDict& uncompression_dict,
+                       CachableEntry<TBlocklike>* block_entry,
+                       BlockType block_type, GetContext* get_context,
+                       BlockCacheLookupContext* lookup_context,
+                       bool for_compaction, bool use_cache) const;
+#endif
+
   class PartitionedIndexIteratorState;
 
   template <typename TBlocklike>
@@ -269,6 +287,8 @@ class BlockBasedTable : public TableReader {
   friend class PartitionIndexReader;
 
   friend class UncompressionDictReader;
+
+  friend class FilterCacheEntry;
 
  protected:
   Rep* rep_;
@@ -320,6 +340,7 @@ class BlockBasedTable : public TableReader {
       GetContext* get_context, BlockCacheLookupContext* lookup_context,
       BlockContents* contents) const;
 
+#ifndef ART_PLUS
   // Similar to the above, with one crucial difference: it will retrieve the
   // block from the file even if there are no caches configured (assuming the
   // read options allow I/O).
@@ -331,6 +352,7 @@ class BlockBasedTable : public TableReader {
                        BlockType block_type, GetContext* get_context,
                        BlockCacheLookupContext* lookup_context,
                        bool for_compaction, bool use_cache) const;
+#endif
 
   void RetrieveMultipleBlocks(
       const ReadOptions& options, const MultiGetRange* batch,
@@ -510,6 +532,11 @@ class BlockBasedTable : public TableReader {
   Status DumpDataBlocks(std::ostream& out_stream);
   void DumpKeyValue(const Slice& key, const Slice& value,
                     std::ostream& out_stream);
+
+  Status GetFilterIndexBlock(const ReadOptions& read_options, bool use_cache,
+                             GetContext* get_context,
+                             BlockCacheLookupContext* lookup_context,
+                             CachableEntry<Block>* filter_block) const;
 
   // A cumulative data block file read in MultiGet lower than this size will
   // use a stack buffer

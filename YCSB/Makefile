@@ -17,6 +17,8 @@ BIND_ROCKSDB ?= 1
 BIND_LEVELDB ?= 0
 BIND_LMDB ?= 0
 
+EXTRA_CXXFLAGS += -I$(HOME)/local/include
+EXTRA_LDFLAGS += -L$(HOME)/local/lib
 EXTRA_LDFLAGS += -lstdc++
 EXTRA_LDFLAGS += -lsocket++
 # EXTRA_LDFLAGS += -lpython3.12

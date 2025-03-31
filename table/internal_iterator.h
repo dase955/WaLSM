@@ -6,6 +6,7 @@
 
 #pragma once
 
+#include <cstdint>
 #include <string>
 #include "db/dbformat.h"
 #include "rocksdb/comparator.h"
@@ -171,6 +172,8 @@ class InternalIteratorBase : public Cleanable {
   virtual Status GetProperty(std::string /*prop_name*/, std::string* /*prop*/) {
     return Status::NotSupported("");
   }
+
+  virtual uint32_t segment_id() const { return INVALID_SEGMENT_ID; }
 
  protected:
   void SeekForPrevImpl(const Slice& target, const Comparator* cmp) {

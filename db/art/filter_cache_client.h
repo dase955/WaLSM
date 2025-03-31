@@ -5,6 +5,7 @@
 #include <task_thread_pool.hpp>
 #include "macros.h"
 #include "filter_cache.h" 
+#include "table/format.h"
 
 namespace ROCKSDB_NAMESPACE {
 
@@ -86,7 +87,7 @@ public:
 
     // correespinding to FilterCacheManager work: check_key and hit_count_recorder
     // return FilterCacheManager.check_key() and leave hit_count_recorder to background
-    bool check_key(const uint32_t& segment_id, const std::string& key);
+    std::vector<CachableEntry<ParsedFullFilterBlock>> get_filter_blocks(uint32_t segment_id);
 
     // every db get operation need one hit_heat_buckets
     void get_updating_work(const std::string& key);
@@ -98,10 +99,12 @@ public:
     void batch_insert_segments(std::vector<uint32_t> merged_segment_ids, std::vector<uint32_t> new_segment_ids,
                                std::map<uint32_t, std::unordered_map<uint32_t, double>> inherit_infos_recorder,
                                std::map<uint32_t, uint16_t> level_recorder, const uint32_t& level_0_base_count,
-                               std::map<uint32_t, std::vector<RangeRatePair>> segment_ranges_recorder);
+                               std::map<uint32_t, std::vector<RangeRatePair>> segment_ranges_recorder,
+                               std::map<uint32_t, std::vector<BlockHandle>> block_handles_map
+                            );
     
-    // for test only
-    void test_cfd(ColumnFamilyData* cfd); 
+    // In WaLSM+, we only support one column family, we just save cfd ptr here
+    void update_cfd_ptr_if_needed(ColumnFamilyData* cfd); 
 
     // batch delete segments from filter cache manager
     void batch_delete_segments(std::vector<uint32_t> merged_segment_ids, std::map<uint32_t, uint16_t> level_recorder);
@@ -111,6 +114,9 @@ public:
                              std::map<uint32_t, uint16_t> old_level_recorder,
                              std::map<uint32_t, uint16_t> move_level_recorder,
                              std::map<uint32_t, std::vector<RangeRatePair>> move_segment_ranges_recorder);
+    
+    
+    void init_segment(uint32_t segment_id, const BlockBasedTable* table, const std::vector<BlockHandle>& block_handles);
 };
 
 }

@@ -6,6 +6,7 @@
 #pragma once
 
 #include <atomic>
+#include <cstddef>
 #include <cstdint>
 #include <list>
 #include <string>
@@ -18,6 +19,7 @@
 #include "rocksdb/slice.h"
 #include "rocksdb/slice_transform.h"
 #include "table/block_based/block.h"
+#include "table/block_based/filter_block.h"
 #include "table/block_based/filter_block_reader_common.h"
 #include "table/block_based/full_filter_block.h"
 #include "util/autovector.h"
@@ -31,15 +33,19 @@ class PartitionedFilterBlockBuilder : public FullFilterBlockBuilder {
       FilterBitsBuilder* filter_bits_builder, int index_block_restart_interval,
       const bool use_value_delta_encoding,
       PartitionedIndexBuilder* const p_index_builder,
-      const uint32_t partition_size);
+      const uint32_t partition_size, 
+      const std::vector<std::string>& range_separators,
+      const InternalKeyComparator* const internal_comparator);
 
   virtual ~PartitionedFilterBlockBuilder();
 
   void AddKey(const Slice& key) override;
-  void Add(const Slice& key) override;
+  void Add(const Slice& key, uint32_t segment_id) override;
 
   virtual Slice Finish(const BlockHandle& last_partition_block_handle,
                        Status* status) override;
+
+  virtual SegmentBuilderResult GetSegmentBuilderResult() override;
 
  private:
   // Filter data
@@ -65,7 +71,8 @@ class PartitionedFilterBlockBuilder : public FullFilterBlockBuilder {
   bool finishing_filters =
       false;  // true if Finish is called once but not complete yet.
   // The policy of when cut a filter block and Finish it
-  void MaybeCutAFilterBlock(const Slice* next_key);
+  void MaybeCutAFilterBlock(const Slice* next_key, uint32_t next_key_segment_id);
+  void ProcessSegmentCut(uint32_t new_segment_id);
   // Currently we keep the same number of partitions for filters and indexes.
   // This would allow for some potentioal optimizations in future. If such
   // optimizations did not realize we can use different number of partitions and
@@ -83,6 +90,13 @@ class PartitionedFilterBlockBuilder : public FullFilterBlockBuilder {
   // When Finish() is called, return filters[filter_index].front() (WaLSM+)
   int finishing_filter_index_;
   static std::atomic<uint32_t> segment_id_base_;
+  std::vector<Slice> keys_in_current_segment_;
+  std::vector<uint32_t> segment_ids_in_current_segment_;
+  std::map<uint32_t, uint32_t> source_segment_ids_count;
+  std::size_t current_range_index_;
+  const std::vector<std::string>& range_separators_;
+  const InternalKeyComparator* const internal_comparator_;
+  SegmentBuilderResult segment_builder_result_;
   #endif
 };
 

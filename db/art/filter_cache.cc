@@ -1,5 +1,9 @@
 #include "filter_cache.h"
 #include <algorithm>
+#include <cassert>
+#include <cstddef>
+#include "table/block_based/parsed_full_filter_block.h"
+#include "filter_cache_entry.h"
 
 namespace ROCKSDB_NAMESPACE {
 
@@ -19,15 +23,20 @@ std::map<uint32_t, uint32_t> FilterCacheManager::current_count_recorder_;
 std::mutex FilterCacheManager::count_mutex_;
 bool FilterCacheManager::is_ready_;
 
-bool FilterCache::check_key(const uint32_t& segment_id, const std::string& key) {
+std::vector<CachableEntry<ParsedFullFilterBlock>> FilterCache::get_filter_blocks(const uint32_t segment_id) {
     auto it = filter_cache_.find(segment_id);
     if (it == filter_cache_.end()) {
         // not in cache, that means we havent insert segment FilterCacheItem info into cache
         // actually, we start inserting after every segment becomes available
-        return true;
-    } else {
-        return (it->second).check_key(key);
+        // we return a empty vector here
+        return {};
     }
+
+    return it->second.get_filter_blocks();
+}
+
+void FilterCache::init_segment(uint32_t segment_id, const BlockBasedTable* table, const std::vector<BlockHandle>& block_handles) {
+    filter_cache_.emplace(segment_id, FilterCacheEntry(segment_id, table, this, block_handles));
 }
 
 void FilterCache::enable_for_segments(std::unordered_map<uint32_t, uint16_t>& segment_units_num_recorder, const bool& is_forced,
@@ -54,16 +63,19 @@ void FilterCache::enable_for_segments(std::unordered_map<uint32_t, uint16_t>& se
         } else {
             // filter units not cached
             // now cache it
-            if (is_forced || is_level_0 || !is_full()) {
-                FilterCacheItem cache_item(units_num);
-                filter_cache_.insert(std::make_pair(segment_id, cache_item));
-                used_space_size_ = used_space_size_ + cache_item.approximate_size();
-                if (is_level_0) {
-                    level_0_used_space_size_ = level_0_used_space_size_ + cache_item.approximate_size();
-                }
-            } else {
-                failed_segment_ids.insert(segment_id);
-            }
+            // if (is_forced || is_level_0 || !is_full()) {
+            //     FilterCacheEntry cache_item(units_num);
+            //     filter_cache_.insert(std::make_pair(segment_id, cache_item));
+            //     used_space_size_ = used_space_size_ + cache_item.approximate_size();
+            //     if (is_level_0) {
+            //         level_0_used_space_size_ = level_0_used_space_size_ + cache_item.approximate_size();
+            //     }
+            // } else {
+            //     failed_segment_ids.insert(segment_id);
+            // }
+
+            // all segments to be enabled must have been inited
+            assert(false);
         }
     }
     filter_cache_mutex_.unlock();
@@ -92,6 +104,9 @@ void FilterCache::update_for_segments(std::unordered_map<uint32_t, uint16_t>& se
         } else {
             // filter units not cached
             // do nothing!!!
+            
+            // all segments to be enabled must have been inited
+            assert(false);
         }
     }
     filter_cache_mutex_.unlock();
@@ -159,6 +174,9 @@ void FilterCacheManager::hit_heat_buckets(const std::string& key) {
         if (period_cnt_ - last_long_period_ >= TRAIN_PERIODS) {
             last_long_period_ = period_cnt_;
             update_count_recorder();
+            std::map<uint32_t, uint32_t> estimate_count_recorder;
+            estimate_counts_for_all(estimate_count_recorder);
+            heap_manager_.sync_visit_cnt(estimate_count_recorder);
             train_signal_ = true;
         }
 
@@ -183,11 +201,11 @@ bool FilterCacheManager::make_clf_model_ready(std::vector<uint16_t>& features_nu
     return clf_model_.is_ready();
 }
 
-bool FilterCacheManager::check_key(const uint32_t& segment_id, const std::string& key) {
+std::vector<CachableEntry<ParsedFullFilterBlock>> FilterCacheManager::get_filter_blocks(uint32_t segment_id) {
     // move hit_count_recorder to a background thread
     // hit_count_recorder(segment_id); // one get opt will cause query to many segments.
     // so one get opt only call one hit_heat_buckets, but call many hit_count_recorder
-    return filter_cache_.check_key(segment_id, key);
+    return filter_cache_.get_filter_blocks(segment_id);
 }
 
 void FilterCacheManager::hit_count_recorder(const uint32_t& segment_id) {
@@ -805,4 +823,65 @@ void FilterCacheManager::move_segments(std::vector<uint32_t>& moved_segment_ids,
     }
 }
 
+    const char* FilterCache::Name() const { return "FilterCache"; }
+
+    // overrides rocksdb::Cache but no nothing
+    Status FilterCache::Insert(const Slice& key, void* value, size_t charge,
+                            void (*deleter)(const Slice& key, void* value),
+                            Handle** handle,
+                            Priority priority) {
+                                assert(false);
+                                return Status::OK();
+                            }
+
+    // overrides rocksdb::Cache but no nothing
+    Cache::Handle* FilterCache::Lookup(const Slice& key, Statistics* stats) {
+        assert(false);
+        return nullptr;
+    }
+
+    // overrides rocksdb::Cache but no nothing
+    bool FilterCache::Ref(Handle* handle) { return false; }
+
+    // used by CachableEntry
+    bool FilterCache::Release(Cache::Handle* handle, bool force_erase) { return false; }
+
+    // overrides rocksdb::Cache but no nothing
+    void* FilterCache::Value(Cache::Handle* handle) { assert(false); return nullptr; }
+
+    // overrides rocksdb::Cache but no nothing
+    void FilterCache::Erase(const Slice& key) { assert(false); }
+    // overrides rocksdb::Cache but no nothing
+    uint64_t FilterCache::NewId() { assert(false); return 0; }
+
+    // overrides rocksdb::Cache but no nothing
+    void FilterCache::SetCapacity(size_t capacity) { assert(false); }
+
+    // overrides rocksdb::Cache but no nothing
+    void FilterCache::SetStrictCapacityLimit(bool strict_capacity_limit) { assert(false);}
+
+    // overrides rocksdb::Cache but no nothing
+    bool FilterCache::HasStrictCapacityLimit() const { assert(false); return false; }
+
+    // overrides rocksdb::Cache but no nothing
+    size_t FilterCache::GetCapacity() const { assert(false);  return 0; }
+
+    // overrides rocksdb::Cache but no nothing
+    size_t FilterCache::GetUsage() const { assert(false); return 0; }
+
+    // overrides rocksdb::Cache but no nothing
+    size_t FilterCache::GetUsage(Handle* handle) const { assert(false); return 0; }
+
+    // overrides rocksdb::Cache but no nothing
+    size_t FilterCache::GetPinnedUsage() const { assert(false); return 0; }
+
+    // overrides rocksdb::Cache but no nothing
+    size_t FilterCache::GetCharge(Handle* handle) const { assert(false); return 0; }
+
+    // overrides rocksdb::Cache but no nothing
+    void FilterCache::ApplyToAllCacheEntries(void (*callback)(void*, size_t),
+                                        bool thread_safe) { assert(false); }
+
+    // overrides rocksdb::Cache but no nothing
+    void FilterCache::EraseUnRefEntries() { assert(false); }
 }
