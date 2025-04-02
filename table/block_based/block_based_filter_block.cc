@@ -80,7 +80,7 @@ void BlockBasedFilterBlockBuilder::StartBlock(uint64_t block_offset) {
   }
 }
 
-void BlockBasedFilterBlockBuilder::Add(const Slice& key) {
+void BlockBasedFilterBlockBuilder::Add(const Slice& key, uint32_t /*segment_id*/) {
   if (prefix_extractor_ && prefix_extractor_->InDomain(key)) {
     AddPrefix(key);
   }

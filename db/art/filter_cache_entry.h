@@ -9,8 +9,6 @@
 #include <mutex>
 #include <vector>
 
-#include "db/art/filter_cache.h"
-#include "db/version_edit.h"
 #include "macros.h"
 #include "port/port_posix.h"
 #include "table/block_based/cachable_entry.h"
@@ -42,9 +40,9 @@ class FilterCacheEntry {
 
  private:
   const BlockBasedTable* table_;
-  const FilterCache* filter_cache_;
+  FilterCache* filter_cache_;
 
-  struct FilterCacheDataHandle {
+  struct FilterCacheDataHandle : public Cache::Handle {
     DataPtr value_;
     FilterCache* cache_;
 
@@ -63,7 +61,7 @@ class FilterCacheEntry {
   // 构造函数，可以初始化成员变量
   // TODO pass right parameters
   FilterCacheEntry(const uint32_t segment_id, const BlockBasedTable* table,
-                   const FilterCache* filter_cache, const std::vector<BlockHandle>& block_handles);
+                   FilterCache* filter_cache, const std::vector<BlockHandle>& block_handles);
 
   // 清理成员变量，避免内存泄漏，如果new了空间，就可能需要在这里清理
   ~FilterCacheEntry();

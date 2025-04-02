@@ -15,6 +15,7 @@
 #include "options/options_helper.h"
 #include "test_util/sync_point.h"
 #include "util/cast_util.h"
+#include "db/art/global_filter_cache_context.h"
 
 namespace ROCKSDB_NAMESPACE {
 // Convenience methods
@@ -25,7 +26,7 @@ Status DBImpl::Put(const WriteOptions& o, ColumnFamilyHandle* column_family,
   // heat_buckets not ready, still sample into pool
   // if ready, prepare func auto return and do nothing
   std::string art_key(key.data(), key.size());
-  filter_cache_.prepare_heat_buckets(art_key, segment_info_recorder_);
+  global_filter_cache.prepare_heat_buckets(art_key, &global_segment_info_recorder);
 #endif
   return DB::Put(o, column_family, key, val);
 }

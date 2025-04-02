@@ -5,46 +5,46 @@
 #include <task_thread_pool.hpp>
 #include "macros.h"
 #include "filter_cache.h" 
+#include "table/block_based/parsed_full_filter_block.h"
 #include "table/format.h"
 
 namespace ROCKSDB_NAMESPACE {
 
-// global mutex to control global level recorder, ... 
-static std::mutex global_recorder_mutex_;
-
 class FilterCacheClient;
+class FilterCacheManager;
+class ParsedFullFilterBlock;
 
 class FilterCacheClient {
 private:
-    static task_thread_pool::task_thread_pool pool_;
-    static FilterCacheManager filter_cache_manager_;
+    task_thread_pool::task_thread_pool pool_{FILTER_CACHE_THREADS_NUM};
+    FilterCacheManager filter_cache_manager_;
     // we need heat_buckets_ready_ to become true before filter_cache_ready_
     // In YCSB benchmark, we first load data (insert key-value pairs) then may try get operation
     // so we can guarantee that heat_buckets_ready_ become true before filter_cache_ready_
-    static bool heat_buckets_ready_; // the same as FilterCacheManager.heat_buckets_.is_ready()
+    bool heat_buckets_ready_; // the same as FilterCacheManager.heat_buckets_.is_ready()
 
     // background thread part of prepare_heat_buckets
-    static void do_prepare_heat_buckets(const std::string& key, std::unordered_map<uint32_t, std::vector<std::string>>* const segment_info_recorder);
+    void do_prepare_heat_buckets(const std::string& key, std::unordered_map<uint32_t, std::vector<std::string>>* segment_info_recorder);
 
     // background thread part of retrain_or_keep_model
-    static void do_retrain_or_keep_model(std::vector<uint16_t>* const features_nums_except_level_0, 
-                                         std::map<uint32_t, uint16_t>* const level_recorder,
-                                         std::map<uint32_t, std::vector<RangeRatePair>>* const segment_ranges_recorder,
-                                         std::map<uint32_t, uint32_t>* const unit_size_recorder);
+    void do_retrain_or_keep_model(std::vector<uint16_t>* features_nums_except_level_0, 
+                                         const std::map<uint32_t, uint16_t>* level_recorder,
+                                         const std::map<uint32_t, std::vector<RangeRatePair>>* segment_ranges_recorder,
+                                         const std::map<uint32_t, uint32_t>* unit_size_recorder);
 
     // background thread part of check_key
-    static void do_hit_count_recorder(const uint32_t& segment_id);
+    void do_hit_count_recorder(uint32_t segment_id);
 
     // background thread part of get_updating_work
-    static void do_hit_heat_buckets(const std::string& key);
+    void do_hit_heat_buckets(const std::string& key);
 
     // background thread part of make_adjustment
-    static void do_make_adjustment();
+    void do_make_adjustment();
 
     // background thread part of batch_insert_segments
-    static void do_batch_insert_segments(std::vector<uint32_t>& merged_segment_ids, std::vector<uint32_t>& new_segment_ids,
+    void do_batch_insert_segments(std::vector<uint32_t>& merged_segment_ids, std::vector<uint32_t>& new_segment_ids,
                                          std::map<uint32_t, std::unordered_map<uint32_t, double>>& inherit_infos_recorder,
-                                         std::map<uint32_t, uint16_t>& level_recorder, const uint32_t& level_0_base_count,
+                                         std::map<uint32_t, uint16_t>& level_recorder, uint32_t level_0_base_count,
                                          std::map<uint32_t, std::vector<RangeRatePair>>& segment_ranges_recorder);
 
     // background thread part of batch_delete_segments
@@ -80,10 +80,10 @@ public:
     // please ensure that 3 recorders need to keep the same segments set, or error will occur in train func
     // you can use mutex in compaction and flushing to guarantee this
     // then when every long period end, try to retrain a new model or keep last model
-    void retrain_or_keep_model(std::vector<uint16_t>* const features_nums_except_level_0, 
-                               std::map<uint32_t, uint16_t>* const level_recorder,
-                               std::map<uint32_t, std::vector<RangeRatePair>>* const segment_ranges_recorder,
-                               std::map<uint32_t, uint32_t>* const unit_size_recorder);
+    void retrain_or_keep_model(std::vector<uint16_t>* features_nums_except_level_0, 
+                               const std::map<uint32_t, uint16_t>* level_recorder,
+                               const std::map<uint32_t, std::vector<RangeRatePair>>* segment_ranges_recorder,
+                               const std::map<uint32_t, uint32_t>* unit_size_recorder);
 
     // correespinding to FilterCacheManager work: check_key and hit_count_recorder
     // return FilterCacheManager.check_key() and leave hit_count_recorder to background
@@ -98,10 +98,8 @@ public:
     // batch insert segments into filter cache manager, will also delete merged segments
     void batch_insert_segments(std::vector<uint32_t> merged_segment_ids, std::vector<uint32_t> new_segment_ids,
                                std::map<uint32_t, std::unordered_map<uint32_t, double>> inherit_infos_recorder,
-                               std::map<uint32_t, uint16_t> level_recorder, const uint32_t& level_0_base_count,
-                               std::map<uint32_t, std::vector<RangeRatePair>> segment_ranges_recorder,
-                               std::map<uint32_t, std::vector<BlockHandle>> block_handles_map
-                            );
+                               std::map<uint32_t, uint16_t> level_recorder, uint32_t level_0_base_count,
+                               std::map<uint32_t, std::vector<RangeRatePair>> segment_ranges_recorder);
     
     // In WaLSM+, we only support one column family, we just save cfd ptr here
     void update_cfd_ptr_if_needed(ColumnFamilyData* cfd); 

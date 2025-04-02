@@ -9,6 +9,7 @@
 #include "db/db_impl/db_impl.h"
 
 #include <stdint.h>
+#include <mutex>
 #ifdef OS_SOLARIS
 #include <alloca.h>
 #endif
@@ -109,6 +110,7 @@
 #include "util/mutexlock.h"
 #include "util/stop_watch.h"
 #include "util/string_util.h"
+#include "db/art/global_filter_cache_context.h"
 
 namespace ROCKSDB_NAMESPACE {
 
@@ -250,25 +252,18 @@ DBImpl::DBImpl(const DBOptions& options, const std::string& dbname,
   period_cnt_ = 0;
   last_train_period_ = 0;
   */
-  segment_info_recorder_ = new std::unordered_map<uint32_t, std::vector<std::string>>;
-  level_recorder_ = new std::map<uint32_t, uint16_t>;
-  level_0_base_count_ = 0;
-
-  features_nums_except_level_0_ = new std::vector<uint16_t>;
-  uint16_t features_num = MAX_FEATURES_NUM;
-  if (features_num > 0) {
-    features_nums_except_level_0_->emplace_back(features_num);
+  {
+    std::lock_guard<std::mutex> global_filter_cache_lock_guard(global_filter_cache_recorders_mutex);
+    global_level_0_base_count = 0;
+    uint16_t features_num = MAX_FEATURES_NUM;
+    if (features_num > 0) {
+      global_features_nums_except_level_0.emplace_back(features_num);
+    }
+    global_filter_cache.retrain_or_keep_model(
+        &global_features_nums_except_level_0, &global_level_recorder,
+        &global_segment_ranges_recorder, &global_unit_size_recorder);
+    global_filter_cache.make_adjustment();
   }
-
-  segment_ranges_recorder_ = new std::map<uint32_t, std::vector<RangeRatePair>>;
-
-  unit_size_recorder_ = new std::map<uint32_t, uint32_t>;
-
-  filter_cache_.retrain_or_keep_model(features_nums_except_level_0_, 
-                                      level_recorder_,
-                                      segment_ranges_recorder_,
-                                      unit_size_recorder_);
-  filter_cache_.make_adjustment();
 #endif
   // !batch_per_trx_ implies seq_per_batch_ because it is only unset for
   // WriteUnprepared, which should use seq_per_batch_.
@@ -1692,7 +1687,7 @@ Status DBImpl::GetImpl(const ReadOptions& read_options, const Slice& key,
   auto cfd = cfh->cfd();
 
   // WaLSM+: update cfd pointer for future use
-  filter_cache_.update_cfd_ptr_if_needed(cfd);
+  global_filter_cache.update_cfd_ptr_if_needed(cfd);
 
   if (tracer_) {
     // TODO: This mutex should be removed later, to improve performance when
@@ -1780,7 +1775,7 @@ Status DBImpl::GetImpl(const ReadOptions& read_options, const Slice& key,
 #ifdef ART
 #ifdef ART_PLUS
   std::string art_key(key.data(), key.size());
-  filter_cache_.get_updating_work(art_key);
+  global_filter_cache.get_updating_work(art_key);
   // ready to estimate hotness, update heat buckets
   /*
   if (heat_buckets_.is_ready()) {
@@ -1911,7 +1906,7 @@ Status DBImpl::GetImpl(const ReadOptions& read_options, const Slice& key,
         get_impl_options.get_value);
 #else
     sv->current->Get(
-        filter_cache_,
+        global_filter_cache,
         read_options, lkey, get_impl_options.value, timestamp, &s,
         &merge_context, &max_covering_tombstone_seq,
         get_impl_options.get_value ? get_impl_options.value_found : nullptr,

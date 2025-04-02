@@ -36,7 +36,9 @@ std::vector<CachableEntry<ParsedFullFilterBlock>> FilterCache::get_filter_blocks
 }
 
 void FilterCache::init_segment(uint32_t segment_id, const BlockBasedTable* table, const std::vector<BlockHandle>& block_handles) {
-    filter_cache_.emplace(segment_id, FilterCacheEntry(segment_id, table, this, block_handles));
+    // filter_cache_[segment_id] = FilterCacheEntry(segment_id, table, this, block_handles);
+    filter_cache_.emplace(std::piecewise_construct, std::make_tuple(segment_id), std::make_tuple(segment_id, table, this, block_handles));
+    
 }
 
 void FilterCache::enable_for_segments(std::unordered_map<uint32_t, uint16_t>& segment_units_num_recorder, const bool& is_forced,

@@ -27,6 +27,7 @@
 #include "rocksdb/status.h"
 #include "table/block_based/block.h"
 #include "table/block_based/block_based_table_reader.h"
+#include "table/block_based/filter_block.h"
 #include "table/block_based/index_builder.h"
 #include "table/format.h"
 #include "util/coding.h"
@@ -143,7 +144,7 @@ void PartitionedFilterBlockBuilder::ProcessSegmentCut(uint32_t new_segment_id) {
   // for inherit_infos_recorders
 
   // <parent_segment_id, count>
-  std::map<uint32_t, double> inherit_counts;
+  std::unordered_map<uint32_t, double> inherit_counts;
 
   for (size_t i = 0; i < siz; ++i) {
     const Slice& key = keys_in_current_segment_[i];
@@ -185,10 +186,9 @@ void PartitionedFilterBlockBuilder::ProcessSegmentCut(uint32_t new_segment_id) {
   // update result
   // inherit_counts should be updated when GetSegmentBuilderResult() is called
   segment_builder_result_.new_segment_ids.insert(new_segment_id);
-  segment_builder_result_.per_segment_results.emplace_back(
-      new_segment_id, std::move(range_rate_pairs), std::move(inherit_counts),
-    std::move(smallest_key), std::move(largest_key)
-  );
+  segment_builder_result_.per_segment_results.push_back(SegmentBuilderResult::PerSegmentResult{
+      new_segment_id, range_rate_pairs, inherit_counts, smallest_key,
+      largest_key});
 
   // clear
   keys_in_current_segment_.clear();

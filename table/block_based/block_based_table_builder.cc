@@ -20,6 +20,7 @@
 #include <utility>
 
 #include "db/dbformat.h"
+#include "db/art/global_filter_cache_context.h"
 #include "index_builder.h"
 #include "port/lang.h"
 
@@ -66,7 +67,8 @@ FilterBlockBuilder* CreateFilterBlockBuilder(
     const ImmutableCFOptions& /*opt*/, const MutableCFOptions& mopt,
     const FilterBuildingContext& context,
     const bool use_delta_encoding_for_index_values,
-    PartitionedIndexBuilder* const p_index_builder) {
+    PartitionedIndexBuilder* const p_index_builder,
+    const InternalKeyComparator* internal_comparator) {
   const BlockBasedTableOptions& table_opt = context.table_options;
   if (table_opt.filter_policy == nullptr) return nullptr;
 
@@ -91,7 +93,8 @@ FilterBlockBuilder* CreateFilterBlockBuilder(
       return new PartitionedFilterBlockBuilder(
           mopt.prefix_extractor.get(), table_opt.whole_key_filtering,
           filter_bits_builder, table_opt.index_block_restart_interval,
-          use_delta_encoding_for_index_values, p_index_builder, partition_size);
+          use_delta_encoding_for_index_values, p_index_builder, partition_size, 
+          global_filter_cache.range_seperators(), internal_comparator);
     } else {
       return new FullFilterBlockBuilder(mopt.prefix_extractor.get(),
                                         table_opt.whole_key_filtering,
@@ -476,7 +479,7 @@ struct BlockBasedTableBuilder::Rep {
       context.info_log = ioptions.info_log;
       filter_builder.reset(CreateFilterBlockBuilder(
           ioptions, moptions, context, use_delta_encoding_for_index_values,
-          p_index_builder_));
+          p_index_builder_, &internal_comparator));
     }
 
     for (auto& collector_factories : *int_tbl_prop_collector_factories) {

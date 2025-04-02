@@ -747,13 +747,14 @@ Status CompactionJob::Run() {
   for (auto& state : compact_->sub_compact_states) {
     for (auto& output : state.outputs) {
       assert(output.meta.fd.table_reader != nullptr);
-      const BlockBasedTable* table =
-          static_cast<const BlockBasedTable*>(output.meta.fd.table_reader);
+      const auto* table = output.meta.fd.table_reader;
       auto block_handles_map = table->GetSegmentBlockHandles();
       for (const auto& segment_id_and_block_handles : block_handles_map) {
         auto segment_id = segment_id_and_block_handles.first;
         const auto& block_handles = segment_id_and_block_handles.second;
-        filter_cache_client_->init_segment(segment_id, table, block_handles);
+        // dangerous cast, but we know that the table is BlockBasedTablde
+        filter_cache_client_->init_segment(segment_id, (BlockBasedTable*) table, block_handles);
+      }
     }
   }
 

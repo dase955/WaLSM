@@ -10,6 +10,7 @@
 #include <map>
 #include <set>
 #include <unordered_map>
+#include "db/art/filter_cache_entry.h"
 #include "db/version_edit.h"
 #include "macros.h"
 #include "greedy_algo.h"
@@ -17,15 +18,13 @@
 #include "heat_buckets.h"
 #include "filter_cache_heap.h"
 #include "rocksdb/cache.h"
-#include "table/block_based/block_based_table_reader.h"
 #include "table/block_based/cachable_entry.h"
 #include "table/block_based/parsed_full_filter_block.h"
 
 namespace ROCKSDB_NAMESPACE {
 
-class FilterCache;
 class FilterCacheManager;
-class FilterCacheEntry;
+class BlockBasedTable;
 
 // FilterCache main component is a STL Map, key -- segment id, value -- Structure of Filter Units （ called FilterCacheItem）
 // its main job is auto enable/disable filter units for one segment, and check whether one key exists in enabled units
@@ -312,9 +311,7 @@ public:
     void insert_segments(std::vector<uint32_t>& merged_segment_ids, std::vector<uint32_t>& new_segment_ids,
                          std::map<uint32_t, std::unordered_map<uint32_t, double>>& inherit_infos_recorder,
                          std::map<uint32_t, uint16_t>& level_recorder, const uint32_t& level_0_base_count,
-                         std::map<uint32_t, std::vector<RangeRatePair>>& segment_ranges_recorder,
-                         std::map<uint32_t, std::vector<BlockHandle>> block_handles_map
-                    );
+                         std::map<uint32_t, std::vector<RangeRatePair>>& segment_ranges_recorder);
 
 // in func insert_segments above, we will also remove merged segments, this work well for normal compaction and flush
     // but we found that WaLSM also do delete compaction (only delete segments)

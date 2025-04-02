@@ -33,7 +33,8 @@ LIB_SOURCES =                                                   \
   db/art/heat_buckets.cc                                        \
   db/art/clf_model.cc                                           \
   db/art/filter_cache_heap.cc                                   \
-  db/art/filter_cache_item.cc                                   \
+  db/art/filter_cache_entry.cc                                  \
+  db/art/global_filter_cache_context.cc                         \
   db/art/filter_cache.cc                                        \
   db/art/filter_cache_client.cc                                 \
   db/art/greedy_algo.cc                                         \

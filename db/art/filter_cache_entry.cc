@@ -20,7 +20,7 @@ namespace ROCKSDB_NAMESPACE {
 // TODO pass right parameters
 FilterCacheEntry::FilterCacheEntry(const uint32_t segment_id,
                                    const BlockBasedTable* table,
-                                   const FilterCache* filter_cache,
+                                   FilterCache* filter_cache,
                                    const std::vector<BlockHandle>& block_handles) {
   segment_id_ = segment_id;
   table_ = table;
@@ -60,7 +60,7 @@ FilterCacheEntry::get_filter_blocks() {
   result.reserve(loaded_units_num_);
   for (size_t i = 0; i < loaded_units_num_; i++) {
     result.emplace_back(cache_handles_[i]->value_.get(), filter_cache_,
-                        block_handles_[i], false);
+                        cache_handles_[i].get(), false);
   }
   rwlock.ReadUnlock();
   return result;
