@@ -455,6 +455,8 @@ Status BuildTableFromArt(
     if (table_properties) {
       *table_properties = tp;
     }
+    // store SegmentBuilderResult
+    job->segment_builder_result = builder->GetSegmentBuilderResult();
   }
   delete builder;
 

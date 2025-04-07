@@ -189,9 +189,11 @@ void FilterCacheManager::hit_heat_buckets(const std::string& key) {
 
         if (period_cnt_ - last_short_period_ >= 1) {
             last_short_period_ = period_cnt_;
-            std::map<uint32_t, uint32_t> estimate_count_recorder;
-            estimate_counts_for_all(estimate_count_recorder);
-            heap_manager_.sync_visit_cnt(estimate_count_recorder);
+            if (!train_signal_) {
+                std::map<uint32_t, uint32_t> estimate_count_recorder;
+                estimate_counts_for_all(estimate_count_recorder);
+                heap_manager_.sync_visit_cnt(estimate_count_recorder);
+            }
         }
 
         update_mutex_.unlock();

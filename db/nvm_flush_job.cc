@@ -200,6 +200,7 @@ void NVMFlushJob::Build() {
       io_status_ = io_s;
     }
     LogFlush(db_options_.info_log);
+    segment_builder_result_ = std::move(job_->segment_builder_result);
   }
   ROCKS_LOG_INFO(db_options_.info_log,
                  "[%s] [JOB %d] Level-0 flush table #%" PRIu64 ": %" PRIu64

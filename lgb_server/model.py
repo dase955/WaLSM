@@ -11,7 +11,7 @@ class LGBModel():
         self.__model = None
         # one unit is 4 bits-per-key, class = 2 mean bits-per-key = 4 * 2 = 8
         # the default bits-per-key value of previous benchmark is 10
-        self.__default_class = 4
+        self.__default_class = 2
         self.__bits_per_key = 4 # bits_per_key for one filter unit
         self.__num_probes = math.floor(self.__bits_per_key * 0.69) # 4 * 0.69 = 2.76 -> 2
         self.__rate_per_unit = math.pow(1.0 - math.exp(-self.__num_probes/self.__bits_per_key), self.__num_probes) # false positive rate of one unit
@@ -54,7 +54,7 @@ class LGBModel():
         X = df.drop(columns=['Target', 'Count'])
         if self.__model is not None and self.__evaluate_model(X, y, c): 
             # still work well
-            return
+            return 'no need to train'
         # clf = lightgbm.LGBMClassifier(min_child_samples=1, n_estimators=1, objective="multiclass")
         clf = lightgbm.LGBMClassifier()
         clf.fit(X, y)

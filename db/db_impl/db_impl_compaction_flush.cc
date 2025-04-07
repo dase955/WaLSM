@@ -2636,6 +2636,41 @@ void DBImpl::SyncCallFlush(std::vector<SingleCompactionJob*>& jobs) {
       }
     }
 
+    // std::vector<SegmentBuilderResult> segment_builder_results;
+    SegmentBuilderResult agg_segment_builder_result;
+    for (auto& db_job : db_jobs) {
+      // segment_builder_results.emplace_back(std::move(
+      //     db_job.nvm_flush_job->segment_builder_result_));
+      auto& sub_result = db_job.nvm_flush_job->segment_builder_result_;
+      agg_segment_builder_result.new_segment_ids.insert(
+          sub_result.new_segment_ids.begin(),
+          sub_result.new_segment_ids.end());
+
+      agg_segment_builder_result.merged_segment_ids.insert(
+          sub_result.merged_segment_ids.begin(),
+          sub_result.merged_segment_ids.end());
+
+      for (auto& per_segment_result : sub_result.per_segment_results) {
+        agg_segment_builder_result.per_segment_results.push_back(
+            std::move(per_segment_result));
+      }
+    }
+    agg_segment_builder_result.output_level = 0; // flushed
+
+    // insert all filter block handles to filtercache
+    for (auto& db_job : db_jobs) {
+      auto& meta = db_job.nvm_flush_job->meta_;
+      assert(meta.fd.table_reader != nullptr);
+      const auto* table = meta.fd.table_reader;
+      auto block_handles_map = table->GetSegmentBlockHandles();
+      for (const auto& segment_id_and_block_handles : block_handles_map) {
+        auto segment_id = segment_id_and_block_handles.first;
+        const auto& block_handles = segment_id_and_block_handles.second;
+        // dangerous cast, but we know that the table is BlockBasedTable
+        global_filter_cache.init_segment(segment_id, (BlockBasedTable*) table, block_handles);
+      }
+    }
+
     TEST_SYNC_POINT("DBImpl::SyncCallFlush:FlushFinish:0");
     ReleaseFileNumberFromPendingOutputs(pending_outputs_inserted_elem);
 
@@ -2670,6 +2705,28 @@ void DBImpl::SyncCallFlush(std::vector<SingleCompactionJob*>& jobs) {
     bg_cv_.SignalAll();
 
   #ifdef ART_PLUS
+    // transfer agg_segment_builder_result to temp recorders
+
+    // update merged_segment_ids and new_segment_ids
+    for (const auto& id : agg_segment_builder_result.merged_segment_ids) {
+      merged_segment_ids->insert(id);
+    }
+    for (const auto& id : agg_segment_builder_result.new_segment_ids) {
+      new_segment_ids->insert(id);
+    }
+
+    // update new_level_recorder 
+    for (const auto id : agg_segment_builder_result.new_segment_ids) {
+      new_level_recorder->insert(std::make_pair(id, agg_segment_builder_result.output_level));
+    }
+
+    // update new_segment_ranges_recorder and inherit_infos_recorder
+    for (const auto& per_segment_result : agg_segment_builder_result.per_segment_results) {
+      const auto segment_id = per_segment_result.segment_id;
+      (*new_segment_ranges_recorder)[segment_id] = per_segment_result.range_rate_pairs;
+      (*inherit_infos_recorder)[segment_id] = per_segment_result.inherit_recorder;
+    }
+
     // do new SSTs already exist in latest version?
     // TODO(WaLSM+): if all ok, merge temp recorders into global DBImpl recorders. 
     //               we need a mutex to guarantee these recorders modified by only one background thread at one time
@@ -3096,10 +3153,17 @@ Status DBImpl::BackgroundCompaction(bool* made_progress,
   #ifdef ART_PLUS
     compaction_flag = 1;
   #endif
-    /*
-      std::set<uint32_t>* merged_segment_ids = new std::set<uint32_t>; 
-      // the merged segments' id, we need to delete them from these 3 global recorders
-    */
+
+    // the merged segments' id, we need to delete them from these 3 global recorders
+    std::unique_ptr<std::set<uint32_t>> merged_segment_ids_f1(new std::set<uint32_t>); 
+    for (const auto& f : *c->inputs(0)) {
+      auto segment_handles_map = f->fd.table_reader->GetSegmentBlockHandles();
+      for (const auto& segment_id_and_block_handles : segment_handles_map) {
+        auto segment_id = segment_id_and_block_handles.first;
+        merged_segment_ids_f1->insert(segment_id);
+      }
+    }
+
     for (const auto& f : *c->inputs(0)) {
       c->edit()->DeleteFile(c->level(), f->fd.GetNumber());
     }
@@ -3137,21 +3201,39 @@ Status DBImpl::BackgroundCompaction(bool* made_progress,
     int64_t moved_bytes = 0;
   #ifdef ART_PLUS
     compaction_flag = 2; // sign for TrivialMove
-  #endif
+
+    // TODO(WaLSM+): no new SST generated and no SST merged, just move segments(from different levels) to target levels
+    //               we can copy moved segment ids into merged_segment_ids. 
+    //               then record these moved segments' new level to new_level_recorder
+    //               maybe we need to record segment ids for every SST for convience?
+
+    std::unique_ptr<std::set<uint32_t>> merged_segment_ids_f2(new std::set<uint32_t>); 
+    // the merged segments' id, we need to delete them from these 3 global recorders
+    std::unique_ptr<std::map<uint32_t, uint16_t>> new_level_recorder_f2(new std::map<uint32_t, uint16_t>);
+    auto output_level_f2 = c->output_level();
+
     for (unsigned int l = 0; l < c->num_input_levels(); l++) {
       if (c->level(l) == c->output_level()) {
         continue;
       }
       for (size_t i = 0; i < c->num_input_files(l); i++) {
-        // TODO(WaLSM+): no new SST generated and no SST merged, just move segments(from different levels) to target levels
-        //               we can copy moved segment ids into merged_segment_ids. 
-        //               then record these moved segments' new level to new_level_recorder
-        //               maybe we need to record segment ids for every SST for convience?
-        /*
-          std::set<uint32_t>* merged_segment_ids; 
-          // the merged segments' id, we need to delete them from these 3 global recorders
-          std::map<uint32_t, uint16_t>* new_level_recorder = new std::map<uint32_t, uint16_t>;
-        */
+        FileMetaData* f = c->input(l, i);
+        auto segment_handles_map = f->fd.table_reader->GetSegmentBlockHandles();
+        for (const auto& segment_id_and_block_handles : segment_handles_map) {
+          auto segment_id = segment_id_and_block_handles.first;
+          merged_segment_ids_f2->insert(segment_id);
+          (*new_level_recorder_f2)[segment_id] = output_level_f2;
+        }
+      }
+    }
+
+  #endif
+
+    for (unsigned int l = 0; l < c->num_input_levels(); l++) {
+      if (c->level(l) == c->output_level()) {
+        continue;
+      }
+      for (size_t i = 0; i < c->num_input_files(l); i++) {
         FileMetaData* f = c->input(l, i);
         c->edit()->DeleteFile(c->level(l), f->fd.GetNumber());
         c->edit()->AddFile(c->output_level(), f->fd.GetNumber(),

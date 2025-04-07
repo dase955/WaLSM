@@ -39,6 +39,7 @@
 #include "rocksdb/listener.h"
 #include "rocksdb/memtablerep.h"
 #include "rocksdb/transaction_log.h"
+#include "table/block_based/filter_block.h"
 #include "table/scoped_arena_iterator.h"
 #include "util/autovector.h"
 #include "util/stop_watch.h"
@@ -93,6 +94,7 @@ class NVMFlushJob {
 
   LogsWithPrepTracker* logs_with_prep_tracker_;
   FileMetaData meta_;
+  SegmentBuilderResult segment_builder_result_;
 
  private:
   void ReportStartedFlush();
@@ -161,7 +163,6 @@ class NVMFlushJob {
   Env::WriteLifeTimeHint write_hint;
 
   const std::shared_ptr<IOTracer> io_tracer_;
-
 
 };
 

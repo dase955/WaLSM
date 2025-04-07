@@ -11,6 +11,7 @@
 #include <deque>
 #include <db/art/utils.h>
 #include <condition_variable>
+#include "table/block_based/filter_block.h"
 #include <db/dbformat.h>
 #include <rocksdb/rocksdb_namespace.h>
 #include <rocksdb/threadpool.h>
@@ -44,6 +45,8 @@ struct SingleCompactionJob {
 
   std::vector<std::string> keys_in_node;
   autovector<RecordIndex>* compacted_indexes;
+
+  SegmentBuilderResult segment_builder_result;
 
   void Reset() {
     candidates.clear();
