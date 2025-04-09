@@ -1,0 +1,5 @@
+sudo mount /dev/nvme0n1 /mnt/nvme0n1
+sudo mount -o dax,noatime /dev/pmem0.7 /mnt/pmem0.7
+sudo mount -o dax,noatime /dev/pmem0.8 /mnt/pmem0.8
+rm /mnt/nvme0n1/guoteng/walsmtest/tmp/db_nvm_l0/* -rf ; rm /mnt/pmem0.7/guoteng/nodememory
+./ycsb -load -run -db rocksdb -P workloads/workload_test -P rocksdb/rocksdb.properties -p threadcount=8 -s

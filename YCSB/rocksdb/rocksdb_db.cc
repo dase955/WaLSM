@@ -98,6 +98,9 @@ namespace {
   const std::string PROP_OPTIMIZE_LEVELCOMP = "rocksdb.optimize_level_style_compaction";
   const std::string PROP_OPTIMIZE_LEVELCOMP_DEFAULT = "false";
 
+  const std::string PROP_OPTIMIZE_UNIVERSALCOMP = "rocksdb.optimize_universal_style_compaction";
+  const std::string PROP_OPTIMIZE_UNIVERSALCOMP_DEFAULT = "false";
+
   const std::string PROP_OPTIONS_FILE = "rocksdb.optionsfile";
   const std::string PROP_OPTIONS_FILE_DEFAULT = "";
 
@@ -333,6 +336,12 @@ void RocksdbDB::GetOptions(const utils::Properties &props, rocksdb::Options *opt
     }
 
     rocksdb::BlockBasedTableOptions table_options;
+    table_options.pin_top_level_index_and_filter = false;
+    table_options.pin_l0_filter_and_index_blocks_in_cache = false;
+    table_options.cache_index_and_filter_blocks_with_high_priority = false;
+    table_options.index_type = rocksdb::BlockBasedTableOptions::kTwoLevelIndexSearch;
+    table_options.partition_filters = true;
+    table_options.cache_index_and_filter_blocks = true;
     size_t cache_size = std::stoul(props.GetProperty(PROP_CACHE_SIZE, PROP_CACHE_SIZE_DEFAULT));
     if (cache_size > 0) {
       block_cache = rocksdb::NewLRUCache(cache_size);
@@ -351,10 +360,13 @@ void RocksdbDB::GetOptions(const utils::Properties &props, rocksdb::Options *opt
     opt->table_factory.reset(rocksdb::NewBlockBasedTableFactory(table_options));
 
     if (props.GetProperty(PROP_INCREASE_PARALLELISM, PROP_INCREASE_PARALLELISM_DEFAULT) == "true") {
-      opt->IncreaseParallelism();
+      opt->IncreaseParallelism(32);
     }
     if (props.GetProperty(PROP_OPTIMIZE_LEVELCOMP, PROP_OPTIMIZE_LEVELCOMP_DEFAULT) == "true") {
       opt->OptimizeLevelStyleCompaction();
+    }
+    if (props.GetProperty(PROP_OPTIMIZE_UNIVERSALCOMP, PROP_OPTIMIZE_UNIVERSALCOMP_DEFAULT) == "true") {
+      opt->OptimizeUniversalStyleCompaction();
     }
   }
 }

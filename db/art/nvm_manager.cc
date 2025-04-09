@@ -46,7 +46,9 @@ bool InitializeMemory(std::unordered_map<std::string, int64_t>& memory_usages,
   size_t mapped_len;
   base_memptr = (char*)pmem_map_file(
       nvm_path.c_str(), TotalSize, PMEM_FILE_CREATE, 0666, &mapped_len, &is_pmem);
-  //assert(is_pmem && mapped_len == (size_t)TotalSize);
+  // base_memptr = (char*)mmap(
+  //     nvm_path.c_str(), TotalSize, PMEM_FILE_CREATE, 0666, &mapped_len, &is_pmem);
+  assert(is_pmem && mapped_len == (size_t)TotalSize);
   aligned_ptr = reinterpret_cast<char*>(ALIGN_UP(reinterpret_cast<size_t>(base_memptr), 256));
 
   close(fd);

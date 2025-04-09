@@ -419,14 +419,14 @@ void DoTest(double zipf, double read_ratio) {
   options.use_direct_reads = true;
   options.enable_pipelined_write = true;
   options.compression = rocksdb::kNoCompression;
-  options.nvm_path = "/mnt/chen/nodememory";
+  options.nvm_path = "/mnt/pmem0.7/guoteng/nodememory";
   options.IncreaseParallelism(16);
 
   BlockBasedTableOptions table_options;
   table_options.filter_policy.reset(NewBloomFilterPolicy(10));
   options.table_factory.reset(NewBlockBasedTableFactory(table_options));
 
-  std::string db_path = "/tmp/db_old_custom";
+  std::string db_path = "/mnt/nvme0n1/guoteng/walsmtest/tmp/db_old_custom";
 
   DB* db;
   DB::Open(options, db_path, &db);

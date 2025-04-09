@@ -10,8 +10,10 @@
 #include <fstream>
 
 #include "rocksdb/db.h"
+#include "rocksdb/filter_policy.h"
 #include "rocksdb/slice.h"
 #include "rocksdb/options.h"
+#include "rocksdb/table.h"
 
 #include <time.h>
 #include <sys/time.h>
@@ -388,7 +390,8 @@ void ParseOptions(Options& options) {
   options.use_direct_io_for_flush_and_compaction = true;
   options.use_direct_reads = true;
   options.enable_pipelined_write = true;
-  options.OptimizeLevelStyleCompaction();
+  // options.OptimizeLevelStyleCompaction();
+  options.OptimizeUniversalStyleCompaction();
 
   std::ifstream option_file("options.txt", std::ios::in);
   std::string line;
@@ -415,7 +418,7 @@ void ParseOptions(Options& options) {
 }
 
 void DoTest(std::string test_name) {
-  int thread_num = 8;
+  int thread_num = 1;
   int total_count = 320000000;
   int sample_range = 1000000000;
 
@@ -425,20 +428,43 @@ void DoTest(std::string test_name) {
   options.use_direct_reads = true;
   options.enable_pipelined_write = true;
   options.compression = rocksdb::kNoCompression;
-  options.nvm_path = "/mnt/chen/nodememory";
-  options.IncreaseParallelism(16);
+  options.nvm_path = "/mnt/pmem0.7/guoteng/nodememory";
+  // options.IncreaseParallelism(16);
 
-  std::string db_path = "/tmp/tmp_data/db_test_" + test_name;
+  options.create_if_missing = true;
+  options.use_direct_io_for_flush_and_compaction = true;
+  options.use_direct_reads = true;
+  options.compression = rocksdb::kNoCompression;
+  options.compaction_style = rocksdb::kCompactionStyleUniversal;
+  options.IncreaseParallelism(1);
+  options.statistics = rocksdb::CreateDBStatistics();
+
+  rocksdb::BlockBasedTableOptions block_based_options;
+  block_based_options.pin_top_level_index_and_filter = false;
+  block_based_options.pin_l0_filter_and_index_blocks_in_cache = false;
+  block_based_options.cache_index_and_filter_blocks_with_high_priority = false;
+  block_based_options.index_type = rocksdb::BlockBasedTableOptions::kTwoLevelIndexSearch;
+  block_based_options.partition_filters = true;
+  block_based_options.cache_index_and_filter_blocks = true;
+  block_based_options.filter_policy.reset(rocksdb::NewBloomFilterPolicy(10, false));
+  block_based_options.block_cache =
+      rocksdb::NewLRUCache(static_cast<size_t>(128 * 1024 * 1024));
+  options.table_factory.reset(rocksdb::NewBlockBasedTableFactory(block_based_options));
+  options.memtable_prefix_bloom_size_ratio = 0.02;
+  std::string db_path = "/mnt/nvme0n1/guoteng/walsmtest/tmp/db_test_" + test_name;
 
   DB* db;
   DB::Open(options, db_path, &db);
+  std::cout << " Open OK" << std::endl;
 
   Inserter inserter(thread_num, db);
   inserter.SetGenerator(
       new YCSBZipfianGenerator(total_count, sample_range, 0.98, 26.49));
   inserter.DoInsert();
+  std::cout << "Insert OK" << std::endl;
 
   db->Close();
+  std::cout << "Close OK" << std::endl;
 
   delete db;
 }

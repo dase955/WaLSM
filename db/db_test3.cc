@@ -373,7 +373,7 @@ void DoTest(std::string test_name) {
   options.use_direct_io_for_flush_and_compaction = true;
   options.use_direct_reads = true;
   options.enable_pipelined_write = true;
-  options.nvm_path = "/mnt/chen/nodememory";
+  options.nvm_path = "/mnt/pmem0.7/guoteng/nodememory";
   options.compression = rocksdb::kNoCompression;
   options.IncreaseParallelism(16);
 
@@ -382,7 +382,7 @@ void DoTest(std::string test_name) {
   zipf->Prepare();
 
   DB* db;
-  DB::Open(options, "/tmp/db_old_custom", &db);
+  DB::Open(options, "/mnt/nvme0n1/guoteng/walsmtest/tmp/db_old_custom", &db);
 
   std::thread read_threads[thread_num];
   std::thread write_threads[thread_num];

@@ -545,11 +545,11 @@ int main(int argc, char* argv[]) {
   options.IncreaseParallelism(16);
   options.OptimizeForPointLookup(512);
   options.statistics = CreateDBStatistics();
-  // options.nvm_path = "/mnt/pmem1/crh/nodememory";
+  // options.nvm_path = "/mnt/pmem0.7/guoteng/nodememory";
 
   // std::remove(options.nvm_path.c_str());
 
-  std::string db_path = "/home/crh/db_test_nvm_l0";
+  std::string db_path = "/mnt/nvme0n1/guoteng/walsmtest/tmp/db_test_nvm_l0";
 
   DB* db;
   DB::Open(options, db_path, &db);
