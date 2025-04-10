@@ -548,10 +548,10 @@ void DoTest(double zipf) {
   options.use_direct_reads = true;
   options.enable_pipelined_write = true;
   options.compression = rocksdb::kNoCompression;
-  options.nvm_path = "/pg_wal/ycc/memory_art";
+  options.nvm_path = "/mnt/pmem0.7/guoteng/nodememory";
   options.IncreaseParallelism(16);
 
-  std::string db_path = "/tmp/db_old_custom";
+  std::string db_path = "/mnt/nvme0n1/guoteng/walsmtest/tmp/db_old_custom";
 
   DB* db;
   DB::Open(options, db_path, &db);

@@ -115,6 +115,7 @@ ifneq ($(findstring rocksdbjava, $(MAKECMDGOALS)),)
 	endif
 endif
 
+# DEBUG_LEVEL=1
 $(info $$DEBUG_LEVEL is ${DEBUG_LEVEL})
 
 # Lite build flag.

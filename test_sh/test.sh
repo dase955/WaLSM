@@ -3,7 +3,7 @@
 value_array=(32 64 128)
 test_all_size=81920000000   #8G
 
-pmem_path="/mnt/chen/test"
+pmem_path= "/mnt/pmem0.7/guoteng/nodememory"
 
 bench_benchmarks="fillrandom, stats, wait, clean_cache, stats, readrandom, stats, clean_cache"
 bench_readnum="1000000"

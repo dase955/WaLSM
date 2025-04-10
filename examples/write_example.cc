@@ -85,7 +85,7 @@ int main() {
 
   DB* db;
 
-  assert(DB::Open(options, "/tmp/db_test", &db).ok());
+  assert(DB::Open(options, "/mnt/nvme0n1/guoteng/walsmtest/tmp/db_nvm_l0", &db).ok());
 
   int n = 0;
 
