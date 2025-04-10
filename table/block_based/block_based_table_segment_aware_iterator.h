@@ -43,12 +43,10 @@ class BlockBasedTableSegmentAwareIterator : public InternalIteratorBase<Slice> {
   void SeekToFirst() override;
   void SeekToLast() override;
   void Next() final override;
-  bool NextAndGetResult(IterateResult* result) override;
   void Prev() override;
   bool Valid() const override;
   Slice key() const override;
   Slice user_key() const override;
-  bool PrepareValue() override;
   Slice value() const override;
   Status status() const override;
   uint32_t segment_id() const override;

@@ -212,7 +212,11 @@ std::vector<CachableEntry<ParsedFullFilterBlock>> FilterCacheManager::get_filter
     return filter_cache_.get_filter_blocks(segment_id);
 }
 
-void FilterCacheManager::hit_count_recorder(const uint32_t& segment_id) {
+void FilterCacheManager::init_segment(uint32_t segment_id, const BlockBasedTable* table, const std::vector<BlockHandle>& block_handles) {
+    filter_cache_.init_segment(segment_id, table, block_handles);
+}
+
+void FilterCacheManager::hit_count_recorder(uint32_t segment_id) {
     count_mutex_.lock();
 
     auto it = current_count_recorder_.find(segment_id);

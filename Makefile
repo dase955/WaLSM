@@ -14,8 +14,8 @@ ifeq ($(origin PYTHON), undefined)
 endif
 export PYTHON
 
-EXTRA_CXXFLAGS += -I$(HOME)/local/include
-EXTRA_LDFLAGS  += -L$(HOME)/local/lib -lsocket++
+EXTRA_CXXFLAGS += -I$(HOME)/local/include -gdwarf-4
+LDFLAGS  += -L$(HOME)/local/lib -lsocket++
 
 CLEAN_FILES = # deliberately empty, so we can append below.
 CFLAGS += ${EXTRA_CFLAGS}

@@ -165,6 +165,7 @@ LIB_SOURCES =                                                   \
   table/block_based/block_based_table_factory.cc                \
   table/block_based/block_based_table_iterator.cc               \
   table/block_based/block_based_table_reader.cc                 \
+  table/block_based/block_based_table_segment_aware_iterator.cc \
   table/block_based/block_builder.cc                            \
   table/block_based/block_prefetcher.cc                         \
   table/block_based/block_prefix_index.cc                       \

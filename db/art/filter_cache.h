@@ -206,7 +206,7 @@ public:
     // will be called when calling check_key
     // remember to move this func to a single background thread aside check_key
     // because this func shouldn't block get operations
-    void hit_count_recorder(const uint32_t& segment_id);
+    void hit_count_recorder(uint32_t segment_id);
 
     // copy counts to last_count_recorder and reset counts of current_count_recorder
     void update_count_recorder();

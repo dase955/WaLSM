@@ -9,18 +9,19 @@
 
 #---------------------build config-------------------------
 
+LD=/usr/bin/ld
+CXXFLAGS += -I$(HOME)/local/include -gdwarf-4
+LDFLAGS += -lstdc++
+LDFLAGS += -L$(HOME)/local/lib -lsocket++
+
 DEBUG_BUILD ?= 0
-EXTRA_CXXFLAGS ?= -I../include -I../include/rocksdb 
-EXTRA_LDFLAGS ?= -L../ -lpmem -ldl
+EXTRA_CXXFLAGS += -I../include -I../include/rocksdb 
+EXTRA_LDFLAGS += -L../ -lpmem -ldl
 
 BIND_ROCKSDB ?= 1
 BIND_LEVELDB ?= 0
 BIND_LMDB ?= 0
 
-EXTRA_CXXFLAGS += -I$(HOME)/local/include
-EXTRA_LDFLAGS += -L$(HOME)/local/lib
-EXTRA_LDFLAGS += -lstdc++
-EXTRA_LDFLAGS += -lsocket++
 # EXTRA_LDFLAGS += -lpython3.12
 # EXTRA_CXXFLAGS += -I$(PYTHON_INCLUDE_PATH)
 # EXTRA_CXXFLAGS += -L$(PYTHON_LIBRARY_PATH)

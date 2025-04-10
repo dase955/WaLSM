@@ -54,6 +54,10 @@ Slice BlockBasedTableSegmentAwareIterator::key() const {
   return data_iter_->key();
 }
 
+Slice BlockBasedTableSegmentAwareIterator::user_key() const {
+  return data_iter_->user_key();
+}
+
 Slice BlockBasedTableSegmentAwareIterator::value() const {
   return data_iter_->value();
 }
