@@ -354,13 +354,16 @@ void RocksdbDB::GetOptions(const utils::Properties &props, rocksdb::Options *opt
       block_cache_compressed = rocksdb::NewLRUCache(cache_size);
       table_options.block_cache_compressed = rocksdb::NewLRUCache(compressed_cache_size);
     }
-    int bloom_bits = std::stoul(props.GetProperty(PROP_BLOOM_BITS, PROP_BLOOM_BITS_DEFAULT));
+    int bloom_bits = std::stoul(props.GetProperty(PROP_BLOOM_BITS, PROP_BLOOM_BITS_DEFAULT)); 
     if (bloom_bits > 0) {
       table_options.filter_policy.reset(rocksdb::NewBloomFilterPolicy(bloom_bits));
     }
     opt->table_factory.reset(rocksdb::NewBlockBasedTableFactory(table_options));
 
     if (props.GetProperty(PROP_INCREASE_PARALLELISM, PROP_INCREASE_PARALLELISM_DEFAULT) == "true") {
+      // unlimit the thread count of compactions and flushes. let it depend on total thread: 32
+      opt->max_background_compactions = -1;
+      opt->max_background_flushes = -1;
       opt->IncreaseParallelism(32);
     }
     if (props.GetProperty(PROP_OPTIMIZE_LEVELCOMP, PROP_OPTIMIZE_LEVELCOMP_DEFAULT) == "true") {

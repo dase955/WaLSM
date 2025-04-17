@@ -4,11 +4,6 @@
 
 namespace ROCKSDB_NAMESPACE {
 
-FilterCacheHeap FilterCacheHeapManager::benefit_heap_;
-FilterCacheHeap FilterCacheHeapManager::cost_heap_;
-std::map<uint32_t, uint32_t> FilterCacheHeapManager::heap_visit_cnt_recorder_;
-std::map<uint32_t, uint16_t> FilterCacheHeapManager::units_num_limit_recorder_;
-std::mutex FilterCacheHeapManager::manager_mutex_; 
 
 FilterCacheHeapNode FilterCacheHeap::heap_top() {
     // need lock heap, or we may retrive outdated node

@@ -188,7 +188,7 @@ public:
 
 #ifdef ART_PLUS
   T* ReleaseValue() {
-    assert(own_value_);
+    assert(own_value_ && cache_ == nullptr && cache_handle_ == nullptr);
     T* value = value_;
     ResetFields();
     return value;

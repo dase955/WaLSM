@@ -163,22 +163,23 @@ public:
 class FilterCacheManager {
 private:
     // TODO: mutex can be optimized or use a message queue or a thread pool to reduce time costed by mutex
-    static FilterCache filter_cache_;
-    static HeatBuckets heat_buckets_;
-    static ClfModel clf_model_;
-    static GreedyAlgo greedy_algo_;
-    static FilterCacheHeapManager heap_manager_;
-    static uint32_t get_cnt_; // record get cnt in current period, when exceeding PERIOD_COUNT, start next period
-    static uint32_t period_cnt_; // record period cnt, if period_cnt_ - last_train_period_ >= TRAIN_PERIODS, start to evaluate or retrain ClfModel
-    static uint32_t last_long_period_; // record last short period cnt of last long period
-    static uint32_t last_short_period_; // helper var for update job when one short period ends
-    static std::mutex update_mutex_; // guarantee counts records only updated once
-    static bool train_signal_; // if true, try to retrain model. we call one background thread to monitor this flag and retrain
-    static std::map<uint32_t, uint32_t> last_count_recorder_; // get cnt recorder of segments in last long period
-    static std::map<uint32_t, uint32_t> current_count_recorder_; // get cnt recorder of segments in current long period
-    static std::mutex count_mutex_; // guarentee last_count_recorder and current_count_recorder treated orderedly
-    static bool is_ready_; // check whether ready to use adaptive filter assignment
-    static std::map<uint32_t, FileMetaData*> segment_in_file; // map segment_id to SST file
+    std::set<uint32_t> cached_level_0_segment_ids_;
+    FilterCache filter_cache_;
+    HeatBuckets heat_buckets_;
+    ClfModel clf_model_;
+    GreedyAlgo greedy_algo_;
+    FilterCacheHeapManager heap_manager_;
+    uint32_t get_cnt_; // record get cnt in current period, when exceeding PERIOD_COUNT, start next period
+    uint32_t period_cnt_; // record period cnt, if period_cnt_ - last_train_period_ >= TRAIN_PERIODS, start to evaluate or retrain ClfModel
+    uint32_t last_long_period_; // record last short period cnt of last long period
+    uint32_t last_short_period_; // helper var for update job when one short period ends
+    std::mutex update_mutex_; // guarantee counts records only updated once
+    bool train_signal_; // if true, try to retrain model. we call one background thread to monitor this flag and retrain
+    std::map<uint32_t, uint32_t> last_count_recorder_; // get cnt recorder of segments in last long period
+    std::map<uint32_t, uint32_t> current_count_recorder_; // get cnt recorder of segments in current long period
+    std::mutex count_mutex_; // guarentee last_count_recorder and current_count_recorder treated orderedly
+    bool is_ready_; // check whether ready to use adaptive filter assignment
+    std::map<uint32_t, FileMetaData*> segment_in_file; // map segment_id to SST file
     std::atomic<ColumnFamilyData*> cfd_; // In WaLSM+, we only support one column family
 public:
     FilterCacheManager() { get_cnt_ = 0; last_long_period_ = 0; last_short_period_ = 0; train_signal_ = false; }
@@ -310,16 +311,16 @@ public:
     // when old segments are merged into some new segments, call this func in one background thread
     void insert_segments(std::vector<uint32_t>& merged_segment_ids, std::vector<uint32_t>& new_segment_ids,
                          std::map<uint32_t, std::unordered_map<uint32_t, double>>& inherit_infos_recorder,
-                         std::map<uint32_t, uint16_t>& level_recorder, const uint32_t& level_0_base_count,
+                         std::map<uint32_t, uint16_t>& new_level_recorder, const uint32_t& level_0_base_count,
                          std::map<uint32_t, std::vector<RangeRatePair>>& segment_ranges_recorder);
 
-// in func insert_segments above, we will also remove merged segments, this work well for normal compaction and flush
+    // in func insert_segments above, we will also remove merged segments, this work well for normal compaction and flush
     // but we found that WaLSM also do delete compaction (only delete segments)
     // which not fit to func insert_segments, so we need a alone func delete_segments
     // this func only delete merged segments
     // we only need argument merged_segment_ids (all merged segments' ids)
     // and level_recorder which only include merged segments' level
-    void delete_segments(std::vector<uint32_t>& merged_segment_ids, std::map<uint32_t, uint16_t>& level_recorder);
+    void delete_segments(std::vector<uint32_t>& merged_segment_ids);
 
     // move segments to another level, used for trivial move compaction
     void move_segments(std::vector<uint32_t>& moved_segment_ids,

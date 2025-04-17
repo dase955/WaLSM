@@ -14,6 +14,7 @@ ifeq ($(origin PYTHON), undefined)
 endif
 export PYTHON
 
+# EXTRA_CXXFLAGS += -I$(HOME)/local/include -gdwarf-4 -fsanitize=address
 EXTRA_CXXFLAGS += -I$(HOME)/local/include -gdwarf-4
 LDFLAGS  += -L$(HOME)/local/lib -lsocket++
 
@@ -116,6 +117,7 @@ ifneq ($(findstring rocksdbjava, $(MAKECMDGOALS)),)
 endif
 
 # DEBUG_LEVEL=1
+DEBUG_LEVEL=2
 $(info $$DEBUG_LEVEL is ${DEBUG_LEVEL})
 
 # Lite build flag.

@@ -151,6 +151,7 @@ void CompactionIterator::Next() {
     if (merge_out_iter_.Valid()) {
       key_ = merge_out_iter_.key();
       value_ = merge_out_iter_.value();
+      segment_id_ = merge_out_iter_.segment_id();
       Status s = ParseInternalKey(key_, &ikey_);
       // MergeUntil stops when it encounters a corrupt key and does not
       // include them in the result, so we expect the keys here to be valid.
@@ -268,6 +269,7 @@ void CompactionIterator::NextFromInput() {
          !IsShuttingDown()) {
     key_ = input_->key();
     value_ = input_->value();
+    segment_id_ = input_->segment_id();
     iter_stats_.num_input_records++;
 
     Status pikStatus = ParseInternalKey(key_, &ikey_);
@@ -625,6 +627,7 @@ void CompactionIterator::NextFromInput() {
         //       These will be correctly set below.
         key_ = merge_out_iter_.key();
         value_ = merge_out_iter_.value();
+        segment_id_ = merge_out_iter_.segment_id();
         pikStatus = ParseInternalKey(key_, &ikey_);
         // MergeUntil stops when it encounters a corrupt key and does not
         // include them in the result, so we expect the keys here to valid.

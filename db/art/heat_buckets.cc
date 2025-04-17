@@ -3,16 +3,6 @@
 #include <iostream>
 
 namespace ROCKSDB_NAMESPACE {
-std::vector<std::string> HeatBuckets::seperators_;
-std::vector<Bucket> HeatBuckets::buckets_;
-uint32_t HeatBuckets::current_cnt_; // current get count in this period
-std::vector<std::unique_ptr<std::mutex>> HeatBuckets::mutex_ptrs_;
-std::mutex HeatBuckets::cnt_mutex_;
-std::mutex HeatBuckets::sample_mutex_;
-bool HeatBuckets::is_ready_; // identify whether HeatBuckets ready for hit
-SamplesPool HeatBuckets::samples_; 
-bool HeatBuckets::updated_; // prevent from updating hotness more than once in a short time
-
 
 Bucket::Bucket() {
     hit_cnt_ = 0;
@@ -211,13 +201,14 @@ void SamplesPool::sample(const std::string& key) {
 }
 
 void SamplesPool::prepare() {
-    std::string key_min = "user"; // defined min key for YCSB
-    std::string key_max = pool_[pool_.size()-1] + pool_[pool_.size()-1];
     if (!is_ready()) {
         return;
     }
     sort(pool_.begin(), pool_.end());
     // add border guard
+    std::string key_min = "user"; // defined min key for YCSB
+    // std::string key_max = pool_[pool_.size()-1] + pool_[pool_.size()-1];
+    std::string key_max = "user" + std::string(512, '9');
     pool_.emplace(pool_.begin(), key_min);
     pool_.emplace_back(key_max);
 }
@@ -298,13 +289,19 @@ void HeatBuckets::init(std::vector<std::vector<std::string>>& segments) {
     uint32_t k = samples_.determine_k(segments);
     samples_.divide(k, seperators_);
 
-    // std::cout << "[DEBUG] show key ranges below: " << std::endl;
+    std::cout << "[DEBUG] show key ranges below: " << std::endl;
     for (size_t i=0; i<seperators_.size()-1; i++) {
-        assert(seperators_[i] < seperators_[i+1]);
+        std::cout << "[DEBUG] key range " << i+1;
+        std::cout << ": " << seperators_[i];
+        std::cout << "  --  " << seperators_[i+1];
+        std::cout << std::endl;
+    }
+    for (size_t i=0; i<seperators_.size()-1; i++) {
         // std::cout << "[DEBUG] key range " << i+1;
         // std::cout << ": " << seperators_[i];
         // std::cout << "  --  " << seperators_[i+1];
         // std::cout << std::endl;
+        assert(seperators_[i] < seperators_[i+1]);
     }
 
     // init other vars in HeatBuckets

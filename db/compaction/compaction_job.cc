@@ -50,6 +50,7 @@
 #include "port/port.h"
 #include "rocksdb/db.h"
 #include "rocksdb/env.h"
+#include "rocksdb/options.h"
 #include "rocksdb/sst_partitioner.h"
 #include "rocksdb/statistics.h"
 #include "rocksdb/status.h"
@@ -183,7 +184,7 @@ struct CompactionJob::SubcompactionState {
 
   // Adds the key and value to the builder
   // If paranoid is true, adds the key-value to the paranoid hash
-  Status AddToBuilder(const Slice& key, const Slice& value) {
+  Status AddToBuilder(const Slice& key, const Slice& value, uint32_t segment_id) {
     auto curr = current_output();
     assert(builder != nullptr);
     assert(curr != nullptr);
@@ -191,7 +192,7 @@ struct CompactionJob::SubcompactionState {
     if (!s.ok()) {
       return s;
     }
-    builder->Add(key, value);
+    builder->Add(key, value, segment_id);
     return Status::OK();
   }
 
@@ -632,9 +633,10 @@ Status CompactionJob::Run() {
   }
   if (status.ok()) {
     thread_pool.clear();
-    std::vector<const CompactionJob::SubcompactionState::Output*> files_output;
-    for (const auto& state : compact_->sub_compact_states) {
-      for (const auto& output : state.outputs) {
+    // WaLSM+: remove const qulifier to init file table reader
+    std::vector<CompactionJob::SubcompactionState::Output*> files_output;
+    for (auto& state : compact_->sub_compact_states) {
+      for (auto& output : state.outputs) {
         files_output.emplace_back(&output);
       }
     }
@@ -688,6 +690,12 @@ Status CompactionJob::Run() {
               !validator.CompareValidator(files_output[file_idx]->validator)) {
             s = Status::Corruption("Paranoid checksums do not match");
           }
+        }
+
+        // // init table_reader for later use
+        if (s.ok()) {
+          s = cfd->table_cache()->InitFileTableReader(
+              read_options, cfd->internal_comparator(), files_output[file_idx]->meta);
         }
 
         delete iter;
@@ -1003,6 +1011,7 @@ void CompactionJob::ProcessKeyValueCompaction(SubcompactionState* sub_compact) {
     // returns true.
     const Slice& key = c_iter->key();
     const Slice& value = c_iter->value();
+    const uint32_t segment_id = c_iter->segment_id();
 
     // If an end key (exclusive) is specified, check if the current key is
     // >= than it and exit if it is because the iterator is out of its range
@@ -1025,7 +1034,7 @@ void CompactionJob::ProcessKeyValueCompaction(SubcompactionState* sub_compact) {
       }
     }
     // TODO(WaLSM+): pass temp recorders ptr and update
-    status = sub_compact->AddToBuilder(key, value); 
+    status = sub_compact->AddToBuilder(key, value, segment_id); 
     if (!status.ok()) {
       break;
     }

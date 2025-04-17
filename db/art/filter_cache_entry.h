@@ -73,7 +73,7 @@ class FilterCacheEntry {
   // 根据目前已经启用的units数，启用或禁用filter units
   // 输入需要启用的units数，决定启用、禁用还是不处理
   // units_num : [MIN_UNITS_NUM, MAX_UNITS_NUM]
-  void enable_units(const uint32_t units_num);
+  void enable_units(uint32_t units_num);
 
   // 获取缓存的 filter Block
   std::vector<CachableEntry<ParsedFullFilterBlock>> get_filter_blocks();

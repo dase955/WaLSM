@@ -518,6 +518,12 @@ Status BuildTableFromArt(
         s = Status::Corruption("Paranoid checksums do not match");
       }
     }
+
+    // // init table_reader for later use
+    if (s.ok()) {
+      s = table_cache->InitFileTableReader(
+          read_options, internal_comparator, *meta);
+    }
   }
 
   if (!s.ok() || meta->fd.GetFileSize() == 0) {

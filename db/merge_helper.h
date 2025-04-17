@@ -120,6 +120,7 @@ class MergeHelper {
   }
   uint64_t TotalFilterTime() const { return total_filter_time_; }
   bool HasOperator() const { return user_merge_operator_ != nullptr; }
+  const std::deque<uint32_t>& segment_ids() const { return segment_ids_; }
 
   // If compaction filter returned REMOVE_AND_SKIP_UNTIL, this method will
   // return true and fill *until with the key to which we should skip.
@@ -155,6 +156,7 @@ class MergeHelper {
   std::deque<std::string> keys_;
   // Parallel with keys_; stores the operands
   mutable MergeContext merge_context_;
+  std::deque<uint32_t> segment_ids_;
 
   StopWatchNano filter_timer_;
   uint64_t total_filter_time_;
@@ -183,12 +185,14 @@ class MergeOutputIterator {
 
   Slice key() { return Slice(*it_keys_); }
   Slice value() { return Slice(*it_values_); }
+  uint32_t segment_id() { return *it_segment_ids_; }
   bool Valid() { return it_keys_ != merge_helper_->keys().rend(); }
 
  private:
   const MergeHelper* merge_helper_;
   std::deque<std::string>::const_reverse_iterator it_keys_;
   std::vector<Slice>::const_reverse_iterator it_values_;
+  std::deque<uint32_t>::const_reverse_iterator it_segment_ids_;
 };
 
 }  // namespace ROCKSDB_NAMESPACE

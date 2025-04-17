@@ -5,6 +5,7 @@
 
 #include "db/merge_helper.h"
 
+#include <cassert>
 #include <string>
 
 #include "db/dbformat.h"
@@ -122,6 +123,7 @@ Status MergeHelper::MergeUntil(InternalIterator* iter,
   assert(HasOperator());
   keys_.clear();
   merge_context_.Clear();
+  segment_ids_.clear();
   has_compaction_filter_skip_until_ = false;
   assert(user_merge_operator_);
   bool first_key = true;
@@ -134,6 +136,7 @@ Status MergeHelper::MergeUntil(InternalIterator* iter,
   // original_key_is_iter == (iter->key().ToString() == original_key)
   bool original_key_is_iter = true;
   std::string original_key = iter->key().ToString();
+  uint32_t original_segment_id = iter->segment_id();
   // Important:
   // orig_ikey is backed by original_key if keys_.empty()
   // orig_ikey is backed by keys_.back() if !keys_.empty()
@@ -220,12 +223,15 @@ Status MergeHelper::MergeUntil(InternalIterator* iter,
       if (s.ok()) {
         // The original key encountered
         original_key = std::move(keys_.back());
+        original_segment_id = segment_ids_.back();
         orig_ikey.type = kTypeValue;
         UpdateInternalKey(&original_key, orig_ikey.sequence, orig_ikey.type);
         keys_.clear();
         merge_context_.Clear();
+        segment_ids_.clear();
         keys_.emplace_front(std::move(original_key));
         merge_context_.PushOperand(merge_result);
+        segment_ids_.push_front(original_segment_id);
       }
 
       // move iter to the next entry
@@ -262,8 +268,10 @@ Status MergeHelper::MergeUntil(InternalIterator* iter,
         if (original_key_is_iter) {
           // this is just an optimization that saves us one memcpy
           keys_.push_front(std::move(original_key));
+          segment_ids_.push_front(original_segment_id);
         } else {
           keys_.push_front(iter->key().ToString());
+          segment_ids_.push_front(iter->segment_id());
         }
         if (keys_.size() == 1) {
           // we need to re-anchor the orig_ikey because it was anchored by
@@ -285,6 +293,7 @@ Status MergeHelper::MergeUntil(InternalIterator* iter,
         // (not just this operand), along with some keys following it.
         keys_.clear();
         merge_context_.Clear();
+        segment_ids_.clear();
         has_compaction_filter_skip_until_ = true;
         return s;
       }
@@ -329,11 +338,14 @@ Status MergeHelper::MergeUntil(InternalIterator* iter,
       // We are certain that keys_ is not empty here (see assertions couple of
       // lines before).
       original_key = std::move(keys_.back());
+      original_segment_id = segment_ids_.back();
       orig_ikey.type = kTypeValue;
       UpdateInternalKey(&original_key, orig_ikey.sequence, orig_ikey.type);
       keys_.clear();
       merge_context_.Clear();
+      segment_ids_.clear();
       keys_.emplace_front(std::move(original_key));
+      segment_ids_.push_front(original_segment_id);
       merge_context_.PushOperand(merge_result);
     }
   } else {
@@ -362,6 +374,7 @@ Status MergeHelper::MergeUntil(InternalIterator* iter,
         merge_context_.Clear();
         merge_context_.PushOperand(merge_result);
         keys_.erase(keys_.begin(), keys_.end() - 1);
+        segment_ids_.erase(segment_ids_.begin(), segment_ids_.end() - 1);
       }
     }
   }
@@ -373,19 +386,24 @@ MergeOutputIterator::MergeOutputIterator(const MergeHelper* merge_helper)
     : merge_helper_(merge_helper) {
   it_keys_ = merge_helper_->keys().rend();
   it_values_ = merge_helper_->values().rend();
+  it_segment_ids_ = merge_helper_->segment_ids().rend();
 }
 
 void MergeOutputIterator::SeekToFirst() {
   const auto& keys = merge_helper_->keys();
   const auto& values = merge_helper_->values();
+  const auto& segment_ids = merge_helper_->segment_ids();
   assert(keys.size() == values.size());
+  assert(keys.size() == segment_ids.size());
   it_keys_ = keys.rbegin();
   it_values_ = values.rbegin();
+  it_segment_ids_ = segment_ids.rbegin();
 }
 
 void MergeOutputIterator::Next() {
   ++it_keys_;
   ++it_values_;
+  ++it_segment_ids_;
 }
 
 CompactionFilter::Decision MergeHelper::FilterMerge(const Slice& user_key,

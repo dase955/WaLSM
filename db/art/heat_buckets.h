@@ -28,50 +28,6 @@ public:
     void hit(); 
 };
 
-
-/*
- first sample put keys using reservoir sampling. 
- If we collect enough keys, determine the common key num (k) for every key group
- start with idx 0, add k continuously, get 0, k, 2k, ...
- set KEY_MIN, samples[0], samples[k], samples[2k], ..., KEY_MAX as seperators
- guarenteed that KEY_MIN < all keys and KEY_MAX > all keys
- then we define key ranges (KEY_MIN, samples[0]), [samples[1], samples[2]), [samples[2], samples[3]), ..., [..., KEY_MAX)
- one heat bucket corresponding to one key range
- compute and update hotness of all heat buckets
-*/
-class HeatBuckets {
-private:
-    // TODO: mutex can be optimized
-    static std::vector<std::string> seperators_;
-    static std::vector<Bucket> buckets_;
-    static uint32_t current_cnt_; // current get count in this period
-    static std::vector<std::unique_ptr<std::mutex>> mutex_ptrs_;
-    static std::mutex cnt_mutex_;
-    static std::mutex sample_mutex_;
-    static bool is_ready_; // identify whether HeatBuckets ready for hit
-    static SamplesPool samples_; 
-    static bool updated_;
-    
-public:
-    HeatBuckets();
-    ~HeatBuckets();
-
-    uint32_t locate(const std::string& key); // helper func: locate which bucket hitted by this key
-
-    const bool& is_ready() { return is_ready_; }
-    std::vector<std::string>& seperators() { return seperators_; }
-    std::vector<Bucket>& buckets() { return buckets_; }
-    void sample(const std::string& key, std::vector<std::vector<std::string>>& segments); // before init buckets, we need to sample keys;
-    // input segment-related key range (segments), will use them when SamplesPool ready. 
-
-    void init(std::vector<std::vector<std::string>>& segments); // if sample enough keys, ready to init heatbuckets
-
-    void update(); // update hotness value of all buckets
-    void hit(const std::string& key, const bool& signal); // one key only hit one bucket (also mean only hit one key range)
-    // if signal is true, update hotness
-    void debug(); // output debug message in standard output
-};
-
 class SamplesPool {
 private:
     std::vector<std::string> pool_; // using set to guarantee only store deduplicated samples
@@ -100,6 +56,50 @@ public:
     // determine k based on low-level segments' key range
     uint32_t determine_k(std::vector<std::vector<std::string>>& segments);
     uint32_t locate(const std::string& key); // helper func when determine k
+};
+
+
+/*
+ first sample put keys using reservoir sampling. 
+ If we collect enough keys, determine the common key num (k) for every key group
+ start with idx 0, add k continuously, get 0, k, 2k, ...
+ set KEY_MIN, samples[0], samples[k], samples[2k], ..., KEY_MAX as seperators
+ guarenteed that KEY_MIN < all keys and KEY_MAX > all keys
+ then we define key ranges (KEY_MIN, samples[0]), [samples[1], samples[2]), [samples[2], samples[3]), ..., [..., KEY_MAX)
+ one heat bucket corresponding to one key range
+ compute and update hotness of all heat buckets
+*/
+class HeatBuckets {
+private:
+    // TODO: mutex can be optimized
+    std::vector<std::string> seperators_;
+    std::vector<Bucket> buckets_;
+    uint32_t current_cnt_; // current get count in this period
+    std::vector<std::unique_ptr<std::mutex>> mutex_ptrs_;
+    std::mutex cnt_mutex_;
+    std::mutex sample_mutex_;
+    bool is_ready_; // identify whether HeatBuckets ready for hit
+    SamplesPool samples_; 
+    bool updated_;
+    
+public:
+    HeatBuckets();
+    ~HeatBuckets();
+
+    uint32_t locate(const std::string& key); // helper func: locate which bucket hitted by this key
+
+    const bool& is_ready() { return is_ready_; }
+    std::vector<std::string>& seperators() { return seperators_; }
+    std::vector<Bucket>& buckets() { return buckets_; }
+    void sample(const std::string& key, std::vector<std::vector<std::string>>& segments); // before init buckets, we need to sample keys;
+    // input segment-related key range (segments), will use them when SamplesPool ready. 
+
+    void init(std::vector<std::vector<std::string>>& segments); // if sample enough keys, ready to init heatbuckets
+
+    void update(); // update hotness value of all buckets
+    void hit(const std::string& key, const bool& signal); // one key only hit one bucket (also mean only hit one key range)
+    // if signal is true, update hotness
+    void debug(); // output debug message in standard output
 };
 
 }

@@ -2,26 +2,11 @@
 #include <algorithm>
 #include <cassert>
 #include <cstddef>
+#include <cstdint>
 #include "table/block_based/parsed_full_filter_block.h"
 #include "filter_cache_entry.h"
 
 namespace ROCKSDB_NAMESPACE {
-
-FilterCache FilterCacheManager::filter_cache_;
-HeatBuckets FilterCacheManager::heat_buckets_;
-ClfModel FilterCacheManager::clf_model_;
-GreedyAlgo FilterCacheManager::greedy_algo_;
-FilterCacheHeapManager FilterCacheManager::heap_manager_;
-uint32_t FilterCacheManager::get_cnt_;
-uint32_t FilterCacheManager::period_cnt_;
-uint32_t FilterCacheManager::last_long_period_;
-uint32_t FilterCacheManager::last_short_period_;
-std::mutex FilterCacheManager::update_mutex_;
-bool FilterCacheManager::train_signal_;
-std::map<uint32_t, uint32_t> FilterCacheManager::last_count_recorder_; 
-std::map<uint32_t, uint32_t> FilterCacheManager::current_count_recorder_; 
-std::mutex FilterCacheManager::count_mutex_;
-bool FilterCacheManager::is_ready_;
 
 std::vector<CachableEntry<ParsedFullFilterBlock>> FilterCache::get_filter_blocks(const uint32_t segment_id) {
     auto it = filter_cache_.find(segment_id);
@@ -247,6 +232,7 @@ void FilterCacheManager::inherit_count_recorder(std::vector<uint32_t>& merged_se
                                                 std::map<uint32_t, std::unordered_map<uint32_t, double>>& inherit_infos_recorder) {
     count_mutex_.lock();
 
+    // copy last count and current count of merged segments
     std::map<uint32_t, uint32_t> merged_last_count_recorder, merged_current_count_recorder; // cache merged segment count temporarily
     for (uint32_t& merged_segment_id : merged_segment_ids) {
         merged_last_count_recorder.insert(std::make_pair(merged_segment_id, last_count_recorder_[merged_segment_id]));
@@ -255,6 +241,7 @@ void FilterCacheManager::inherit_count_recorder(std::vector<uint32_t>& merged_se
         current_count_recorder_.erase(merged_segment_id);
     }
 
+    // init last count and current count of new segments based on inherit method (that not on Level 0)
     std::map<uint32_t, uint32_t> new_last_count_recorder, new_current_count_recorder;
     for (auto infos_it = inherit_infos_recorder.begin(); infos_it != inherit_infos_recorder.end(); infos_it ++) {
         double last_count = 0, current_count = 0;
@@ -267,24 +254,31 @@ void FilterCacheManager::inherit_count_recorder(std::vector<uint32_t>& merged_se
         new_current_count_recorder.insert(std::make_pair(infos_it->first, uint32_t(current_count)));
     }
 
+    // insert last count and current count of new segments
     for (uint32_t& new_segment_id : new_segment_ids) {
+        // insert last count
         auto last_it = last_count_recorder_.find(new_segment_id);
         uint32_t new_last_count = level_0_base_count; // level 0 segments init
+        // if true, this means new segment not on level 0, also means this segments are inherited from some segments
         if (new_last_count_recorder.count(new_segment_id) > 0) {
             new_last_count = new_last_count_recorder[new_segment_id];
         }
         if (last_it != last_count_recorder_.end()) {
+            // usually, not reach this branch
             last_it->second = last_it->second + new_last_count;
         } else {
             last_count_recorder_.insert(std::make_pair(new_segment_id, new_last_count));
         }
 
+        // insert current count
         auto current_it = current_count_recorder_.find(new_segment_id);
         uint32_t new_current_count = level_0_base_count; // level 0 segments init
+        // if true, this means new segment not on level 0, also means this segments are inherited from some segments
         if (new_current_count_recorder.count(new_segment_id) > 0) {
             new_current_count = new_current_count_recorder[new_segment_id];
         }
         if (current_it != current_count_recorder_.end()) {
+            // usually, not reach this branch
             current_it->second = current_it->second + new_current_count;
         } else {
             current_count_recorder_.insert(std::make_pair(new_segment_id, new_current_count));
@@ -533,7 +527,7 @@ bool FilterCacheManager::adjust_cache_and_heap() {
 
 void FilterCacheManager::insert_segments(std::vector<uint32_t>& merged_segment_ids, std::vector<uint32_t>& new_segment_ids,
                                          std::map<uint32_t, std::unordered_map<uint32_t, double>>& inherit_infos_recorder,
-                                         std::map<uint32_t, uint16_t>& level_recorder, const uint32_t& level_0_base_count,
+                                         std::map<uint32_t, uint16_t>& new_level_recorder, const uint32_t& level_0_base_count,
                                          std::map<uint32_t, std::vector<RangeRatePair>>& segment_ranges_recorder) {
     std::unordered_map<uint32_t, uint16_t> segment_units_num_recorder;
     std::map<uint32_t, uint32_t> approximate_counts_recorder;
@@ -546,18 +540,14 @@ void FilterCacheManager::insert_segments(std::vector<uint32_t>& merged_segment_i
 
     // pick up merged or new level 0 segments
     // assume level_recorder keys set equals to merged_segment_ids + new_segment_ids
-    assert(new_segment_ids.size() == 0 || merged_segment_ids.size() + new_segment_ids.size() == level_recorder.size());
-    auto level_it = level_recorder.begin();
-    size_t merged_idx = 0, new_idx = 0;
-    while (level_it != level_recorder.end()) {
-        if (merged_idx < merged_segment_ids.size() && level_it->first == merged_segment_ids[merged_idx]) {
-            if (level_it->second == 0) {
-                old_level_0_segment_ids.insert(level_it->first);
-            }
-            merged_idx ++;
-        } else if (new_idx < new_segment_ids.size() && level_it->first == new_segment_ids[new_idx]) {
+    assert(new_segment_ids.size() == 0 || new_segment_ids.size() == new_level_recorder.size());
+    auto level_it = new_level_recorder.begin();
+    size_t new_idx = 0;
+    while (level_it != new_level_recorder.end()) {
+        if (new_idx < new_segment_ids.size() && level_it->first == new_segment_ids[new_idx]) {
             if (level_it->second == 0) {
                 new_level_0_segment_ids.insert(level_it->first);
+                cached_level_0_segment_ids_.insert(level_it->first); // update current cached level 0 segments
                 segment_units_num_recorder.insert(std::make_pair(level_it->first, MAX_UNITS_NUM));
             } else {
                 // not a level 0 segment, set default units num
@@ -566,6 +556,14 @@ void FilterCacheManager::insert_segments(std::vector<uint32_t>& merged_segment_i
             new_idx ++;
         } 
         level_it ++;
+    }
+
+    // collect old segments id on level 0
+    for (uint32_t& merged_segment_id : merged_segment_ids) {
+        if (cached_level_0_segment_ids_.count(merged_segment_id)) {
+            old_level_0_segment_ids.insert(merged_segment_id);
+            cached_level_0_segment_ids_.erase(merged_segment_id);
+        }
     }
 
     if (!is_ready_) {
@@ -628,7 +626,7 @@ void FilterCacheManager::insert_segments(std::vector<uint32_t>& merged_segment_i
                 pred_segment_ids.emplace_back(new_segment_id);
 
                 std::vector<uint32_t> pred_data;
-                pred_data.emplace_back(level_recorder[new_segment_id]);
+                pred_data.emplace_back(new_level_recorder[new_segment_id]);
                 for (RangeRatePair& pair : segment_ranges_recorder[new_segment_id]) {
                     assert(pair.range_id >= 0 && pair.range_id < buckets.size());
                     pred_data.emplace_back(uint32_t(RATE_SIGNIFICANT_DIGITS_FACTOR * pair.rate_in_segment));
@@ -670,23 +668,15 @@ void FilterCacheManager::insert_segments(std::vector<uint32_t>& merged_segment_i
     }
 }
 
-void FilterCacheManager::delete_segments(std::vector<uint32_t>& merged_segment_ids, std::map<uint32_t, uint16_t>& level_recorder) {
+void FilterCacheManager::delete_segments(std::vector<uint32_t>& merged_segment_ids) {
     std::set<uint32_t> old_level_0_segment_ids;
-    std::sort(merged_segment_ids.begin(), merged_segment_ids.end());
 
-    // level_recorder is a copy of global level_recorder
-    assert(merged_segment_ids.size() == level_recorder.size());
-    auto level_it = level_recorder.begin();
-    size_t merged_idx = 0;
-    while (level_it != level_recorder.end()) {
-        assert(merged_idx < merged_segment_ids.size() && level_it->first == merged_segment_ids[merged_idx]);
-        if (merged_idx < merged_segment_ids.size() && level_it->first == merged_segment_ids[merged_idx]) {
-            if (level_it->second == 0) {
-                old_level_0_segment_ids.insert(level_it->first);
-            }
-            merged_idx ++;
+    // collect old segments id on level 0
+    for (uint32_t& merged_segment_id : merged_segment_ids) {
+        if (cached_level_0_segment_ids_.count(merged_segment_id)) {
+            old_level_0_segment_ids.insert(merged_segment_id);
+            cached_level_0_segment_ids_.erase(merged_segment_id);
         }
-        level_it ++;
     }
 
     if (!is_ready_) {
@@ -724,18 +714,23 @@ void FilterCacheManager::move_segments(std::vector<uint32_t>& moved_segment_ids,
     assert(moved_segment_ids.size() == move_level_recorder.size());
     assert(moved_segment_ids.size() == move_segment_ranges_recorder.size());
     auto level_it = old_level_recorder.begin();
-    size_t moved_idx = 0, new_idx = 0;
+    size_t moved_idx = 0;
     while (level_it != old_level_recorder.end()) {
         assert(moved_idx < moved_segment_ids.size() && level_it->first == moved_segment_ids[moved_idx]);
         if (moved_idx < moved_segment_ids.size() && level_it->first == moved_segment_ids[moved_idx]) {
-            if (level_it->second == 0) {
-                old_level_0_segment_ids.insert(level_it->first);
-            }
             segment_units_num_recorder.insert(std::make_pair(level_it->first, DEFAULT_UNITS_NUM));
             // actually, we cannot move segments to level 0 in trivial move compaction (only flushing do this).
             moved_idx ++;
         }
         level_it ++;
+    }
+
+    // collect old segments id on level 0
+    for (uint32_t& moved_segment_id : moved_segment_ids) {
+        if (cached_level_0_segment_ids_.count(moved_segment_id)) {
+            old_level_0_segment_ids.insert(moved_segment_id);
+            cached_level_0_segment_ids_.erase(moved_segment_id);
+        }
     }
 
     if (!is_ready_) {

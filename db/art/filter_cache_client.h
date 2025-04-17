@@ -44,11 +44,11 @@ private:
     // background thread part of batch_insert_segments
     void do_batch_insert_segments(std::vector<uint32_t>& merged_segment_ids, std::vector<uint32_t>& new_segment_ids,
                                          std::map<uint32_t, std::unordered_map<uint32_t, double>>& inherit_infos_recorder,
-                                         std::map<uint32_t, uint16_t>& level_recorder, uint32_t level_0_base_count,
+                                         std::map<uint32_t, uint16_t>& new_level_recorder, uint32_t level_0_base_count,
                                          std::map<uint32_t, std::vector<RangeRatePair>>& segment_ranges_recorder);
 
     // background thread part of batch_delete_segments
-    void do_batch_delete_segments(std::vector<uint32_t>& merged_segment_ids, std::map<uint32_t, uint16_t>& level_recorder);
+    void do_batch_delete_segments(std::vector<uint32_t>& merged_segment_ids);
 
     // background thread part of batch_move_segments
     void do_batch_move_segments(std::vector<uint32_t>& moved_segment_ids,
@@ -98,14 +98,14 @@ public:
     // batch insert segments into filter cache manager, will also delete merged segments
     void batch_insert_segments(std::vector<uint32_t> merged_segment_ids, std::vector<uint32_t> new_segment_ids,
                                std::map<uint32_t, std::unordered_map<uint32_t, double>> inherit_infos_recorder,
-                               std::map<uint32_t, uint16_t> level_recorder, uint32_t level_0_base_count,
+                               std::map<uint32_t, uint16_t> new_level_recorder, uint32_t level_0_base_count,
                                std::map<uint32_t, std::vector<RangeRatePair>> segment_ranges_recorder);
     
     // In WaLSM+, we only support one column family, we just save cfd ptr here
     void update_cfd_ptr_if_needed(ColumnFamilyData* cfd); 
 
     // batch delete segments from filter cache manager
-    void batch_delete_segments(std::vector<uint32_t> merged_segment_ids, std::map<uint32_t, uint16_t> level_recorder);
+    void batch_delete_segments(std::vector<uint32_t> merged_segment_ids);
 
     // batch of moving segments to one level
     void batch_move_segments(std::vector<uint32_t> moved_segment_ids,

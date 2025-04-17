@@ -1629,7 +1629,7 @@ void BlockBasedTableBuilder::EnterUnbuffered() {
             lock, [r] { return !r->pc_rep->first_block; });
       }
     } else {
-      assert(key.size() == segment_ids.size());
+      assert(keys.size() == segment_ids.size());
       for (size_t j = 0; j < keys.size(); ++j) {
         const auto& key = keys[j];
         const auto segment_id = segment_ids[j];

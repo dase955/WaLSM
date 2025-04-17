@@ -30,6 +30,7 @@ FilterCacheEntry::FilterCacheEntry(const uint32_t segment_id,
   // fill block_handles from the input vector, or fill with null handles
   assert(block_handles.size() <= MAX_UNITS_NUM);
   block_handles_.fill(BlockHandle::NullBlockHandle());
+  cache_handles_.fill(nullptr);
   for (size_t i = 0; i < block_handles.size(); i++) {
     block_handles_[i] = block_handles[i];
   }
@@ -40,8 +41,11 @@ FilterCacheEntry::~FilterCacheEntry() {}
 
 size_t FilterCacheEntry::approximate_size() {
   uint32_t sum = 0;
-  for (const auto& filter_block : units_) {
-    sum += filter_block.get()->ApproximateMemoryUsage();
+  for (size_t i = 0; i < loaded_units_num_; i++) {
+    if (cache_handles_[i] == nullptr) {
+      continue;
+    }
+    sum += cache_handles_[i]->value_->ApproximateMemoryUsage();
   }
   sum *= 8;  // convert to bits
   return sum;
@@ -83,7 +87,7 @@ void FilterCacheEntry::enable_units(uint32_t target_unit_num) {
     for (uint32_t i = loaded_units_num_; i < target_unit_num; i++) {
       // do nothing for null block handle
       if (block_handles_[i] == BlockHandle::NullBlockHandle()) {
-        break;
+        continue;
       }
 
       CachableEntry<ParsedFullFilterBlock> block_entry;
@@ -101,7 +105,9 @@ void FilterCacheEntry::enable_units(uint32_t target_unit_num) {
       units_[i] =
           std::shared_ptr<ParsedFullFilterBlock>(block_entry.ReleaseValue());
       cache_handles_[i] =
-          std::make_shared<FilterCacheDataHandle>(units_[i], filter_cache_);
+          // std::make_shared<FilterCacheDataHandle>(units_[i], filter_cache_);
+          std::shared_ptr<FilterCacheDataHandle>(
+              new FilterCacheDataHandle(units_[i], filter_cache_));
     }
     loaded_units_num_ = target_unit_num;
   }
@@ -110,5 +116,5 @@ void FilterCacheEntry::enable_units(uint32_t target_unit_num) {
 
 FilterCacheEntry::FilterCacheDataHandle::FilterCacheDataHandle(
     DataPtr value, FilterCache* cache)
-    : value_(std::move(value)), cache_(cache) {}
+    : value_(value), cache_(cache) {}
 }  // namespace ROCKSDB_NAMESPACE

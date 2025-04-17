@@ -219,18 +219,18 @@ public:
 
 class FilterCacheHeapManager {
 private: 
-    static FilterCacheHeap benefit_heap_;
-    static FilterCacheHeap cost_heap_;
+    FilterCacheHeap benefit_heap_;
+    FilterCacheHeap cost_heap_;
     // set heap node visit cnt = c_1, real estimated visit cnt = c_2
     // we only update c_1 when | c_1 - c_2 | >= VISIT_CNT_UPDATE_BOUND
     // update c_1 means we need to update this recorder and heap
     // heap_visit_cnt_recorder: map<segment id : visit cnt in heap>
     // when filter cache call delete, this recorder will automately delete these merged segment ids
     // when filter cache call upsert, this recorder will automately upsert these segment ids
-    static std::map<uint32_t, uint32_t> heap_visit_cnt_recorder_;
-    static std::map<uint32_t, uint16_t> units_num_limit_recorder_;
+    std::map<uint32_t, uint32_t> heap_visit_cnt_recorder_;
+    std::map<uint32_t, uint16_t> units_num_limit_recorder_;
     // TODO: mutex can be optimized
-    static std::mutex manager_mutex_; 
+    std::mutex manager_mutex_; 
 
 public:
     FilterCacheHeapManager() {

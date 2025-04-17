@@ -9,13 +9,6 @@
 #include <chrono>
 
 namespace ROCKSDB_NAMESPACE {
-
-uint16_t ClfModel::feature_num_; 
-std::string ClfModel::dataset_name_;
-std::string ClfModel::dataset_path_;
-std::string ClfModel::host_, ClfModel::port_;
-size_t ClfModel::buffer_size_;
-
 void ClfModel::write_debug_dataset() {
     assert(feature_num_ > 0);
     // ready for writer

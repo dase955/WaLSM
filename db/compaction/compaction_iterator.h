@@ -12,6 +12,7 @@
 
 #include "db/compaction/compaction.h"
 #include "db/compaction/compaction_iteration_stats.h"
+#include "db/dbformat.h"
 #include "db/merge_helper.h"
 #include "db/pinned_iterators_manager.h"
 #include "db/range_del_aggregator.h"
@@ -116,6 +117,7 @@ class CompactionIterator {
   bool Valid() const { return valid_; }
   const Slice& user_key() const { return current_user_key_; }
   const CompactionIterationStats& iter_stats() const { return iter_stats_; }
+  uint32_t segment_id() { return segment_id_; }
 
  private:
   // Processes the input stream to find the next output
@@ -206,6 +208,7 @@ class CompactionIterator {
   Slice current_user_key_;
   SequenceNumber current_user_key_sequence_;
   SequenceNumber current_user_key_snapshot_;
+  uint32_t segment_id_ = INVALID_SEGMENT_ID;
 
   // True if the iterator has already returned a record for the current key.
   bool has_outputted_key_ = false;

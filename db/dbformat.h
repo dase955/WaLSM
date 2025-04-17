@@ -192,7 +192,7 @@ Slice generate_modified_user_key(std::unique_ptr<const char[]>& buf,
 // Returns the internal bytes portion of an internal key. (WaLSM+)
 inline Slice ExtractInternalBytes(const Slice& internal_key) {
   assert(internal_key.size() >= kNumInternalBytes);
-  return Slice(internal_key.data() + internal_key.size(), kNumInternalBytes);
+  return Slice(internal_key.data() + internal_key.size() - kNumInternalBytes, kNumInternalBytes);
 }
 #endif
 

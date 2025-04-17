@@ -49,11 +49,11 @@ inline bool RangeRatePairGreatorComparor(const RangeRatePair& pair_1, const Rang
 
 class ClfModel {
 private:
-    static uint16_t feature_num_; // model input features num
-    static std::string dataset_name_; // dataset csv file name
-    static std::string dataset_path_; // path to save dataset csv file
-    static std::string host_, port_; // lightgbm server connection
-    static size_t buffer_size_; // socket receive buffer max size
+    uint16_t feature_num_; // model input features num
+    std::string dataset_name_; // dataset csv file name
+    std::string dataset_path_; // path to save dataset csv file
+    std::string host_, port_; // lightgbm server connection
+    size_t buffer_size_; // socket receive buffer max size
 public:
     // init member vars
     ClfModel() {

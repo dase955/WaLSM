@@ -16,11 +16,13 @@
 #include "db/error_handler.h"
 #include "db/event_helpers.h"
 #include "db/nvm_flush_job.h"
+#include "db/table_cache.h"
 #include "file/sst_file_manager_impl.h"
 #include "monitoring/iostats_context_imp.h"
 #include "monitoring/perf_context_imp.h"
 #include "monitoring/thread_status_updater.h"
 #include "monitoring/thread_status_util.h"
+#include "rocksdb/options.h"
 #include "table/block_based/filter_block.h"
 #include "test_util/sync_point.h"
 #include "util/cast_util.h"
@@ -2658,6 +2660,7 @@ void DBImpl::SyncCallFlush(std::vector<SingleCompactionJob*>& jobs) {
     agg_segment_builder_result.output_level = 0; // flushed
 
     // insert all filter block handles to filtercache
+    // TableCache* table_cache = (TableCache*) table_cache_.get();
     for (auto& db_job : db_jobs) {
       auto& meta = db_job.nvm_flush_job->meta_;
       assert(meta.fd.table_reader != nullptr);
@@ -2708,9 +2711,10 @@ void DBImpl::SyncCallFlush(std::vector<SingleCompactionJob*>& jobs) {
     // transfer agg_segment_builder_result to temp recorders
 
     // update merged_segment_ids and new_segment_ids
-    for (const auto& id : agg_segment_builder_result.merged_segment_ids) {
-      merged_segment_ids->insert(id);
-    }
+    // agg_merrged_segment_ids should only have one element - INVALID_SEGMENT_ID
+    assert(agg_segment_builder_result.merged_segment_ids.size() <= 1);
+    assert(merged_segment_ids->empty());
+
     for (const auto& id : agg_segment_builder_result.new_segment_ids) {
       new_segment_ids->insert(id);
     }
@@ -2724,17 +2728,15 @@ void DBImpl::SyncCallFlush(std::vector<SingleCompactionJob*>& jobs) {
     for (const auto& per_segment_result : agg_segment_builder_result.per_segment_results) {
       const auto segment_id = per_segment_result.segment_id;
       (*new_segment_ranges_recorder)[segment_id] = per_segment_result.range_rate_pairs;
-      (*inherit_infos_recorder)[segment_id] = per_segment_result.inherit_recorder;
+      // no inherit_info when flushing
     }
 
     // do new SSTs already exist in latest version?
     // TODO(WaLSM+): if all ok, merge temp recorders into global DBImpl recorders. 
     //               we need a mutex to guarantee these recorders modified by only one background thread at one time
-    global_filter_cache_recorders_mutex.lock();
     // std::map<uint32_t, uint16_t> merged_level_recorder; // actually when flushing, there is no merged segment
 
     // remove merged segments
-    assert(merged_segment_ids->empty());
     // lock and update global recorders
     {
       std::lock_guard<std::mutex> lock_guard(global_filter_cache_recorders_mutex);
@@ -3489,7 +3491,6 @@ Status DBImpl::BackgroundCompaction(bool* made_progress,
   // do new SSTs already exist in latest version?
   // TODO(WaLSM+): if all ok, merge temp recorders into global DBImpl recorders. 
   //               we need a mutex to guarantee these recorders modified by only one background thread at one time
-  global_filter_cache_recorders_mutex.lock();
   assert(compaction_flag >= 0 && compaction_flag <= 3);
   if (compaction_flag == 1) {
     // lock and update global recorders
@@ -3554,7 +3555,7 @@ Status DBImpl::BackgroundCompaction(bool* made_progress,
     // we need a new method batch_delete_segments to only delete merge segments
     std::vector<uint32_t> merged_segment_ids_vec;
     merged_segment_ids_vec.assign(merged_segment_ids->begin(), merged_segment_ids->end());
-    global_filter_cache.batch_delete_segments(merged_segment_ids_vec, merged_level_recorder);
+    global_filter_cache.batch_delete_segments(merged_segment_ids_vec);
       
     // temp recorders below:
     // std::set<uint32_t>* merged_segment_ids = new std::set<uint32_t>; // the merged segments' id, we need to delete them from these 3 global recorders
@@ -3594,7 +3595,7 @@ Status DBImpl::BackgroundCompaction(bool* made_progress,
       }
     }
 
-    assert(unit_size_recorder_->empty());
+    assert(new_unit_size_recorder->empty());
     /*
     while (units_it != unit_size_recorder_->end()) {
       if (merged_segment_ids->count(units_it->first) > 0) {
@@ -3723,11 +3724,11 @@ Status DBImpl::BackgroundCompaction(bool* made_progress,
     // batch_insert_segments argument need both merged and new segments' level
     auto merged_it = merged_level_recorder.begin();
     while (merged_it != merged_level_recorder.end()) {
-      assert(new_level_recorder->find(merged_it->first) == new_level_recorder.end());
+      assert(new_level_recorder->find(merged_it->first) == new_level_recorder->end());
       new_level_recorder->insert(std::make_pair(merged_it->first, merged_it->second));
       merged_it ++;
     }
-    assert(new_level_recorder->size() == new_segment_ids->size() + merged_segment_ids->size());
+    assert(new_level_recorder->size() == new_segment_ids->size());
 
     // call filter cache client DBImpl::filter_cache_ update work 
     assert(inherit_infos_recorder->size() == new_segment_ids->size());
@@ -3752,7 +3753,6 @@ Status DBImpl::BackgroundCompaction(bool* made_progress,
   } else {
     assert(compaction_flag == 0);
   }
-  global_filter_cache_recorders_mutex.unlock();
 #endif
   return status;
 }

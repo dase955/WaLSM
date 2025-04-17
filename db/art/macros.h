@@ -142,10 +142,12 @@ namespace ROCKSDB_NAMESPACE {
 // hotness update formula
 #define BUCKETS_ALPHA 0.2  
 // samples pool max size, using reservoir sampling
-#define SAMPLES_LIMIT 10000 
+#define SAMPLES_LIMIT 5000 
 // if recv samples exceed SAMPLES_MAXCNT, end reservoir sampling and init Heat Buckets
-#define SAMPLES_MAXCNT 5000000 
-// short period get count, if get count equal to or exceed PERIOD_COUNT, 
+#define SAMPLES_MAXCNT 2500000
+// short period get count, if get count equal to or exck;kfa;skl;fjalfdj;lfdsajlk;fjlfsdjlfdsjlf;dsajfdls;jfds;lfasd
+// 
+// eed PERIOD_COUNT, 
 // end this short period and start next short period
 #define PERIOD_COUNT 50000 
 // number of heat buckets (number of key ranges, see hotness estimating in the paper)

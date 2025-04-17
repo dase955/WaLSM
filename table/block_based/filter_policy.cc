@@ -16,6 +16,7 @@
 
 #include "rocksdb/filter_policy.h"
 
+#include "db/art/macros.h"
 #include "rocksdb/slice.h"
 #include "table/block_based/block_based_filter_block.h"
 #include "table/block_based/full_filter_block.h"
@@ -571,7 +572,7 @@ class MultiLegacyBloomBitsBuilder : public FilterBitsBuilder {
   virtual Slice Finish(std::unique_ptr<const char[]>* buf) override;
   virtual Slice FinishWithId(std::unique_ptr<const char[]>* buf,
                        const int hash_id) override;
-
+  virtual int CalculateNumEntry(const uint32_t bytes) override;
  private:
   std::vector<LegacyBloomBitsBuilder*> bits_builders_;
 
@@ -615,6 +616,10 @@ Slice MultiLegacyBloomBitsBuilder::Finish(std::unique_ptr<const char[]>* buf) {
 Slice MultiLegacyBloomBitsBuilder::FinishWithId(std::unique_ptr<const char[]>* buf,
                                           int hash_id) {
   return bits_builders_[hash_id]->Finish(buf);
+}
+
+int MultiLegacyBloomBitsBuilder::CalculateNumEntry(const uint32_t bytes) {
+  return bits_builders_[0]->CalculateNumEntry(bytes);
 }
 #endif
 
@@ -875,7 +880,7 @@ FilterBitsBuilder* BloomFilterPolicy::GetBuilderWithContext(
         #else
         // TODO: determine filter_count, 
         // and maybe move this property to some kind of options (WaLSM+)
-        const int filter_count = 10;
+        const int filter_count = MAX_UNITS_NUM;
         return new MultiLegacyBloomBitsBuilder(filter_count, whole_bits_per_key_, context.info_log);
         #endif
     }
