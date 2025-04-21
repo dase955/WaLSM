@@ -98,11 +98,13 @@ void BlockBasedTableSegmentAwareIterator::SeekFilterAndUpdateSegmentID() {
 // may iterate over the filter_index_iter to find correct filter_index, then extract segment_id
 void BlockBasedTableSegmentAwareIterator::UpdateSegmentID() {
   if (!data_iter_->Valid()) {
+    // TODO: (TODO: how to handle this situation?)
     current_segment_id_ = INVALID_SEGMENT_ID;
     return;
   }
 
   if (!filter_index_iter_ || !filter_index_iter_->Valid()) {
+    // TODO: (TODO: how to handle this situation?)
     current_segment_id_ = INVALID_SEGMENT_ID;
     return;
   }
@@ -118,6 +120,7 @@ void BlockBasedTableSegmentAwareIterator::UpdateSegmentID() {
   while (segment_id_removing_comparator_->Compare(current_modified_key, filter_key) > 0) {
     filter_index_iter_->Next();
     if (!filter_index_iter_->Valid()) {
+      // TODO: (TODO: how to handle this situation?)
       current_segment_id_ = INVALID_SEGMENT_ID;
       return;
     }
@@ -130,7 +133,7 @@ void BlockBasedTableSegmentAwareIterator::UpdateSegmentID() {
 
   uint32_t filter_index = DecodeFixed32R(filter_key.data());
   if (filter_index > 0) {
-    // filter_index=0 should always be satisfied
+    // filter_index=0 should always be satisfied (TODO: how to handle this situation?)
     current_segment_id_ = INVALID_SEGMENT_ID;
     return;
   }

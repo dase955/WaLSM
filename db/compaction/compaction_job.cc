@@ -1144,15 +1144,6 @@ void CompactionJob::ProcessKeyValueCompaction(SubcompactionState* sub_compact) {
     status = OpenCompactionOutputFile(sub_compact);
   }
 
-  if (status.ok() && sub_compact->builder != nullptr) {
-    // TODO: get SegmentBuilderResult and update sub_compact status? (WaLSM+)
-    sub_compact->segment_builder_result = sub_compact->builder->GetSegmentBuilderResult();
-    assert(!sub_compact->segment_builder_result.merged_segment_ids.empty());
-    assert(!sub_compact->segment_builder_result.new_segment_ids.empty());
-  } else {
-    std::cout << "Failed to compaction, lost segment builder result." << std::endl;
-  }
-
   // Call FinishCompactionOutputFile() even if status is not ok: it needs to
   // close the output file.
   if (sub_compact->builder != nullptr) {
@@ -1544,6 +1535,11 @@ Status CompactionJob::FinishCompactionOutputFile(
     }
   }
 #endif
+
+  // WaLSM+: collect data before resetting builder pointer
+  sub_compact->segment_builder_result = sub_compact->builder->GetSegmentBuilderResult();
+  assert(!sub_compact->segment_builder_result.merged_segment_ids.empty());
+  assert(!sub_compact->segment_builder_result.new_segment_ids.empty());
 
   sub_compact->builder.reset();
   sub_compact->current_output_file_size = 0;
