@@ -200,7 +200,8 @@ class TableBuilder {
   // Return file checksum function name
   virtual const char* GetFileChecksumFuncName() const = 0;
 
-  virtual SegmentBuilderResult GetSegmentBuilderResult() { return SegmentBuilderResult(); }
+  // default method to make compiler happy, not yet implemented (WaLSM+)
+  virtual SegmentBuilderResult GetSegmentBuilderResult() { assert(false); return SegmentBuilderResult(); }
 };
 
 }  // namespace ROCKSDB_NAMESPACE

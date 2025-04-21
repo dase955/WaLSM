@@ -736,6 +736,8 @@ Status CompactionJob::Run() {
   // aggregate SegmentBuilderResult from subcompactions
   for (auto& state : compact_->sub_compact_states) {
     auto& sub_result = state.segment_builder_result;
+    assert(!sub_result.merged_segment_ids.empty());
+    assert(!sub_result.new_segment_ids.empty());
     segment_builder_result_.new_segment_ids.insert(
         sub_result.new_segment_ids.begin(),
         sub_result.new_segment_ids.end());
@@ -1145,6 +1147,10 @@ void CompactionJob::ProcessKeyValueCompaction(SubcompactionState* sub_compact) {
   if (status.ok() && sub_compact->builder != nullptr) {
     // TODO: get SegmentBuilderResult and update sub_compact status? (WaLSM+)
     sub_compact->segment_builder_result = sub_compact->builder->GetSegmentBuilderResult();
+    assert(!sub_compact->segment_builder_result.merged_segment_ids.empty());
+    assert(!sub_compact->segment_builder_result.new_segment_ids.empty());
+  } else {
+    std::cout << "Failed to compaction, lost segment builder result." << std::endl;
   }
 
   // Call FinishCompactionOutputFile() even if status is not ok: it needs to

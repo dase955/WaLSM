@@ -3719,15 +3719,7 @@ Status DBImpl::BackgroundCompaction(bool* made_progress,
       new_units_it ++;
     }
     global_filter_cache_recorders_mutex.unlock();
-
-    // make sure that we also input merged segments' level
-    // batch_insert_segments argument need both merged and new segments' level
-    auto merged_it = merged_level_recorder.begin();
-    while (merged_it != merged_level_recorder.end()) {
-      assert(new_level_recorder->find(merged_it->first) == new_level_recorder->end());
-      new_level_recorder->insert(std::make_pair(merged_it->first, merged_it->second));
-      merged_it ++;
-    }
+    // there are no merged segments' id in new_level_recorder
     assert(new_level_recorder->size() == new_segment_ids->size());
 
     // call filter cache client DBImpl::filter_cache_ update work 

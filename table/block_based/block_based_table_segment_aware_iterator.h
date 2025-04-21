@@ -11,6 +11,7 @@
 #include <memory>
 #include "db/dbformat.h"
 #include "rocksdb/comparator.h"
+#include "rocksdb/db.h"
 #include "table/block_based/block.h"
 #include "table/block_based/block_based_table_reader.h"
 

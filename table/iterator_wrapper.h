@@ -9,6 +9,7 @@
 
 #pragma once
 
+#include <cstdint>
 #include <set>
 
 #include "table/internal_iterator.h"
@@ -64,6 +65,10 @@ class IteratorWrapperBase {
   TValue value() const {
     assert(Valid());
     return iter_->value();
+  }
+  uint32_t segment_id() const {
+    assert(Valid());
+    return iter_->segment_id();
   }
   // Methods below require iter() != nullptr
   Status status() const {

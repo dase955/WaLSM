@@ -90,7 +90,8 @@ class FilterBlockBuilder {
     return ret;
   }
   virtual Slice Finish(const BlockHandle& tmp, Status* status) = 0;
-  virtual SegmentBuilderResult GetSegmentBuilderResult() { return SegmentBuilderResult{}; }
+  // default invalid method to make compiler happy
+  virtual SegmentBuilderResult GetSegmentBuilderResult() { assert(false); return SegmentBuilderResult{}; }
 };
 
 // A FilterBlockReader is used to parse filter from SST table.

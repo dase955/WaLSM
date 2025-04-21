@@ -838,6 +838,9 @@ SegmentBuilderResult PartitionedFilterBlockBuilder::GetSegmentBuilderResult() {
     segment_builder_result_.merged_segment_ids.insert(segment_id);
   }
 
+  assert(!segment_builder_result_.merged_segment_ids.empty());
+  assert(!segment_builder_result_.new_segment_ids.empty());
+
   return segment_builder_result_;
 }
 

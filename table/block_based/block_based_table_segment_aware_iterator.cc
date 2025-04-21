@@ -47,7 +47,8 @@ void BlockBasedTableSegmentAwareIterator::Next() {
 
 void BlockBasedTableSegmentAwareIterator::Prev() {
   data_iter_->Prev();
-  UpdateSegmentID();
+  // degraded performance
+  SeekFilterAndUpdateSegmentID();
 }
 
 Slice BlockBasedTableSegmentAwareIterator::key() const {
@@ -112,8 +113,8 @@ void BlockBasedTableSegmentAwareIterator::UpdateSegmentID() {
   Slice current_modified_key = generate_modified_user_key(
       current_modified_key_buf, current_user_key, 0, 0);
 
-  // forward lookup
   Slice filter_key = filter_index_iter_->user_key();
+  // forward lookup
   while (segment_id_removing_comparator_->Compare(current_modified_key, filter_key) > 0) {
     filter_index_iter_->Next();
     if (!filter_index_iter_->Valid()) {
@@ -122,16 +123,10 @@ void BlockBasedTableSegmentAwareIterator::UpdateSegmentID() {
     }
     filter_key = filter_index_iter_->user_key();
   }
+  // backward lookup not implemented
+  // do nothing here, since we already seek it
+  // frequently seeking backward is not good for performance
 
-  // backward lookup
-  while (segment_id_removing_comparator_->Compare(current_modified_key, filter_key) < 0) {
-    filter_index_iter_->Prev();
-    if (!filter_index_iter_->Valid()) {
-      current_segment_id_ = INVALID_SEGMENT_ID;
-      return;
-    }
-    filter_key = filter_index_iter_->user_key();
-  }
 
   uint32_t filter_index = DecodeFixed32R(filter_key.data());
   if (filter_index > 0) {

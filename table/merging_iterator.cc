@@ -242,6 +242,11 @@ class MergingIterator : public InternalIterator {
     return current_->value();
   }
 
+  uint32_t segment_id() const override {
+    assert(Valid());
+    return current_->segment_id();
+  }
+
   bool PrepareValue() override {
     assert(Valid());
     if (current_->PrepareValue()) {
