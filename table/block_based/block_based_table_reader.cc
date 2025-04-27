@@ -57,6 +57,7 @@
 #include "table/multiget_context.h"
 #include "table/persistent_cache_helper.h"
 #include "table/sst_file_writer_collectors.h"
+#include "table/table_reader_caller.h"
 #include "table/two_level_iterator.h"
 
 #include "monitoring/perf_context_imp.h"
@@ -2155,7 +2156,7 @@ InternalIterator* BlockBasedTable::NewIterator(
           compaction_readahead_size, allow_unprepared_value));
 
       return new BlockBasedTableSegmentAwareIterator(
-          std::move(data_iter), std::move(filter_index_iter),
+          std::move(data_iter), std::move(filter_block), std::move(filter_index_iter),
           rep_->internal_comparator, caller);
     } else {
       auto* mem = arena->AllocateAligned(sizeof(BlockBasedTableIterator));
@@ -2168,7 +2169,7 @@ InternalIterator* BlockBasedTable::NewIterator(
 
       mem = arena->AllocateAligned(sizeof(BlockBasedTableSegmentAwareIterator));
       return new BlockBasedTableSegmentAwareIterator(
-          std::move(data_iter), std::move(filter_index_iter),
+          std::move(data_iter), std::move(filter_block), std::move(filter_index_iter),
           rep_->internal_comparator, caller);
     }
 
@@ -3852,11 +3853,13 @@ Status BlockBasedTable::GetFilterIndexBlock(
 
   const BlockBasedTable::Rep* const rep = get_rep();
   assert(rep);
+  bool for_compaction = lookup_context != nullptr 
+    && lookup_context->caller == TableReaderCaller::kCompaction;
 
   Status s = RetrieveBlock(
       nullptr /* prefetch_buffer */, read_options, rep->filter_handle,
       UncompressionDict::GetEmptyDict(), filter_block, BlockType::kFilter,
-      get_context, lookup_context, false /* for_compaction */, use_cache);
+      get_context, lookup_context, for_compaction, use_cache);
 
   return s;
 }

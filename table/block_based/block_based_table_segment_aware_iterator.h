@@ -17,6 +17,7 @@
 
 #include "table/block_based/block_based_table_reader_impl.h"
 #include "table/block_based/block_prefetcher.h"
+#include "table/block_based/cachable_entry.h"
 #include "table/block_based/reader_common.h"
 #include "table/internal_iterator.h"
 
@@ -25,13 +26,14 @@ namespace ROCKSDB_NAMESPACE {
 class BlockBasedTableSegmentAwareIterator : public InternalIteratorBase<Slice> {
  public:
   BlockBasedTableSegmentAwareIterator(
-      std::unique_ptr<InternalIterator> data_iter, std::unique_ptr<IndexBlockIter> filter_index_iter,
+      std::unique_ptr<InternalIterator> data_iter, CachableEntry<Block> filter_index_block_entry, std::unique_ptr<IndexBlockIter> filter_index_iter,
       const InternalKeyComparator& icomp,
       TableReaderCaller caller)
       : data_iter_(std::move(data_iter)),
+        filter_index_block_entry_(std::move(filter_index_block_entry)),
         filter_index_iter_(std::move(filter_index_iter)),
         icmp_(&icomp),
-        segment_id_removing_comparator_(icomp.user_comparator()),
+        segment_id_removing_comparator_(SegmentIdRemovingComparator(icomp.user_comparator())),
         lookup_context_(caller),
         user_comparator_(icomp.user_comparator()) {}
 
@@ -54,9 +56,10 @@ class BlockBasedTableSegmentAwareIterator : public InternalIteratorBase<Slice> {
 
  private:
   std::unique_ptr<InternalIterator> data_iter_;
+  CachableEntry<Block> filter_index_block_entry_;
   std::unique_ptr<IndexBlockIter> filter_index_iter_;
   const InternalKeyComparator* icmp_;
-  const Comparator* segment_id_removing_comparator_;
+  std::unique_ptr<Comparator> segment_id_removing_comparator_;
   const SliceTransform* prefix_extractor_;
   TableReaderCaller lookup_context_;
   InternalKeyComparator user_comparator_;
