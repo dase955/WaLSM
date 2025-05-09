@@ -48,7 +48,8 @@ public:
     ~FilterCache() override { /* do nothing */ }
 
     // other levels total cache size 
-    uint32_t cache_size_except_level_0() { return cache_size_ * FULL_RATE - level_0_used_space_size_; }
+    // assume level 0 segments' filter never use filter cache space
+    uint32_t cache_size_except_level_0() { return cache_size_ * FULL_RATE; }
 
     // get all cached filter blocks of one segment
     std::vector<CachableEntry<ParsedFullFilterBlock>> get_filter_blocks(const uint32_t segment_id);
@@ -56,12 +57,14 @@ public:
     // enable / disable units for a batch of segments (one segment may not exist in FilterCache)
     // if enabled units num exceed given units num, it will disable units
     void enable_for_segments(std::unordered_map<uint32_t, uint16_t>& segment_units_num_recorder, const bool& is_forced,
-                             std::set<uint32_t>& level_0_segment_ids, std::set<uint32_t>& failed_segment_ids);
+                             std::set<uint32_t>& new_level_0_segment_ids, std::set<uint32_t>& failed_segment_ids);
 
     // the only difference from enable_for_segments is:
-    // this func dont insert any filter units for segments that dont exist in cache, but enable_for_segments unc does
-    void update_for_segments(std::unordered_map<uint32_t, uint16_t>& segment_units_num_recorder, const bool& is_forced,
-                             std::set<uint32_t>& level_0_segment_ids, std::set<uint32_t>& failed_segment_ids);
+    // this is designed for moved compaction
+    // if one segment moved from L0 to L1, we update L0 cached filter usage and filter cache usage
+    // we do not remove filter handle of these segments, because these segments' ids are still valid
+    void update_for_segments(std::unordered_map<uint32_t, uint16_t>& segment_units_num_recorder,
+                             std::set<uint32_t>& old_level_0_segment_ids, std::set<uint32_t>& failed_segment_ids);
 
     // should be called in/after compaction, before any filter adjustment operation that may affect given segment
     void init_segment(uint32_t segment_id, const BlockBasedTable* table, const std::vector<BlockHandle>& block_handles);
@@ -73,7 +76,7 @@ public:
     bool is_ready();
 
     // release filter units of merged segments
-    void release_for_segments(std::vector<uint32_t>& segment_ids, std::set<uint32_t>& level_0_segment_ids);
+    void release_for_segments(std::vector<uint32_t>& segment_ids, std::set<uint32_t>& old_level_0_segment_ids);
 
     // The type of the Cache
     virtual const char* Name() const override;
@@ -173,7 +176,8 @@ private:
     uint32_t period_cnt_; // record period cnt, if period_cnt_ - last_train_period_ >= TRAIN_PERIODS, start to evaluate or retrain ClfModel
     uint32_t last_long_period_; // record last short period cnt of last long period
     uint32_t last_short_period_; // helper var for update job when one short period ends
-    std::mutex update_mutex_; // guarantee counts records only updated once
+    std::mutex period_mutex_; // guarantee heat buckets, get_cnt_ and period_cnt_ are updated orderly
+    // std::mutex update_mutex_; // guarantee counts records only updated once
     bool train_signal_; // if true, try to retrain model. we call one background thread to monitor this flag and retrain
     std::map<uint32_t, uint32_t> last_count_recorder_; // get cnt recorder of segments in last long period
     std::map<uint32_t, uint32_t> current_count_recorder_; // get cnt recorder of segments in current long period
@@ -212,13 +216,16 @@ public:
     // copy counts to last_count_recorder and reset counts of current_count_recorder
     void update_count_recorder();
 
+    // when debugging, we need to print out counters of each segment.
+    void debug_count_recorder();
+
     // inherit counts of merged segments to counts of new segments and remove counts of merged segments
     // inherit_infos_recorder: { {new segment 1: [{old segment 1: inherit rate 1}, {old segment 2: inherit rate 2}, ...]}, ...}
     void inherit_count_recorder(std::vector<uint32_t>& merged_segment_ids, std::vector<uint32_t>& new_segment_ids, const uint32_t& level_0_base_count,
                                 std::map<uint32_t, std::unordered_map<uint32_t, double>>& inherit_infos_recorder);
 
     // estimate approximate get cnts for every alive segment
-    void estimate_counts_for_all(std::map<uint32_t, uint32_t>& approximate_counts_recorder);
+    void estimate_recent_counts(std::map<uint32_t, uint32_t>& approximate_counts_recorder, const std::vector<uint32_t>& needed_segment_ids);
 
     // noticed that at the beginning, heat buckets need to sample put keys to init itself before heat buckets start to work
     // segment_info_recorder is external variable that records every alive segments' min key and max key
@@ -247,6 +254,11 @@ public:
     // we should use one background thread to call this func in every get operation
     void hit_heat_buckets(const std::string& key);
 
+    // when one short period ends, we estimate recent access counter of each segment, then update heaps
+    // when one long period ends, we reset counters and send a training signal. then classifier will be evaluated and retrained.
+    // we leave this function to one single thread. Exec this func and never end.
+    void do_periods_work();
+
     // if one long period end, we need to check effectiveness of model. 
     // if model doesnt work well in current workload, we retrain this model
     // 1. use greedy algorithm to solve filter units allocation problem (receive ideal enabled units num for every current segments)
@@ -262,7 +274,7 @@ public:
     // we ignore all level 0 segments !!! 3 recorders keys set should be the same ------ all alive segments' ids (except level 0)
     // because of the time cost of writing csv file, we need to do this func with a background thread
     // need real benchmark data to debug this func
-    void try_retrain_model(std::map<uint32_t, uint16_t>& level_recorder,
+    bool try_retrain_model(std::map<uint32_t, uint16_t>& level_recorder,
                            std::map<uint32_t, std::vector<RangeRatePair>>& segment_ranges_recorder,
                            std::map<uint32_t, uint32_t>& unit_size_recorder);
 
@@ -278,15 +290,6 @@ public:
     // we can guarantee this by putting try_retrain_model and update_cache_and_heap into only one background thread
     void update_cache_and_heap(std::map<uint32_t, uint16_t>& level_recorder,
                                std::map<uint32_t, std::vector<RangeRatePair>>& segment_ranges_recorder);
-
-    // remove merged segments' filter units in the filter cache
-    // also remove related items in FilterCacheHeap
-    // segment_ids: [level_1_segment_1, level_0_segment_1, ...]
-    // level_0_segment_ids: [level_0_segment_1, ...]
-    // should be called by one background thread
-    // this func will be called by insert_segments
-    // you can also call this func alone after segments are merged (not suggested)
-    void remove_segments(std::vector<uint32_t>& segment_ids, std::set<uint32_t>& level_0_segment_ids);
 
     // insert new segments into cache
     // all level 0 segments must enable all filter units

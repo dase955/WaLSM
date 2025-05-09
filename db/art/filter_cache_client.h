@@ -35,7 +35,7 @@ private:
     // background thread part of check_key
     void do_hit_count_recorder(uint32_t segment_id);
 
-    // background thread part of get_updating_work
+    // background thread part of hit_heat_buckets
     void do_hit_heat_buckets(const std::string& key);
 
     // background thread part of make_adjustment
@@ -55,6 +55,10 @@ private:
                                 std::map<uint32_t, uint16_t>& old_level_recorder,
                                 std::map<uint32_t, uint16_t>& move_level_recorder,
                                 std::map<uint32_t, std::vector<RangeRatePair>>& move_segment_ranges_recorder);
+
+    // background thread part of periods_work;
+    void do_periods_work();
+
 public:
     FilterCacheClient() {
         heat_buckets_ready_ = false;
@@ -90,7 +94,10 @@ public:
     std::vector<CachableEntry<ParsedFullFilterBlock>> get_filter_blocks(uint32_t segment_id);
 
     // every db get operation need one hit_heat_buckets
-    void get_updating_work(const std::string& key);
+    void hit_heat_buckets(const std::string& key);
+
+    // keep track of period count, update access counters and retrain classifier model
+    void periods_work();
 
     // heap based adjustment
     void make_adjustment();

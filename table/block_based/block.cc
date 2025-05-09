@@ -11,6 +11,7 @@
 
 #include "table/block_based/block.h"
 #include <algorithm>
+#include <iostream>
 #include <string>
 #include <unordered_map>
 #include <vector>

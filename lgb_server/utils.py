@@ -2,7 +2,7 @@ from typing import Union
 import pandas as pd
 import sys
 
-dataset_path = '/pg_wal/ycc/'
+dataset_path = '/home/guoteng_20241228_135/WaLSM+/log/'
 # dataset_path = ''
 
 # msg should be like 'dataset1.csv'

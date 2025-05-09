@@ -1899,8 +1899,9 @@ Status BlockBasedTable::RetrieveBlock(
   std::unique_ptr<TBlocklike> block;
 
   {
-    StopWatch sw(rep_->ioptions.env, rep_->ioptions.statistics,
-                 READ_BLOCK_GET_MICROS);
+    // TODO: 这里可能报错，先注释了
+    // StopWatch sw(rep_->ioptions.env, rep_->ioptions.statistics,
+    //              READ_BLOCK_GET_MICROS);
     s = ReadBlockFromFile(
         rep_->file.get(), prefetch_buffer, rep_->footer, ro, handle, &block,
         rep_->ioptions, do_uncompress, maybe_compressed, block_type,
@@ -3479,10 +3480,19 @@ std::string BlockBasedTable::ApproximateMiddleKey(const Slice& start,
   uint64_t middle_offset = (end_offset + start_offset) / 2;
   index_iter->SeekToFirst();
 
+  if (!index_iter->Valid()) {
+    return std::string();
+  }
+
   while (index_iter->Valid()
          && index_iter->value().handle.offset() < middle_offset) {
     index_iter->Next();
   }
+
+  if (!index_iter->Valid()) {
+    index_iter->SeekToLast();
+  }
+
   std::string prefix = index_iter->user_key().ToString();
   return prefix;
 

@@ -118,13 +118,17 @@ void ClfModel::write_real_dataset(std::vector<std::vector<uint32_t>>& datas, std
 
 void ClfModel::write_dataset(std::vector<std::vector<uint32_t>>& datas, std::vector<uint16_t>& tags, std::vector<uint32_t>& get_cnts) {
     assert(feature_num_ > 0);
-    if (datas.empty()) {
-        write_debug_dataset();
-        // dataset_cnt_ += 1;
-        return;
-    }
+    if (datas.empty()) return;
+    assert(datas.size() > 0);
+    // if (datas.empty()) {
+    //     assert(false); // we have to write dataset
+    //     write_debug_dataset();
+    //     // dataset_cnt_ += 1;
+    //     return;
+    // }
 
     assert(feature_num_ % 2 != 0); // features num: 2r + 1 
+    assert(feature_num_ >= 3);
 
     write_real_dataset(datas, tags, get_cnts);
     // dataset_cnt_ += 1;
@@ -132,9 +136,10 @@ void ClfModel::write_dataset(std::vector<std::vector<uint32_t>>& datas, std::vec
 }
 
 void ClfModel::make_train(std::vector<std::vector<uint32_t>>& datas, std::vector<uint16_t>& tags, std::vector<uint32_t>& get_cnts) {
-    assert(feature_num_ > 0);
+    assert(feature_num_ > 0); // model is ready
     write_dataset(datas, tags, get_cnts);
 
+    // // TODO: avoid python model training
     // already write dataset
     // send msg to LightGBM server, let server read dataset and train new model
     libsocket::inet_stream sock(host_, port_, LIBSOCKET_IPv4);
@@ -146,6 +151,7 @@ void ClfModel::make_train(std::vector<std::vector<uint32_t>>& datas, std::vector
     sock << message;
     sock >> recv_buffer; // wait for training end
     // will destroy sock when leaving this func scope
+    std::cout << "[MODEL] model training end, message: " << recv_buffer << std::endl;
 }
 
 void ClfModel::make_predict_samples(std::vector<std::vector<uint32_t>>& datas) {
@@ -213,10 +219,12 @@ void ClfModel::make_real_predict(std::vector<std::vector<uint32_t>>& datas, std:
 void ClfModel::make_predict(std::vector<std::vector<uint32_t>>& datas, std::vector<uint16_t>& preds) {
     preds.clear();
 
+    if (datas.empty()) return;
+    assert(datas.size() > 0);
     // datas empty means we are debuging class ClfModel
-    if (datas.empty()) {
-        make_predict_samples(datas);
-    } 
+    // if (datas.empty()) {
+    //     make_predict_samples(datas);
+    // } 
     // only write pred result to vector preds, and return nothing
     make_real_predict(datas, preds);
     return;

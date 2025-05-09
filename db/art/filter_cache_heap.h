@@ -4,6 +4,7 @@
 #include <vector>
 #include <algorithm>
 #include <map>
+#include <set>
 #include <cmath>
 #include <cassert>
 #include <mutex>
@@ -182,6 +183,14 @@ public:
     // return heap top
     FilterCacheHeapNode heap_top();
 
+    // check heap_top's benefit/cost is smaller/greater than other items
+    void heap_check(bool max_heap);
+
+    // print heap items of selected segments' ids
+    void heap_print(std::vector<uint32_t>& needed_segment_ids, const bool should_exist);
+
+    size_t heap_size() { assert(heap_.size() == heap_index_.size()); return heap_.size(); }
+
     // pop one node with deleting node from heap_index_
     // void pop();
 
@@ -206,12 +215,14 @@ public:
 
     // only used in debug !!!
     void heap_index(std::map<uint32_t, FilterCacheHeapNode>& heap_index) {
+        assert(false);
         heap_index.clear();
         heap_index.insert(heap_index_.begin(), heap_index_.end());
     }
 
     // only used in debug !!!
     void heap(std::vector<FilterCacheHeapNode>& heap) {
+        assert(false);
         heap.clear();
         heap.assign(heap_.begin(), heap_.end());
     }
@@ -252,7 +263,7 @@ public:
     // sync visit cnt in heap and real estimated visit cnt
     // reminded that we will not insert or delete nodes in this method
     // we only update these nodes that already exist in two heaps
-    void sync_visit_cnt(std::map<uint32_t, uint32_t>& current_visit_cnt_recorder);
+    void sync_visit_cnt(std::map<uint32_t, uint32_t>& recent_visit_cnt_recorder);
 
     // try to read benefit_heap top and cost_heap top, then judge whether we need to modify units num in filter cache
     // return true when we can modify units num of several segments, return false when we cannot
@@ -268,9 +279,9 @@ public:
     // because we need to keep heap visit cnt and recorder visit cnt the same
     void batch_upsert(std::vector<FilterCacheHeapItem>& items);
 
-    // 1. try debug batch insert
-    // 2. try debug batch update(use batch_upsert)
-    void debug();
+    // // 1. try debug batch insert
+    // // 2. try debug batch update(use batch_upsert)
+    // void debug();
 };
 
 }

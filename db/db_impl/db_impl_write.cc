@@ -25,8 +25,13 @@ Status DBImpl::Put(const WriteOptions& o, ColumnFamilyHandle* column_family,
 #ifdef ART_PLUS
   // heat_buckets not ready, still sample into pool
   // if ready, prepare func auto return and do nothing
+  #ifndef SAMPLES_FILE
+  // if use key sample file, do not use this code.
+  assert(false);
   std::string art_key(key.data(), key.size());
   global_filter_cache.prepare_heat_buckets(art_key, &global_segment_info_recorder);
+
+  #endif
 #endif
   return DB::Put(o, column_family, key, val);
 }

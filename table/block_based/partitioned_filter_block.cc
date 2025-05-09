@@ -6,16 +6,24 @@
 #include "table/block_based/partitioned_filter_block.h"
 #include <sys/types.h>
 
+#include <algorithm>
 #include <atomic>
 #include <cassert>
+#include <cctype>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <iomanip>
 #include <iostream>
 #include <memory>
+#include <mutex>
+#include <numeric>
+#include <ostream>
 #include <utility>
 
 #include "db/art/clf_model.h"
+#include "db/art/logger.h"
+#include "db/art/macros.h"
 #include "db/dbformat.h"
 #include "file/file_util.h"
 #include "monitoring/perf_context_imp.h"
@@ -52,7 +60,8 @@ PartitionedFilterBlockBuilder::PartitionedFilterBlockBuilder(
       p_index_builder_(p_index_builder),
       keys_added_to_partition_(0),
       range_separators_(range_separators),
-      internal_comparator_(internal_comparator) {
+      internal_comparator_(internal_comparator),
+      user_comparator_(internal_comparator->user_comparator()) {
   keys_per_partition_ =
       filter_bits_builder_->CalculateNumEntry(partition_size);
   if (keys_per_partition_ < 1) {
@@ -74,6 +83,9 @@ PartitionedFilterBlockBuilder::PartitionedFilterBlockBuilder(
       }
     }
   }
+
+  // keys_per_partition_ = std::min(keys_per_partition_, (uint32_t) KEYS_PER_SEGMENT);
+  keys_per_partition_ = KEYS_PER_SEGMENT;
 
   #ifdef ART_PLUS
   filter_count_ = filter_bits_builder->filter_count_;
@@ -137,6 +149,21 @@ void PartitionedFilterBlockBuilder::ProcessSegmentCut(uint32_t new_segment_id) {
          segment_ids_in_current_segment_.size());
   size_t siz = keys_in_current_segment_.size();
 
+  for (size_t i = 0; i + 1 < siz; ++i) {
+    if (user_comparator_->Compare(keys_in_current_segment_[i],
+                                  keys_in_current_segment_[i + 1]) > 0) {
+      assert(false);
+      std::cout << std::endl;
+      std::cout << "segment_id: " << new_segment_id << ", key count: " << siz
+                << std::endl;
+      for (size_t i = 0; i < siz; ++i) {
+        std::cout << std::setw(5) << i << " " << keys_in_current_segment_[i]
+                  << std::endl;
+      }
+      std::cout << std::endl;
+    }
+  }
+
   // for range_recorder
   std::vector<RangeRatePair> range_rate_pairs;
   uint32_t cnt_in_current_range = 0;
@@ -146,6 +173,24 @@ void PartitionedFilterBlockBuilder::ProcessSegmentCut(uint32_t new_segment_id) {
   // <parent_segment_id, count>
   std::unordered_map<uint32_t, double> inherit_counts;
 
+  // for every first key in segments, we perform binary search to find corresponding key range
+  {
+    auto it = std::upper_bound(
+        range_separators_.begin(), range_separators_.end(),
+        keys_in_current_segment_[0], [this](const Slice& a, const Slice& b) {
+          return this->user_comparator_->Compare(a, b) < 0;
+        });
+    if (it != range_separators_.begin()) {
+      it--;
+      current_range_index_ = std::distance(range_separators_.begin(), it);
+    } else {
+      // the first key is smaller than all the range separators,
+      // which should only happen when range_separators_ is empty
+      assert(range_separators_.empty());
+    }
+  }
+
+  // perform linear scan to find the range for each key
   for (size_t i = 0; i < siz; ++i) {
     const Slice& key = keys_in_current_segment_[i];
     const uint32_t source_segment_id = segment_ids_in_current_segment_[i];
@@ -155,7 +200,7 @@ void PartitionedFilterBlockBuilder::ProcessSegmentCut(uint32_t new_segment_id) {
 
     // for range_recorder
     while (current_range_index_ + 1 < range_separators_.size() &&
-           internal_comparator_->Compare(
+           user_comparator_->Compare(
                key, range_separators_[current_range_index_ + 1]) >= 0) {
       current_range_index_++;
       if (cnt_in_current_range > 0) {
@@ -168,6 +213,7 @@ void PartitionedFilterBlockBuilder::ProcessSegmentCut(uint32_t new_segment_id) {
 
     // for inherit_infos_recorders
     inherit_counts[source_segment_id]++;
+    cnt_in_current_range++;
   }
 
   // process the last range
@@ -180,26 +226,40 @@ void PartitionedFilterBlockBuilder::ProcessSegmentCut(uint32_t new_segment_id) {
   }
   
   // update smallest & largest key
-  std::string smallest_key = keys_in_current_segment_[0].ToString();
-  std::string largest_key = keys_in_current_segment_.back().ToString();
+  std::string smallest_key = keys_in_current_segment_[0];
+  std::string largest_key = keys_in_current_segment_.back();
 
   // update result
   // inherit_counts should be updated when GetSegmentBuilderResult() is called
   segment_builder_result_.new_segment_ids.insert(new_segment_id);
   segment_builder_result_.per_segment_results.push_back(SegmentBuilderResult::PerSegmentResult{
       new_segment_id, range_rate_pairs, inherit_counts, smallest_key,
-      largest_key});
+      largest_key, (uint32_t) keys_in_current_segment_.size()});
 
   // clear
   keys_in_current_segment_.clear();
   segment_ids_in_current_segment_.clear();
+
 }
 
 void PartitionedFilterBlockBuilder::Add(const Slice& key, uint32_t segment_id) {
+  const std::string key_str = key.ToString();
+  for (int i = 0; i < key_str.size(); i++) {
+    char c = key_str[i];
+    if (!std::isprint(c)) {
+      std::cout << "error" << std::endl;
+    }
+  }
+  if (!keys_in_current_segment_.empty() && user_comparator_->Compare(keys_in_current_segment_.back(), key) > 0) {
+    std::cout << "error" << std::endl;
+  }
+  if (key.ends_with(Slice("\1", 1))) {
+    std::cout << "error" << std::endl;
+  }
   MaybeCutAFilterBlock(&key, segment_id);
   FullFilterBlockBuilder::Add(key, segment_id);
 
-  keys_in_current_segment_.emplace_back(key);
+  keys_in_current_segment_.emplace_back(key.ToString());
   segment_ids_in_current_segment_.emplace_back(segment_id);
 }
 
@@ -827,8 +887,12 @@ SegmentBuilderResult PartitionedFilterBlockBuilder::GetSegmentBuilderResult() {
   // update inherit_recorders
   for (auto& segment_result : segment_builder_result_.per_segment_results) {
     auto& inherit_counts = segment_result.inherit_recorder;
+    int segment_size = 0;
     for (auto& inherit_count : inherit_counts) {
-      inherit_count.second /= source_segment_ids_count[inherit_count.first];
+      segment_size += (int) inherit_count.second;
+    }
+    for (auto& inherit_count : inherit_counts) {
+      inherit_count.second /= segment_size;
     }
   }
 

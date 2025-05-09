@@ -30,7 +30,7 @@ std::mutex global_filter_cache_recorders_mutex;
 // TODO: it should contain all levels segments' min key and max key, then pass
 // to filter cache client, but not used now this recorder will help decide the
 // key ranges' num, but it dont work in current work you can try to modify macro
-// DEFAULT_BUCKETS_NUM to decide the key ranges' num
+// APPROXIMATE_BUCKETS_NUM to decide the key ranges' num
 std::unordered_map<uint32_t, std::vector<std::string>>
     global_segment_info_recorder;
 

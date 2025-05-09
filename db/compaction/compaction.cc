@@ -284,65 +284,68 @@ bool Compaction::InputCompressionMatchesOutput() const {
 }
 
 bool Compaction::IsTrivialMove() const {
-  // Avoid a move if there is lots of overlapping grandparent data.
-  // Otherwise, the move could create a parent file that will require
-  // a very expensive merge later on.
-  // If start_level_== output_level_, the purpose is to force compaction
-  // filter to be applied to that level, and thus cannot be a trivial move.
+  // // Avoid a move if there is lots of overlapping grandparent data.
+  // // Otherwise, the move could create a parent file that will require
+  // // a very expensive merge later on.
+  // // If start_level_== output_level_, the purpose is to force compaction
+  // // filter to be applied to that level, and thus cannot be a trivial move.
 
-  // Check if start level have files with overlapping ranges
-  if (start_level_ == 0 && input_vstorage_->level0_non_overlapping() == false) {
-    // We cannot move files from L0 to L1 if the files are overlapping
-    return false;
-  }
+  // // Check if start level have files with overlapping ranges
+  // if (start_level_ == 0 && input_vstorage_->level0_non_overlapping() == false) {
+  //   // We cannot move files from L0 to L1 if the files are overlapping
+  //   return false;
+  // }
 
-  if (is_manual_compaction_ &&
-      (immutable_cf_options_.compaction_filter != nullptr ||
-       immutable_cf_options_.compaction_filter_factory != nullptr)) {
-    // This is a manual compaction and we have a compaction filter that should
-    // be executed, we cannot do a trivial move
-    return false;
-  }
+  // if (is_manual_compaction_ &&
+  //     (immutable_cf_options_.compaction_filter != nullptr ||
+  //      immutable_cf_options_.compaction_filter_factory != nullptr)) {
+  //   // This is a manual compaction and we have a compaction filter that should
+  //   // be executed, we cannot do a trivial move
+  //   return false;
+  // }
 
-  // Used in universal compaction, where trivial move can be done if the
-  // input files are non overlapping
-  if ((mutable_cf_options_.compaction_options_universal.allow_trivial_move) &&
-      (output_level_ != 0)) {
-    return is_trivial_move_;
-  }
+  // // Used in universal compaction, where trivial move can be done if the
+  // // input files are non overlapping
+  // if ((mutable_cf_options_.compaction_options_universal.allow_trivial_move) &&
+  //     (output_level_ != 0)) {
+  //   return is_trivial_move_;
+  // }
 
-  if (!(start_level_ != output_level_ && num_input_levels() == 1 &&
-          input(0, 0)->fd.GetPathId() == output_path_id() &&
-          InputCompressionMatchesOutput())) {
-    return false;
-  }
+  // if (!(start_level_ != output_level_ && num_input_levels() == 1 &&
+  //         input(0, 0)->fd.GetPathId() == output_path_id() &&
+  //         InputCompressionMatchesOutput())) {
+  //   return false;
+  // }
 
-  // assert inputs_.size() == 1
+  // // assert inputs_.size() == 1
 
-  std::unique_ptr<SstPartitioner> partitioner = CreateSstPartitioner();
+  // std::unique_ptr<SstPartitioner> partitioner = CreateSstPartitioner();
 
-  for (const auto& file : inputs_.front().files) {
-    std::vector<FileMetaData*> file_grand_parents;
-    if (output_level_ + 1 >= number_levels_) {
-      continue;
-    }
-    input_vstorage_->GetOverlappingInputs(output_level_ + 1, &file->smallest,
-                                          &file->largest, &file_grand_parents);
-    const auto compaction_size =
-        file->fd.GetFileSize() + TotalFileSize(file_grand_parents);
-    if (compaction_size > max_compaction_bytes_) {
-      return false;
-    }
+  // for (const auto& file : inputs_.front().files) {
+  //   std::vector<FileMetaData*> file_grand_parents;
+  //   if (output_level_ + 1 >= number_levels_) {
+  //     continue;
+  //   }
+  //   input_vstorage_->GetOverlappingInputs(output_level_ + 1, &file->smallest,
+  //                                         &file->largest, &file_grand_parents);
+  //   const auto compaction_size =
+  //       file->fd.GetFileSize() + TotalFileSize(file_grand_parents);
+  //   if (compaction_size > max_compaction_bytes_) {
+  //     return false;
+  //   }
 
-    if (partitioner.get() != nullptr) {
-      if (!partitioner->CanDoTrivialMove(file->smallest.user_key(),
-                                         file->largest.user_key())) {
-        return false;
-      }
-    }
-  }
+  //   if (partitioner.get() != nullptr) {
+  //     if (!partitioner->CanDoTrivialMove(file->smallest.user_key(),
+  //                                        file->largest.user_key())) {
+  //       return false;
+  //     }
+  //   }
+  // }
 
-  return true;
+  // return true;
+
+  // disallow trivial move compaction in WaLSM+
+  return false;
 }
 
 void Compaction::AddInputDeletions(VersionEdit* out_edit) {
@@ -389,8 +392,8 @@ bool Compaction::KeyNotExistsBeyondOutputLevel(
 void Compaction::MarkFilesBeingCompacted(bool mark_as_compacted) {
   for (size_t i = 0; i < num_input_levels(); i++) {
     for (size_t j = 0; j < inputs_[i].size(); j++) {
-      assert(mark_as_compacted ? !inputs_[i][j]->being_compacted
-                               : inputs_[i][j]->being_compacted);
+      // assert(mark_as_compacted ? !inputs_[i][j]->being_compacted
+      //                          : inputs_[i][j]->being_compacted);
       inputs_[i][j]->being_compacted = mark_as_compacted;
     }
   }

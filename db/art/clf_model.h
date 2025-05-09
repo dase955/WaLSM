@@ -85,7 +85,7 @@ public:
                 feature_num_ = MAX_FEATURES_NUM;
             }
         }
-
+        assert(feature_num_ == MAX_FEATURES_NUM);
         // std::cout << "[DEBUG] ClfModel ready, feature_num_: " << feature_num_ << std::endl;
     }
 

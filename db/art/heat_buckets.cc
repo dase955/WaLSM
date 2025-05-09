@@ -70,13 +70,16 @@ void HeatBuckets::update() {
         mutex_ptrs_[i]->lock();
     }
 
-    // TODO: use multiple threads to update hotness of all buckets
-    for (size_t i=0; i<buckets_.size(); i++) {
-        buckets_[i].update(BUCKETS_ALPHA, current_cnt_);
-        mutex_ptrs_[i]->unlock();
-    }
+    uint32_t current_cnt = current_cnt_;
+
     // remember to reset current_cnt_ counter
     current_cnt_ = 0;
+
+    // TODO: use multiple threads to update hotness of all buckets
+    for (size_t i=0; i<buckets_.size(); i++) {
+        buckets_[i].update(BUCKETS_ALPHA, current_cnt);
+        mutex_ptrs_[i]->unlock();
+    }
 }
 
 uint32_t HeatBuckets::locate(const std::string& key) {
@@ -130,17 +133,22 @@ void HeatBuckets::hit(const std::string& key, const bool& signal) {
     buckets_[idx].hit(); // mutex only permits one write opr to one bucket
     mutex_ptrs_[idx]->unlock();
 
-    cnt_mutex_.lock();
     current_cnt_ += 1;
    
     // use updated_ to prevent from updating hotness in a very short time span (due to multi-threads operation)
     if (signal && !updated_) {
-        // debug();
-        update();
+        cnt_mutex_.lock();
+        // recheck updated_ to avoid multi-updating in a short time
+        if (signal && !updated_) {
+            // debug();
+            update();
+        }
+        cnt_mutex_.unlock();
     }
-    cnt_mutex_.unlock();
+    
 
     // remember to reset updated_ to false
+    // use this condition to avoid multi-updating in a short time
     if (updated_ && current_cnt_ >= PERIOD_COUNT / MAGIC_FACTOR) {
         updated_ = false; 
     }
@@ -155,6 +163,8 @@ SamplesPool::SamplesPool() {
     // however std::set only remain deduplicated keys
     // to collect good samples for previous put keys, we need a larger SAMPLES_MAXCNT
     assert(SAMPLES_MAXCNT >= MAGIC_FACTOR * SAMPLES_LIMIT); 
+    // key ranges number must be more smaller than sample pool size. 
+    assert(MAGIC_FACTOR * APPROXIMATE_BUCKETS_NUM <= SAMPLES_LIMIT); 
 }
 
 void SamplesPool::clear() {
@@ -208,7 +218,7 @@ void SamplesPool::prepare() {
     // add border guard
     std::string key_min = "user"; // defined min key for YCSB
     // std::string key_max = pool_[pool_.size()-1] + pool_[pool_.size()-1];
-    std::string key_max = "user" + std::string(512, '9');
+    std::string key_max = "user" + std::string(512, '9'); // this key must exteed each key of requests
     pool_.emplace(pool_.begin(), key_min);
     pool_.emplace_back(key_max);
 }
@@ -254,9 +264,9 @@ uint32_t SamplesPool::determine_k(std::vector<std::vector<std::string>>& segment
     uint32_t k = pool_.size() - 2;
     // if segments is empty, use default k to debug
     if (segments.empty()) {
-        k = (pool_.size() - 2) / DEFAULT_BUCKETS_NUM;  
+        k = (pool_.size() - 2) / APPROXIMATE_BUCKETS_NUM;  
     }
-    assert(k > 1);
+    assert(k >= 1);
     for (auto& segment : segments) {
         assert(segment.size() == 2);
         assert(segment[0] < segment[1]);
@@ -289,13 +299,13 @@ void HeatBuckets::init(std::vector<std::vector<std::string>>& segments) {
     uint32_t k = samples_.determine_k(segments);
     samples_.divide(k, seperators_);
 
-    std::cout << "[DEBUG] show key ranges below: " << std::endl;
-    for (size_t i=0; i<seperators_.size()-1; i++) {
-        std::cout << "[DEBUG] key range " << i+1;
-        std::cout << ": " << seperators_[i];
-        std::cout << "  --  " << seperators_[i+1];
-        std::cout << std::endl;
-    }
+    // std::cout << "[DEBUG] show key ranges below: " << std::endl;
+    // for (size_t i=0; i<seperators_.size()-1; i++) {
+    //     std::cout << "[DEBUG] key range " << i+1;
+    //     std::cout << ": " << seperators_[i];
+    //     std::cout << "  --  " << seperators_[i+1];
+    //     std::cout << std::endl;
+    // }
     for (size_t i=0; i<seperators_.size()-1; i++) {
         // std::cout << "[DEBUG] key range " << i+1;
         // std::cout << ": " << seperators_[i];
@@ -319,5 +329,8 @@ void HeatBuckets::init(std::vector<std::vector<std::string>>& segments) {
     // debug
     // std::cout << "[DEBUG] heat buckets size: " << buckets_.size() << std::endl;
     // std::cout << "[DEBUG] key ranges init" << std::endl;
+    std::cout << "[RANGE] seperators_ size : " << seperators_.size() << std::endl;
+    std::cout << "[RANGE] buckets_ size : " << buckets_.size() << std::endl;
+    std::cout << "[RANGE] mutex_ptrs_ size : " << mutex_ptrs_.size() << std::endl;
 }
 }

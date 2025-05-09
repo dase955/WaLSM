@@ -36,36 +36,67 @@ void FilterCacheClient::do_retrain_or_keep_model(std::vector<uint16_t>* features
     std::map<uint32_t, uint16_t> level_copy;
     std::map<uint32_t, std::vector<RangeRatePair>> segment_ranges_copy;
     std::map<uint32_t, uint32_t> unit_size_copy;
+    bool clf_ready = false;
+    bool clf_train = false; // if true, then clf model evaluated or retrained
+    assert(READY_RATE < FULL_RATE && READY_RATE >= 0);
     // if this func background monitor signal, how can it receive latest argument? input pointer!
-    while (!filter_cache_manager_.heat_buckets_ready());
-    while (!filter_cache_manager_.ready_work()); // wait for manager ready
+    while (!filter_cache_manager_.heat_buckets_ready())
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
     assert(filter_cache_manager_.heat_buckets_ready()); // must guarantee that heat buckets ready before we make filter cache manager ready
+    std::cout << "[MODEL] heat buckets are ready." << std::endl;
+    while (!filter_cache_manager_.ready_work())
+        std::this_thread::sleep_for(std::chrono::milliseconds(100)); // wait for manager ready
+    assert(filter_cache_manager_.ready_work());                                                
+    std::cout << "[MODEL] filter cache is ready." << std::endl;
     
     // actually we will load data before we test, so we can ensure that heat buckets ready first
-    filter_cache_manager_.make_clf_model_ready(*features_nums_except_level_0);
+    std::cout << "[MODEL] model feature number: " << (*features_nums_except_level_0)[0] << std::endl;
+    assert((*features_nums_except_level_0)[0] == MAX_FEATURES_NUM);
+    clf_ready = filter_cache_manager_.make_clf_model_ready(*features_nums_except_level_0);
+    assert(clf_ready);
     // lock and copy recorders
     global_filter_cache_recorders_mutex.lock();
     level_copy = *level_recorder; 
     segment_ranges_copy = *segment_ranges_recorder;
     unit_size_copy = *unit_size_recorder;
     global_filter_cache_recorders_mutex.unlock();
-    // train first time, before that, there is no model left
-    filter_cache_manager_.try_retrain_model(level_copy, segment_ranges_copy, unit_size_copy);
-    filter_cache_manager_.update_cache_and_heap(level_copy, segment_ranges_copy);
+    assert(level_copy.size() == segment_ranges_copy.size());
+    std::cout << "[MODEL] level recorder size (include level 0): " << level_copy.size() << std::endl;
+    std::cout << "[MODEL] range recorder size (include level 0): " << segment_ranges_copy.size() << std::endl;
+    // train first time, before that, there is no model left. 
+    // Note: if it reach here when YCSB loading, we dont train model. we will train first model when one long period ends.
+    clf_train = filter_cache_manager_.try_retrain_model(level_copy, segment_ranges_copy, unit_size_copy);
+    if (clf_train) {
+        assert(false); // only train first model when YCSB load ends.
+        std::cout << "[MODEL] we retrain a new model, thus we update filter cache and heaps" << std::endl;
+        std::cout << "[MODEL] level recorder size (exclude level 0): " << level_copy.size() << std::endl;
+        std::cout << "[MODEL] range recorder size (exclude level 0): " << segment_ranges_copy.size() << std::endl;
+        filter_cache_manager_.update_cache_and_heap(level_copy, segment_ranges_copy); 
+    }
 
     // retrain in long periods
     while (true) {
         // in one long period
-        while (!filter_cache_manager_.need_retrain()); // wait for long period end
+        while (!filter_cache_manager_.need_retrain())
+            std::this_thread::sleep_for(std::chrono::milliseconds(100)); // wait for long period end
+        assert(filter_cache_manager_.need_retrain());
         // lock and copy recorders
         global_filter_cache_recorders_mutex.lock();
         level_copy = *level_recorder; 
         segment_ranges_copy = *segment_ranges_recorder;
         unit_size_copy = *unit_size_recorder;
         global_filter_cache_recorders_mutex.unlock();
+        assert(level_copy.size() == segment_ranges_copy.size());
+        std::cout << "[MODEL] level recorder size (include level 0): " << level_copy.size() << std::endl;
+        std::cout << "[MODEL] range recorder size (include level 0): " << segment_ranges_copy.size() << std::endl;
         // train first time, before that, there is no model left
-        filter_cache_manager_.try_retrain_model(level_copy, segment_ranges_copy, unit_size_copy);
-        filter_cache_manager_.update_cache_and_heap(level_copy, segment_ranges_copy);
+        clf_train = filter_cache_manager_.try_retrain_model(level_copy, segment_ranges_copy, unit_size_copy);
+        if (clf_train) {
+            std::cout << "[MODEL] we retrain a new model, thus we update filter cache and heaps" << std::endl;
+            std::cout << "[MODEL] level recorder size (exclude level 0): " << level_copy.size() << std::endl;
+            std::cout << "[MODEL] range recorder size (exclude level 0): " << segment_ranges_copy.size() << std::endl;
+            filter_cache_manager_.update_cache_and_heap(level_copy, segment_ranges_copy);
+        }
     }
     // this loop never end
 }
@@ -82,15 +113,16 @@ void FilterCacheClient::retrain_or_keep_model(std::vector<uint16_t>* features_nu
     // no need to return any value
 }
 
-// TODO: make it a atomic operation rather than a mutex + threading
+// // TODO: make it a atomic operation rather than a mutex + threading
 void FilterCacheClient::do_hit_count_recorder(uint32_t segment_id) {
     filter_cache_manager_.hit_count_recorder(segment_id);
 }
 
 std::vector<CachableEntry<ParsedFullFilterBlock>> FilterCacheClient::get_filter_blocks(uint32_t segment_id) {
-    pool_.submit_detach([this, segment_id]() {
-        do_hit_count_recorder(segment_id);
-    });
+    // pool_.submit_detach([this, segment_id]() {
+    //     do_hit_count_recorder(segment_id);
+    // });
+    do_hit_count_recorder(segment_id);
     return filter_cache_manager_.get_filter_blocks(segment_id);
 }
 
@@ -98,9 +130,22 @@ void FilterCacheClient::do_hit_heat_buckets(const std::string& key) {
     filter_cache_manager_.hit_heat_buckets(key);
 }
 
-void FilterCacheClient::get_updating_work(const std::string& key) {
-    pool_.submit_detach([this, key]() {
-        do_hit_heat_buckets(key);
+void FilterCacheClient::hit_heat_buckets(const std::string& key) {
+    // pool_.submit_detach([this, key]() {
+    //     do_hit_heat_buckets(key);
+    // });
+    do_hit_heat_buckets(key);
+}
+
+void FilterCacheClient::do_periods_work() {
+    while (true) {
+        filter_cache_manager_.do_periods_work();
+    }
+}
+
+void FilterCacheClient::periods_work() {
+    pool_.submit_detach([this]() {
+        do_periods_work();
     });
 }
 
@@ -145,11 +190,17 @@ void FilterCacheClient::batch_insert_segments(std::vector<uint32_t> merged_segme
 void FilterCacheClient::update_cfd_ptr_if_needed(ColumnFamilyData* cfd) {
     filter_cache_manager_.update_cfd(cfd);
 }
+
 void FilterCacheClient::do_batch_delete_segments(std::vector<uint32_t>& merged_segment_ids) {
+    assert(false);
+    exit(1);
     filter_cache_manager_.delete_segments(merged_segment_ids);
 }
 
+// disallowed in WaLSM+
 void FilterCacheClient::batch_delete_segments(std::vector<uint32_t> merged_segment_ids) {
+    assert(false);
+    exit(1);
     pool_.submit_detach([this, merged_segment_ids]() mutable {
         do_batch_delete_segments(merged_segment_ids);
     });
@@ -159,13 +210,18 @@ void FilterCacheClient::do_batch_move_segments(std::vector<uint32_t>& moved_segm
                                                std::map<uint32_t, uint16_t>& old_level_recorder,
                                                std::map<uint32_t, uint16_t>& move_level_recorder,
                                                std::map<uint32_t, std::vector<RangeRatePair>>& move_segment_ranges_recorder) {
+    assert(false);
+    exit(1);
     filter_cache_manager_.move_segments(moved_segment_ids, old_level_recorder, move_level_recorder, move_segment_ranges_recorder);                                         
 }
 
+// disallowed in WaLSM+
 void FilterCacheClient::batch_move_segments(std::vector<uint32_t> moved_segment_ids,
                                             std::map<uint32_t, uint16_t> old_level_recorder,
                                             std::map<uint32_t, uint16_t> move_level_recorder,
                                             std::map<uint32_t, std::vector<RangeRatePair>> move_segment_ranges_recorder) {
+    assert(false);
+    exit(1);
     assert(moved_segment_ids.size() == move_level_recorder.size());
     assert(moved_segment_ids.size() == move_segment_ranges_recorder.size());
     pool_.submit_detach([this, &moved_segment_ids, &old_level_recorder, &move_level_recorder, &move_segment_ranges_recorder]() {

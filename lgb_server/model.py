@@ -3,7 +3,7 @@ import lightgbm
 import numpy
 import math
 
-model_path = '/pg_wal/ycc/'
+model_path = '/home/guoteng_20241228_135/WaLSM+/log/'
 # model_path = ''
 
 class LGBModel():
@@ -11,11 +11,14 @@ class LGBModel():
         self.__model = None
         # one unit is 4 bits-per-key, class = 2 mean bits-per-key = 4 * 2 = 8
         # the default bits-per-key value of previous benchmark is 10
-        self.__default_class = 2
-        self.__bits_per_key = 4 # bits_per_key for one filter unit
+        self.__min_class = 0
+        self.__max_class = 12
+        self.__num_classes = (self.__max_class - self.__min_class) + 1
+        self.__default_class = 5
+        self.__bits_per_key = 2 # bits_per_key for one filter unit, must larger than 1
         self.__num_probes = math.floor(self.__bits_per_key * 0.69) # 4 * 0.69 = 2.76 -> 2
         self.__rate_per_unit = math.pow(1.0 - math.exp(-self.__num_probes/self.__bits_per_key), self.__num_probes) # false positive rate of one unit
-        self.__cost_rate_line = 0.10 # we can torelate deviation that is no more than self.__cost_rate_line * (best I/O cost) (compared to best I/O cost)
+        self.__cost_threshold = 1 # we can torelate deviation that is no more than self.__cost_rate_line * (best I/O cost) (compared to best I/O cost)
         self.__model_name = 'model.txt'
         # self.__host = '127.0.0.1'
         # self.__port = '6666'
@@ -37,29 +40,37 @@ class LGBModel():
             
         assert len(count_list) == len(class_list)
         assert len(preds_list) == len(class_list)
+        assert self.__bits_per_key > 1
         
         best_cost = 0.0
         pred_cost = 0.0
         for i in range(0, len(class_list)):
             best_cost += math.pow(self.__rate_per_unit, class_list[i]) * count_list[i]
             pred_cost += math.pow(self.__rate_per_unit, preds_list[i]) * count_list[i]
+        # if pred_cost < best_cost, then the pred_cost will use more memory than the limitation
+        # we force the model to be retrained
+        if pred_cost < best_cost:
+            print("pred_cost smaller than best_cost, forced to retrain")
+            pred_cost += best_cost + best_cost * self.__cost_threshold
         
-        # print("best cost : " + str(best_cost) + ", pred cost: " + str(pred_cost))
-        return math.fabs((pred_cost-best_cost)/best_cost) < self.__cost_rate_line
+        print("best cost : " + str(best_cost) + ", pred cost: " + str(pred_cost))
+        return math.fabs((pred_cost-best_cost)/best_cost) < self.__cost_threshold
         
     def train(self, dataset: str) -> str:
         df = pd.read_csv(dataset)
         y = df['Target']
         c = df['Count'] # used to check I/O cost metric
         X = df.drop(columns=['Target', 'Count'])
+        # print("Length of X:", X.shape[1])
         if self.__model is not None and self.__evaluate_model(X, y, c): 
             # still work well
             return 'no need to train'
         # clf = lightgbm.LGBMClassifier(min_child_samples=1, n_estimators=1, objective="multiclass")
-        clf = lightgbm.LGBMClassifier()
+        clf = lightgbm.LGBMClassifier(verbosity=-1, n_estimators=3, objective="multiclass", num_class=self.__num_classes)
         clf.fit(X, y)
         # if we directly set self.__model = clf, then self.__model always predict class 0
         # we need save clf to txt file, then read this model to init self.__model
+        print('train a new model')
         clf.booster_.save_model(model_path + self.__model_name)
         self.__model = lightgbm.Booster(model_file=model_path+self.__model_name)
         # print('load a new model')

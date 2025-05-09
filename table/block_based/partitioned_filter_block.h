@@ -15,6 +15,7 @@
 #include "db/dbformat.h"
 #include "db/art/filter_cache_client.h"
 #include "index_builder.h"
+#include "rocksdb/comparator.h"
 #include "rocksdb/options.h"
 #include "rocksdb/slice.h"
 #include "rocksdb/slice_transform.h"
@@ -90,12 +91,13 @@ class PartitionedFilterBlockBuilder : public FullFilterBlockBuilder {
   // When Finish() is called, return filters[filter_index].front() (WaLSM+)
   int finishing_filter_index_;
   static std::atomic<uint32_t> segment_id_base_;
-  std::vector<Slice> keys_in_current_segment_;
+  std::vector<std::string> keys_in_current_segment_;
   std::vector<uint32_t> segment_ids_in_current_segment_;
   std::map<uint32_t, uint32_t> source_segment_ids_count;
   std::size_t current_range_index_;
   const std::vector<std::string>& range_separators_;
   const InternalKeyComparator* const internal_comparator_;
+  const Comparator* user_comparator_;
   SegmentBuilderResult segment_builder_result_;
   #endif
 };

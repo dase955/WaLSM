@@ -214,6 +214,7 @@ inline void BlockFetcher::GetBlockContents() {
 }
 
 Status BlockFetcher::ReadBlockContents() {
+  if (file_ == nullptr) return IOStatus::NotFound(Status::SubCode::kNone); // handle to special error of enable_units
   if (TryGetUncompressBlockFromPersistentCache()) {
     compression_type_ = kNoCompression;
 #ifndef NDEBUG

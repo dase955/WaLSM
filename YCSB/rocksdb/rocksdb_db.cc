@@ -18,7 +18,12 @@
 #include <rocksdb/status.h>
 #include <rocksdb/utilities/options_util.h>
 #include <rocksdb/write_batch.h>
+#include <atomic>
 #include <fstream>
+#include <mutex>
+#include "rocksdb/table.h"
+
+#include <unistd.h>
 
 namespace {
   const std::string PROP_NAME = "rocksdb.dbname";
@@ -230,6 +235,7 @@ void RocksdbDB::Cleanup() {
   if (--ref_cnt_) {
     return;
   }
+  sleep(5); // sleep 5 seconds to wait for final reports
   delete db_;
 }
 
@@ -343,6 +349,9 @@ void RocksdbDB::GetOptions(const utils::Properties &props, rocksdb::Options *opt
     table_options.index_type = rocksdb::BlockBasedTableOptions::kTwoLevelIndexSearch;
     table_options.partition_filters = true;
     table_options.cache_index_and_filter_blocks = true;
+    table_options.index_shortening = rocksdb::BlockBasedTableOptions::IndexShorteningMode::kNoShortening;
+    table_options.block_size = 256 * 1024;
+    table_options.metadata_block_size = 8 * 1024;
     size_t cache_size = std::stoul(props.GetProperty(PROP_CACHE_SIZE, PROP_CACHE_SIZE_DEFAULT));
     if (cache_size > 0) {
       block_cache = rocksdb::NewLRUCache(cache_size);
@@ -533,6 +542,13 @@ DB::Status RocksdbDB::MergeSingle(const std::string &table, const std::string &k
 
 DB::Status RocksdbDB::InsertSingle(const std::string &table, const std::string &key,
                                    std::vector<Field> &values) {
+  // static std::ofstream ofile("first_keys.txt");
+  // static std::atomic<int> key_counter{0};
+  // static std::mutex mutex;
+  // if (key_counter.fetch_add(1) < 10500000) {
+  //   std::lock_guard<std::mutex> lock_guard(mutex);
+  //   ofile << (key + "\n");
+  // }
   std::string data;
   SerializeRow(values, data);
   rocksdb::WriteOptions wopt;

@@ -259,10 +259,26 @@ DBImpl::DBImpl(const DBOptions& options, const std::string& dbname,
     if (features_num > 0) {
       global_features_nums_except_level_0.emplace_back(features_num);
     }
+    global_filter_cache.periods_work();
     global_filter_cache.retrain_or_keep_model(
         &global_features_nums_except_level_0, &global_level_recorder,
         &global_segment_ranges_recorder, &global_unit_size_recorder);
     global_filter_cache.make_adjustment();
+    #ifdef SAMPLES_FILE
+    std::ifstream input(SAMPLES_FILE);
+    assert(input.is_open());
+
+    std::string art_key;
+    uint32_t key_count = 0;
+    while (std::getline(input, art_key)) {
+      global_filter_cache.prepare_heat_buckets(art_key, &global_segment_info_recorder);
+    }
+    assert(global_filter_cache.range_seperators().size() > 0); // heat buckets must be ready 
+    // std::cout << "seperators size: " << global_filter_cache.range_seperators().size() << std::endl;
+    // for (std::string &seperator : global_filter_cache.range_seperators()) {
+    //   std::cout << seperator << std::endl;
+    // }
+    #endif
   }
 #endif
   // !batch_per_trx_ implies seq_per_batch_ because it is only unset for
@@ -1775,7 +1791,7 @@ Status DBImpl::GetImpl(const ReadOptions& read_options, const Slice& key,
 #ifdef ART
 #ifdef ART_PLUS
   std::string art_key(key.data(), key.size());
-  global_filter_cache.get_updating_work(art_key);
+  global_filter_cache.hit_heat_buckets(art_key);
   // ready to estimate hotness, update heat buckets
   /*
   if (heat_buckets_.is_ready()) {
@@ -1801,7 +1817,7 @@ Status DBImpl::GetImpl(const ReadOptions& read_options, const Slice& key,
     // only one thread can train model.
     if (need_train) {
       std::fstream f_model;
-      f_model.open("/pg_wal/ycc/model.log", std::ios::out | std::ios::app);
+      f_model.open("/home/guoteng_20241228_135/WaLSM+/log/model.log", std::ios::out | std::ios::app);
       f_model << "[DEBUG] try to train models" << std::endl;
       f_model << "[DEBUG] period_cnt_ : " << period_cnt_ << std::endl;
       f_model << "[DEBUG] PERIOD_COUNT : " << PERIOD_COUNT << std::endl;

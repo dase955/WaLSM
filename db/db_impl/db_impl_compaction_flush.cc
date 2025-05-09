@@ -2674,6 +2674,15 @@ void DBImpl::SyncCallFlush(std::vector<SingleCompactionJob*>& jobs) {
       }
     }
 
+    // WaLSM+ debug
+    for (auto& db_job : db_jobs) {
+      auto& meta = db_job.nvm_flush_job->meta_;
+        std::cout << "f, filename=" << meta.fd.GetNumber() 
+                  << ", smallest=" << meta.smallest.user_key().ToString()
+                  << ", largest=" << meta.largest.user_key().ToString()
+                  << std::endl;
+    }
+
     TEST_SYNC_POINT("DBImpl::SyncCallFlush:FlushFinish:0");
     ReleaseFileNumberFromPendingOutputs(pending_outputs_inserted_elem);
 
@@ -3138,6 +3147,8 @@ Status DBImpl::BackgroundCompaction(bool* made_progress,
   } else if (c->deletion_compaction()) {
     // TODO(icanadi) Do we want to honor snapshots here? i.e. not delete old
     // file if there is alive snapshot pointing to it
+    assert(false); // cannot get here
+    exit(1);
     TEST_SYNC_POINT_CALLBACK("DBImpl::BackgroundCompaction:BeforeCompaction",
                              c->column_family_data());
     assert(c->num_input_files(1) == 0);
@@ -3183,6 +3194,8 @@ Status DBImpl::BackgroundCompaction(bool* made_progress,
     TEST_SYNC_POINT_CALLBACK("DBImpl::BackgroundCompaction:AfterCompaction",
                              c->column_family_data());
   } else if (!trivial_move_disallowed && c->IsTrivialMove()) {
+    assert(false); // cannot get here
+    exit(1);
     TEST_SYNC_POINT("DBImpl::BackgroundCompaction:TrivialMove");
     TEST_SYNC_POINT_CALLBACK("DBImpl::BackgroundCompaction:BeforeCompaction",
                              c->column_family_data());
@@ -3493,6 +3506,8 @@ Status DBImpl::BackgroundCompaction(bool* made_progress,
   //               we need a mutex to guarantee these recorders modified by only one background thread at one time
   assert(compaction_flag >= 0 && compaction_flag <= 3);
   if (compaction_flag == 1) {
+    assert(false); // cannot get here
+    exit(1);
     // lock and update global recorders
     global_filter_cache_recorders_mutex.lock();
     // remove merged segments
@@ -3570,6 +3585,8 @@ Status DBImpl::BackgroundCompaction(bool* made_progress,
     // std::map<uint32_t, std::vector<RangeRatePair>>* segment_ranges_recorder_
     // std::map<uint32_t, uint32_t>* unit_size_recorder_
   } else if (compaction_flag == 2) {
+    assert(false); // cannot get here
+    exit(1);
     // lock and update global recorders
     global_filter_cache_recorders_mutex.lock();
     // modify segments' level
@@ -3589,7 +3606,8 @@ Status DBImpl::BackgroundCompaction(bool* made_progress,
     while (range_it != global_segment_ranges_recorder.end()) {
       if (merged_segment_ids->count(range_it->first) > 0) {
         new_segment_ranges_recorder->insert(std::make_pair(range_it->first, range_it->second));
-        range_it = global_segment_ranges_recorder.erase(range_it);
+        // no need to erase
+        // range_it = global_segment_ranges_recorder.erase(range_it);
       } else {
         range_it ++;
       }
@@ -3608,16 +3626,16 @@ Status DBImpl::BackgroundCompaction(bool* made_progress,
 
     assert(new_level_recorder->size() == new_segment_ranges_recorder->size());
     auto new_level_it = new_level_recorder->begin();
-    auto new_range_it = new_segment_ranges_recorder->begin();
+    // auto new_range_it = new_segment_ranges_recorder->begin();
     auto new_units_it = new_unit_size_recorder->begin();
     while (new_level_it != new_level_recorder->end()) {
       global_level_recorder.insert(std::make_pair(new_level_it->first, new_level_it->second));
       new_level_it ++;
     }
-    while (new_range_it != new_segment_ranges_recorder->end()) {
-      global_segment_ranges_recorder.insert(std::make_pair(new_range_it->first, new_range_it->second));
-      new_range_it ++;
-    }
+    // while (new_range_it != new_segment_ranges_recorder->end()) {
+    //   global_segment_ranges_recorder.insert(std::make_pair(new_range_it->first, new_range_it->second));
+    //   new_range_it ++;
+    // }
     while (new_units_it != new_unit_size_recorder->end()) {
       // unit_size_recorder_.insert(std::make_pair(new_units_it->first, new_units_it->second));
       new_units_it ++;

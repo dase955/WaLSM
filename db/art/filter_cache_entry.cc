@@ -63,6 +63,11 @@ FilterCacheEntry::get_filter_blocks() {
 
   result.reserve(loaded_units_num_);
   for (size_t i = 0; i < loaded_units_num_; i++) {
+    if (cache_handles_[i] == nullptr) {
+      result.emplace_back(nullptr, nullptr, nullptr, false);
+      result[i].Reset();
+      continue;
+    }
     result.emplace_back(cache_handles_[i]->value_.get(), filter_cache_,
                         cache_handles_[i].get(), false);
   }
@@ -99,6 +104,9 @@ void FilterCacheEntry::enable_units(uint32_t target_unit_num) {
 
       // do nothing if no data retrieved
       if (!s.ok()) {
+        std::cout << "failed to retrive filter data, segment id: " << segment_id_ << std::endl;
+        cache_handles_[i].reset();
+        units_[i].reset();
         break;
       }
 

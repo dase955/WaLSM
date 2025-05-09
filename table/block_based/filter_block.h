@@ -53,6 +53,7 @@ struct SegmentBuilderResult {
 
     std::string smallest_key;
     std::string largest_key;
+    uint32_t key_count;
   };
 
   std::set<uint32_t> new_segment_ids;

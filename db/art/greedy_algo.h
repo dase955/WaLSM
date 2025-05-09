@@ -15,7 +15,7 @@ struct SegmentAlgoHelper;
 class GreedyAlgo;
 
 inline double StandardBenefit(const uint32_t& visit_cnt, const uint16_t& units_num);
-inline double StandardCost(const uint32_t& visit_cnt, const uint16_t& units_num);
+inline double StandardCostForDebug(const uint32_t& visit_cnt, const uint16_t& units_num);
 inline bool CompareSegmentAlgoHelper(const SegmentAlgoHelper& helper_1, const SegmentAlgoHelper& helper_2);
 
 // contain visit counter of every segment in last long period
@@ -81,7 +81,7 @@ inline double StandardBenefit(const uint32_t& visit_cnt, const uint16_t& units_n
     return benefit;
 }
 
-inline double StandardCost(const uint32_t& visit_cnt, const uint16_t& units_num) {
+inline double StandardCostForDebug(const uint32_t& visit_cnt, const uint16_t& units_num) {
     int bits_per_key = BITS_PER_KEY_PER_UNIT;
     // We intentionally round down to reduce probing cost a little bit
     int num_probes = static_cast<int>(bits_per_key * 0.69);  // 0.69 =~ ln(2)
@@ -91,22 +91,9 @@ inline double StandardCost(const uint32_t& visit_cnt, const uint16_t& units_num)
     // compute false positive rate of one filter unit
     double rate_per_unit = std::pow(1.0 - std::exp(-double(num_probes) / double(bits_per_key)), num_probes);
 
-    if (units_num <= MIN_UNITS_NUM) {
-        return __DBL_MAX__;
-    }
-
-    uint16_t next_units_num = units_num - 1;
     double rate = std::pow(rate_per_unit, units_num);
-    double next_rate = std::pow(rate_per_unit, next_units_num);
 
-    double cost = double(visit_cnt) * (next_rate - rate);
-    /*
-    std::cout << "visit_cnt : " << visit_cnt
-                << " , rate : " << rate
-                << " , next_rate : " << next_rate
-                << " . rate_per_unit : " << rate_per_unit 
-                << std::endl;
-    */
+    double cost = double(visit_cnt) * rate;
     assert(cost >= 0);
     return cost;
 }
@@ -125,6 +112,14 @@ public:
     // so make sure that only called by one thread
     void solve(std::map<uint32_t, SegmentAlgoInfo>& segment_algo_infos,
                 std::map<uint32_t, uint16_t>& algo_solution, const uint32_t& cache_size);
+
+    // simple check results
+    // noticed that if segment a visit_cnt >= segment b visit_cnt
+    // then segment a units_num >= segment b units_num
+    // and check whether usage exceeds cache size            
+    void verify(std::map<uint32_t, SegmentAlgoInfo>& segment_algo_infos,
+                std::map<uint32_t, uint16_t>& algo_solution, const uint32_t& cache_size);
+    
     // full debug process of GreedyAlgo, not thread-secured
     // so make sure that only called by one thread
     void debug(std::map<uint32_t, uint16_t>& algo_solution, const uint32_t& cache_size) {

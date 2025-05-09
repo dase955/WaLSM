@@ -8,6 +8,10 @@
 // found in the LICENSE file. See the AUTHORS file for names of contributors.
 
 #include "db/compaction/compaction_picker_universal.h"
+#include <iostream>
+#include <ostream>
+#include <set>
+#include "db/version_edit.h"
 #ifndef ROCKSDB_LITE
 
 #include <cinttypes>
@@ -659,12 +663,17 @@ Compaction* UniversalCompactionBuilder::PickCompactionForQLearning() {
       if (!partition->is_tier[i] && !partition->is_compaction_work[i]
           && partition->files_[i].size() > 1) {
         bool ok = true;
+        std::set<FileMetaData*> file_metadata_pointers;
         for (FileMetaData* f : partition->files_[i]) {
           if (f->being_compacted) {
             ok = false;
             break;
           }
+          if (file_metadata_pointers.count(f)) {
+            std::cout << "wtf" << std::endl;
+          }
           inputs[i].files.push_back(f);
+          file_metadata_pointers.insert(f);
         }
         if (!ok) {
           inputs[i].files.clear();

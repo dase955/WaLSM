@@ -11,12 +11,16 @@
 
 #include <algorithm>
 #include <cassert>
+#include <cctype>
 #include <cinttypes>
 #include <functional>
+#include <iostream>
 #include <list>
 #include <memory>
+#include <ostream>
 #include <random>
 #include <set>
+#include <string>
 #include <thread>
 #include <utility>
 #include <vector>
@@ -51,6 +55,7 @@
 #include "rocksdb/db.h"
 #include "rocksdb/env.h"
 #include "rocksdb/options.h"
+#include "rocksdb/slice.h"
 #include "rocksdb/sst_partitioner.h"
 #include "rocksdb/statistics.h"
 #include "rocksdb/status.h"
@@ -752,6 +757,30 @@ Status CompactionJob::Run() {
     }
   }
   segment_builder_result_.output_level = compact_->compaction->output_level();
+
+  static std::mutex debug_mutex;
+  {
+    std::lock_guard<std::mutex> lock_guard(debug_mutex);
+    for (auto& segment_result : segment_builder_result_.per_segment_results) {
+      std::cout << "segment_id=" << segment_result.segment_id << ": " << segment_result.range_rate_pairs.size() << " ranges, level=" << compact_->compaction->output_level() << ", count=" << segment_result.key_count;
+      std::cout << std::endl;
+      for (const auto& range_pair : segment_result.range_rate_pairs) {
+        std::cout << range_pair.range_id << "-" << range_pair.rate_in_segment << " ";
+      }
+      std::cout << std::endl;
+    }
+  }
+
+
+  // WaLSM+ debug
+  for (auto& state : compact_->sub_compact_states) {
+    for (auto& output : state.outputs) {
+      std::cout << "c, filename=" << output.meta.fd.GetNumber() 
+                << ", smallest=" << output.meta.smallest.user_key().ToString()
+                << ", largest=" << output.meta.largest.user_key().ToString()
+                << std::endl;
+    }
+  }
 
   // insert all filter block handles to FilterCache
   for (auto& state : compact_->sub_compact_states) {
