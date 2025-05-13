@@ -360,7 +360,7 @@ void RocksdbDB::GetOptions(const utils::Properties &props, rocksdb::Options *opt
     }
 
     rocksdb::BlockBasedTableOptions table_options;
-    table_options.pin_top_level_index_and_filter = true;
+    table_options.pin_top_level_index_and_filter = false;
     table_options.pin_l0_filter_and_index_blocks_in_cache = false;
     table_options.cache_index_and_filter_blocks_with_high_priority = true;
     table_options.index_type = rocksdb::BlockBasedTableOptions::kTwoLevelIndexSearch;

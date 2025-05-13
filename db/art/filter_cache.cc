@@ -808,8 +808,8 @@ void FilterCacheManager::update_cache_and_heap(std::map<uint32_t, uint16_t>& lev
     size_t idx = 0;
     // std::cout << std::endl << "sync units num limit" << std::endl;
     while (idx < segment_ids.size() && idx < preds.size()) {
-        segment_units_num_recorder.insert(std::make_pair(segment_ids[idx], std::max(preds[idx], uint16_t(1))));
-        current_units_num_limit_recorder.insert(std::make_pair(segment_ids[idx], std::max(preds[idx], uint16_t(1))));
+        segment_units_num_recorder.insert(std::make_pair(segment_ids[idx], preds[idx]));
+        current_units_num_limit_recorder.insert(std::make_pair(segment_ids[idx], preds[idx]));
         // std::cout << "segment id: " << segment_ids[idx] << ", units limit: " << preds[idx] << std::endl;
         idx = idx + 1;
     }
@@ -1071,7 +1071,7 @@ void FilterCacheManager::insert_segments(std::vector<uint32_t>& merged_segment_i
         assert(pred_datas.size() == pred_results.size());
         size_t pred_idx = 0;
         while (pred_idx < pred_segment_ids.size() && pred_idx < pred_results.size()) {
-            segment_units_num_recorder[pred_segment_ids[pred_idx]] = std::max(pred_results[pred_idx], uint16_t(1));
+            segment_units_num_recorder[pred_segment_ids[pred_idx]] = pred_results[pred_idx];
             assert(new_level_0_segment_ids.count(pred_segment_ids[pred_idx]) == 0);
             assert(pred_results[pred_idx] >= MIN_UNITS_NUM && pred_results[pred_idx] <= MAX_UNITS_NUM);
             pred_idx = pred_idx + 1;

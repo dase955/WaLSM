@@ -103,4 +103,3 @@ __pycache__/
 
 include/csv2/
 debug.*
-*.log

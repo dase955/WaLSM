@@ -654,15 +654,15 @@ bool PartitionedFilterBlockReader::MayMatch(
   std::vector<CachableEntry<ParsedFullFilterBlock>> filter_partition_blocks =
       filter_cache.get_filter_blocks(segment_id);
 
-  static std::array<std::atomic<int>, MAX_UNITS_NUM+1> filter_unit_num_hits;
-  static std::atomic<int> maymatch_calls{0};
-  filter_unit_num_hits[filter_partition_blocks.size()]++;
-  if (maymatch_calls.fetch_add(1) % 500000 == 0) {
-    std::cout << "maymatch_calls: " << maymatch_calls.load() << std::endl;
-    for (size_t i = 0; i < filter_unit_num_hits.size(); ++i) {
-      std::cout << "filter_unit_num_hits[" << i << "]: " << filter_unit_num_hits[i].load() << std::endl;
-    }
-  }
+  // static std::array<std::atomic<int>, MAX_UNITS_NUM+1> filter_unit_num_hits;
+  // static std::atomic<int> maymatch_calls{0};
+  // filter_unit_num_hits[filter_partition_blocks.size()]++;
+  // if (maymatch_calls.fetch_add(1) % 500000 == 0) {
+  //   std::cout << "maymatch_calls: " << maymatch_calls.load() << std::endl;
+  //   for (size_t i = 0; i < filter_unit_num_hits.size(); ++i) {
+  //     std::cout << "filter_unit_num_hits[" << i << "]: " << filter_unit_num_hits[i].load() << std::endl;
+  //   }
+  // }
 
   for (size_t hash_id = 0; hash_id < filter_partition_blocks.size(); ++hash_id) {
     FullFilterBlockReader filter_partition(

@@ -592,21 +592,21 @@ void CompactionJob::CollectDataAndPrefetch() {
   }
   segment_builder_result_.output_level = compact_->compaction->output_level();
 
-  static std::mutex debug_mutex;
-  {
-    std::lock_guard<std::mutex> lock_guard(debug_mutex);
-    for (auto& segment_result : segment_builder_result_.per_segment_results) {
-      double rate_sum = 0;
-      // std::cout << "segment_id=" << segment_result.segment_id << ": " << segment_result.range_rate_pairs.size() << " ranges, level=" << compact_->compaction->output_level() << ", count=" << segment_result.key_count;
-      // std::cout << std::endl;
-      for (const auto& range_pair : segment_result.range_rate_pairs) {
-        rate_sum += range_pair.rate_in_segment;
-        // std::cout << range_pair.range_id << "-" << range_pair.rate_in_segment << " ";
-      }
-      assert(rate_sum >= 0.98 && rate_sum <= 1.02);
-      // std::cout << std::endl;
-    }
-  }
+  // static std::mutex debug_mutex;
+  // {
+  //   std::lock_guard<std::mutex> lock_guard(debug_mutex);
+  //   for (auto& segment_result : segment_builder_result_.per_segment_results) {
+  //     double rate_sum = 0;
+  //     std::cout << "segment_id=" << segment_result.segment_id << ": " << segment_result.range_rate_pairs.size() << " ranges, level=" << compact_->compaction->output_level() << ", count=" << segment_result.key_count;
+  //     // std::cout << std::endl;
+  //     for (const auto& range_pair : segment_result.range_rate_pairs) {
+  //       rate_sum += range_pair.rate_in_segment;
+  //       // std::cout << range_pair.range_id << "-" << range_pair.rate_in_segment << " ";
+  //     }
+  //     assert(rate_sum >= 0.98 && rate_sum <= 1.02);
+  //     std::cout << std::endl;
+  //   }
+  // }
 
 
   // WaLSM+ debug
