@@ -76,10 +76,12 @@ void FilterCacheClient::do_retrain_or_keep_model(std::vector<uint16_t>* features
 
     // retrain in long periods
     while (true) {
+        bool adjusted = false;
         // in one long period
         while (!filter_cache_manager_.need_retrain()) {
             // std::this_thread::sleep_for(std::chrono::milliseconds(100)); // wait for long period end
-            filter_cache_manager_.adjust_cache_and_heap();
+            adjusted = filter_cache_manager_.adjust_cache_and_heap();
+            if (adjusted) std::cout << "[ADJUST] filter cache adjustment!" << std::endl;
         }
         assert(filter_cache_manager_.need_retrain());
         // lock and copy recorders
