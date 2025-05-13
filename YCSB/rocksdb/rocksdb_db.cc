@@ -138,7 +138,7 @@ namespace ycsbc {
 rocksdb::DB *RocksdbDB::db_ = nullptr;
 int RocksdbDB::ref_cnt_ = 0;
 std::mutex RocksdbDB::mu_;
-rocksdb::Options* test_opt = nullptr;
+rocksdb::Options opt;
 
 void RocksdbDB::Init() {
 // merge operator disabled by default due to link error
@@ -221,7 +221,6 @@ void RocksdbDB::Init() {
   std::vector<rocksdb::ColumnFamilyDescriptor> cf_descs;
   std::vector<rocksdb::ColumnFamilyHandle *> cf_handles;
   GetOptions(props, &opt, &cf_descs);
-  test_opt = &opt;
 #ifdef USE_MERGEUPDATE
   opt.merge_operator.reset(new YCSBUpdateMerge);
 #endif
@@ -248,7 +247,7 @@ void RocksdbDB::Cleanup() {
   if (--ref_cnt_) {
     return;
   }
-  std::cout << "Statistics: " << test_opt->statistics->ToString() << std::endl;
+  std::cout << "Statistics: " << opt.statistics->ToString() << std::endl;
   sleep(5); // sleep 5 seconds to wait for final reports
   delete db_;
 }
@@ -368,8 +367,6 @@ void RocksdbDB::GetOptions(const utils::Properties &props, rocksdb::Options *opt
     table_options.partition_filters = true;
     table_options.cache_index_and_filter_blocks = true;
     table_options.index_shortening = rocksdb::BlockBasedTableOptions::IndexShorteningMode::kNoShortening;
-    table_options.block_size = 32 * 1024;
-    table_options.metadata_block_size = 8 * 1024;
     size_t block_size = std::stoul(props.GetProperty(PROP_BLOCK_SIZE, PROP_BLOCK_SIZE_DEFAULT));
     if (block_size > 0) {
       table_options.block_size = block_size;
@@ -378,7 +375,6 @@ void RocksdbDB::GetOptions(const utils::Properties &props, rocksdb::Options *opt
     if (metadata_block_size > 0) {
       table_options.metadata_block_size = metadata_block_size;
     }
-    opt->statistics = rocksdb::CreateDBStatistics();
     size_t cache_size = std::stoul(props.GetProperty(PROP_CACHE_SIZE, PROP_CACHE_SIZE_DEFAULT));
     if (cache_size > 0) {
       block_cache = rocksdb::NewLRUCache(cache_size);
