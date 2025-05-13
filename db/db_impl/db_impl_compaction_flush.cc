@@ -2638,50 +2638,14 @@ void DBImpl::SyncCallFlush(std::vector<SingleCompactionJob*>& jobs) {
       }
     }
 
-    // std::vector<SegmentBuilderResult> segment_builder_results;
-    SegmentBuilderResult agg_segment_builder_result;
-    for (auto& db_job : db_jobs) {
-      // segment_builder_results.emplace_back(std::move(
-      //     db_job.nvm_flush_job->segment_builder_result_));
-      auto& sub_result = db_job.nvm_flush_job->segment_builder_result_;
-      agg_segment_builder_result.new_segment_ids.insert(
-          sub_result.new_segment_ids.begin(),
-          sub_result.new_segment_ids.end());
-
-      agg_segment_builder_result.merged_segment_ids.insert(
-          sub_result.merged_segment_ids.begin(),
-          sub_result.merged_segment_ids.end());
-
-      for (auto& per_segment_result : sub_result.per_segment_results) {
-        agg_segment_builder_result.per_segment_results.push_back(
-            std::move(per_segment_result));
-      }
-    }
-    agg_segment_builder_result.output_level = 0; // flushed
-
-    // insert all filter block handles to filtercache
-    // TableCache* table_cache = (TableCache*) table_cache_.get();
-    for (auto& db_job : db_jobs) {
-      auto& meta = db_job.nvm_flush_job->meta_;
-      assert(meta.fd.table_reader != nullptr);
-      const auto* table = meta.fd.table_reader;
-      auto block_handles_map = table->GetSegmentBlockHandles();
-      for (const auto& segment_id_and_block_handles : block_handles_map) {
-        auto segment_id = segment_id_and_block_handles.first;
-        const auto& block_handles = segment_id_and_block_handles.second;
-        // dangerous cast, but we know that the table is BlockBasedTable
-        global_filter_cache.init_segment(segment_id, (BlockBasedTable*) table, block_handles);
-      }
-    }
-
-    // WaLSM+ debug
-    for (auto& db_job : db_jobs) {
-      auto& meta = db_job.nvm_flush_job->meta_;
-        std::cout << "f, filename=" << meta.fd.GetNumber() 
-                  << ", smallest=" << meta.smallest.user_key().ToString()
-                  << ", largest=" << meta.largest.user_key().ToString()
-                  << std::endl;
-    }
+    // // WaLSM+ debug
+    // for (auto& db_job : db_jobs) {
+    //   auto& meta = db_job.nvm_flush_job->meta_;
+    //     std::cout << "f, filename=" << meta.fd.GetNumber() 
+    //               << ", smallest=" << meta.smallest.user_key().ToString()
+    //               << ", largest=" << meta.largest.user_key().ToString()
+    //               << std::endl;
+    // }
 
     TEST_SYNC_POINT("DBImpl::SyncCallFlush:FlushFinish:0");
     ReleaseFileNumberFromPendingOutputs(pending_outputs_inserted_elem);
@@ -2708,13 +2672,51 @@ void DBImpl::SyncCallFlush(std::vector<SingleCompactionJob*>& jobs) {
     }
     TEST_SYNC_POINT("DBImpl::SyncCallFlush:ContextCleanedUp");
 
+    atomic_flush_install_cv_.SignalAll();
+    bg_cv_.SignalAll();
+
+    // sync first, we leave other data collection work at last.
+    // std::vector<SegmentBuilderResult> segment_builder_results;
+    SegmentBuilderResult agg_segment_builder_result;
+    for (auto& db_job : db_jobs) {
+      // segment_builder_results.emplace_back(std::move(
+      //     db_job.nvm_flush_job->segment_builder_result_));
+      auto& sub_result = db_job.nvm_flush_job->segment_builder_result_;
+      agg_segment_builder_result.new_segment_ids.insert(
+          sub_result.new_segment_ids.begin(),
+          sub_result.new_segment_ids.end());
+
+      agg_segment_builder_result.merged_segment_ids.insert(
+          sub_result.merged_segment_ids.begin(),
+          sub_result.merged_segment_ids.end());
+
+      for (auto& per_segment_result : sub_result.per_segment_results) {
+        agg_segment_builder_result.per_segment_results.push_back(
+            std::move(per_segment_result));
+      }
+    }
+    agg_segment_builder_result.output_level = 0; // flushed
+    assert(agg_segment_builder_result.new_segment_ids.size() > 0);
+    // insert all filter block handles to filtercache
+    // TableCache* table_cache = (TableCache*) table_cache_.get();
+    for (auto& db_job : db_jobs) {
+      auto& meta = db_job.nvm_flush_job->meta_;
+      assert(meta.fd.table_reader != nullptr);
+      const auto* table = meta.fd.table_reader;
+      auto block_handles_map = table->GetSegmentBlockHandles();
+      assert(block_handles_map.size() > 0);
+      for (const auto& segment_id_and_block_handles : block_handles_map) {
+        auto segment_id = segment_id_and_block_handles.first;
+        const auto& block_handles = segment_id_and_block_handles.second;
+        // dangerous cast, but we know that the table is BlockBasedTable
+        global_filter_cache.init_segment(segment_id, (BlockBasedTable*) table, block_handles);
+      }
+    }
+
     for (auto& db_job : db_jobs) {
       num_running_flushes_--;
       delete db_job.nvm_flush_job;
     }
-
-    atomic_flush_install_cv_.SignalAll();
-    bg_cv_.SignalAll();
 
   #ifdef ART_PLUS
     // transfer agg_segment_builder_result to temp recorders
@@ -3144,7 +3146,7 @@ Status DBImpl::BackgroundCompaction(bool* made_progress,
   if (!c) {
     // Nothing to do
     ROCKS_LOG_BUFFER(log_buffer, "Compaction nothing to do");
-  } else if (c->deletion_compaction()) {
+  } else if (UNLIKELY(c->deletion_compaction())) {
     // TODO(icanadi) Do we want to honor snapshots here? i.e. not delete old
     // file if there is alive snapshot pointing to it
     assert(false); // cannot get here
@@ -3193,7 +3195,7 @@ Status DBImpl::BackgroundCompaction(bool* made_progress,
     *made_progress = true;
     TEST_SYNC_POINT_CALLBACK("DBImpl::BackgroundCompaction:AfterCompaction",
                              c->column_family_data());
-  } else if (!trivial_move_disallowed && c->IsTrivialMove()) {
+  } else if (UNLIKELY(!trivial_move_disallowed && c->IsTrivialMove())) {
     assert(false); // cannot get here
     exit(1);
     TEST_SYNC_POINT("DBImpl::BackgroundCompaction:TrivialMove");
@@ -3373,7 +3375,6 @@ Status DBImpl::BackgroundCompaction(bool* made_progress,
     // Should handle erorr?
     compaction_job.SetFilterCacheClient(&global_filter_cache);
     compaction_job.Run().PermitUncheckedError();
-    segment_builder_result = compaction_job.GetSegmentBuilderResult();
     TEST_SYNC_POINT("DBImpl::BackgroundCompaction:NonTrivial:AfterRun");
     mutex_.Lock();
 
@@ -3388,9 +3389,40 @@ Status DBImpl::BackgroundCompaction(bool* made_progress,
     TEST_SYNC_POINT_CALLBACK("DBImpl::BackgroundCompaction:AfterCompaction",
                              c->column_family_data());
 
-    
+  #ifdef ART_PLUS
+    if (status.ok() && !io_s.ok()) {
+      status = io_s;
+    } else {
+      io_s.PermitUncheckedError();
+    }
+
+    if (c != nullptr) {
+      c->ReleaseCompactionFiles(status);
+      *made_progress = true;
+
+    #ifndef ROCKSDB_LITE
+      // Need to make sure SstFileManager does its bookkeeping
+      auto sfm = static_cast<SstFileManagerImpl*>(
+          immutable_db_options_.sst_file_manager.get());
+      if (sfm && sfm_reserved_compact_space) {
+        sfm->OnCompactionCompletion(c.get());
+      }
+    #endif  // ROCKSDB_LITE
+
+      NotifyOnCompactionCompleted(c->column_family_data(), c.get(), status,
+                                  compaction_job_stats, job_context->job_id);
+    }
+  #endif
+
+    compaction_job.CollectDataAndPrefetch();
+    segment_builder_result = compaction_job.GetSegmentBuilderResult();
+    compaction_job.CleanupCompaction();
+    assert(segment_builder_result.new_segment_ids.size() > 0);
   }
 
+#ifdef ART_PLUS
+if (compaction_flag != 3) {
+#endif
   if (status.ok() && !io_s.ok()) {
     status = io_s;
   } else {
@@ -3413,7 +3445,9 @@ Status DBImpl::BackgroundCompaction(bool* made_progress,
     NotifyOnCompactionCompleted(c->column_family_data(), c.get(), status,
                                 compaction_job_stats, job_context->job_id);
   }
-
+#ifdef ART_PLUS
+}
+#endif
   if (status.ok() || status.IsCompactionTooLarge() ||
       status.IsManualCompactionPaused()) {
     // Done
@@ -3505,7 +3539,7 @@ Status DBImpl::BackgroundCompaction(bool* made_progress,
   // TODO(WaLSM+): if all ok, merge temp recorders into global DBImpl recorders. 
   //               we need a mutex to guarantee these recorders modified by only one background thread at one time
   assert(compaction_flag >= 0 && compaction_flag <= 3);
-  if (compaction_flag == 1) {
+  if (UNLIKELY(compaction_flag == 1)) {
     assert(false); // cannot get here
     exit(1);
     // lock and update global recorders
@@ -3584,7 +3618,7 @@ Status DBImpl::BackgroundCompaction(bool* made_progress,
     // std::map<uint32_t, uint16_t>* level_recorder_
     // std::map<uint32_t, std::vector<RangeRatePair>>* segment_ranges_recorder_
     // std::map<uint32_t, uint32_t>* unit_size_recorder_
-  } else if (compaction_flag == 2) {
+  } else if (UNLIKELY(compaction_flag == 2)) {
     assert(false); // cannot get here
     exit(1);
     // lock and update global recorders
@@ -3660,7 +3694,7 @@ Status DBImpl::BackgroundCompaction(bool* made_progress,
     // std::map<uint32_t, uint16_t>* level_recorder_
     // std::map<uint32_t, std::vector<RangeRatePair>>* segment_ranges_recorder_
     // std::map<uint32_t, uint32_t>* unit_size_recorder_
-  } else if (compaction_flag == 3) {
+  } else if (LIKELY(compaction_flag == 3)) {
     // get SegmentBuilderResult from compaction job
     
     // update merged_segment_ids and new_segment_ids

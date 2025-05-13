@@ -38,8 +38,8 @@ private:
     // background thread part of hit_heat_buckets
     void do_hit_heat_buckets(const std::string& key);
 
-    // background thread part of make_adjustment
-    void do_make_adjustment();
+    // // background thread part of make_adjustment
+    // void do_make_adjustment();
 
     // background thread part of batch_insert_segments
     void do_batch_insert_segments(std::vector<uint32_t>& merged_segment_ids, std::vector<uint32_t>& new_segment_ids,
@@ -99,8 +99,8 @@ public:
     // keep track of period count, update access counters and retrain classifier model
     void periods_work();
 
-    // heap based adjustment
-    void make_adjustment();
+    // // heap based adjustment
+    // void make_adjustment();
 
     // batch insert segments into filter cache manager, will also delete merged segments
     void batch_insert_segments(std::vector<uint32_t> merged_segment_ids, std::vector<uint32_t> new_segment_ids,

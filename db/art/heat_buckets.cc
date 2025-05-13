@@ -34,10 +34,8 @@ HeatBuckets::HeatBuckets() {
     seperators_.resize(0);
     buckets_.resize(0);
     current_cnt_ = 0;
-    mutex_ptrs_.resize(0);
     is_ready_ = false;
     samples_.clear(); 
-    updated_ = false;
 }
 
 HeatBuckets::~HeatBuckets() {
@@ -56,29 +54,23 @@ void HeatBuckets::debug() {
 }
 
 void HeatBuckets::update() {
-    // mark already updated, after current_cnt_ more than PERIOD_COUNT / MAGIC_FACTOR, updated_ will be reset to false;
-    // we need guarantee that in one period (one constant time span), db gets are much larger than PERIOD_COUNT / MAGIC_FACTOR;
-    // usually in server, exec get requests PERIOD_COUNT / MAGIC_FACTOR times only account for a very very short time.
-    if (updated_) {
-        return;
-    }
-
-    updated_ = true; 
-    
-    assert(mutex_ptrs_.size() == buckets_.size());
-    for (size_t i=0; i<mutex_ptrs_.size(); i++) {
-        mutex_ptrs_[i]->lock();
-    }
-
-    uint32_t current_cnt = current_cnt_;
+    uint32_t current_cnt = 0;
 
     // remember to reset current_cnt_ counter
-    current_cnt_ = 0;
+    if (current_cnt_ < PERIOD_COUNT) return;
+    hit_mutex_.WriteLock();
+    if (current_cnt_ >= PERIOD_COUNT) {
+        current_cnt = current_cnt_;
+        current_cnt_ = 0;
+    }
+    hit_mutex_.WriteUnlock();
 
+    if (current_cnt == 0) return;
+
+    // debug();
     // TODO: use multiple threads to update hotness of all buckets
     for (size_t i=0; i<buckets_.size(); i++) {
         buckets_[i].update(BUCKETS_ALPHA, current_cnt);
-        mutex_ptrs_[i]->unlock();
     }
 }
 
@@ -99,7 +91,7 @@ uint32_t HeatBuckets::locate(const std::string& key) {
     return left;
 }
 
-void HeatBuckets::hit(const std::string& key, const bool& signal) {
+void HeatBuckets::hit(const std::string& key, bool& signal) {
     assert(is_ready_);
     // use binary search to find index i, making seperators_[i] <= key and seperators_[i+1] > i
     // reminding we have set border guard, so dont worry about out of bounds error
@@ -125,32 +117,19 @@ void HeatBuckets::hit(const std::string& key, const bool& signal) {
     // std::cout << "debug mutex_ptrs_ size : " << mutex_ptrs_.size() << std::endl;
     // std::cout << "debug period_cnt_ : " << period_cnt_ << std::endl;
     // std::cout << "debug alpha_ : " << alpha_ << std::endl;
-    assert(buckets_.size() == mutex_ptrs_.size());
     assert(idx >= 0 && idx < buckets_.size());
     assert(seperators_[idx] <= key && key < seperators_[idx+1]);
     
-    mutex_ptrs_[idx]->lock();
+    hit_mutex_.ReadLock();
     buckets_[idx].hit(); // mutex only permits one write opr to one bucket
-    mutex_ptrs_[idx]->unlock();
-
     current_cnt_ += 1;
-   
-    // use updated_ to prevent from updating hotness in a very short time span (due to multi-threads operation)
-    if (signal && !updated_) {
-        cnt_mutex_.lock();
-        // recheck updated_ to avoid multi-updating in a short time
-        if (signal && !updated_) {
-            // debug();
-            update();
-        }
-        cnt_mutex_.unlock();
+    if (current_cnt_ >= PERIOD_COUNT) {
+        signal = true;
     }
-    
-
-    // remember to reset updated_ to false
-    // use this condition to avoid multi-updating in a short time
-    if (updated_ && current_cnt_ >= PERIOD_COUNT / MAGIC_FACTOR) {
-        updated_ = false; 
+    hit_mutex_.ReadUnlock();
+   
+    if (signal) {
+        update();
     }
 }
 
@@ -158,13 +137,6 @@ SamplesPool::SamplesPool() {
     samples_cnt_ = 0;
     pool_.resize(0);
     filter_.clear();
-
-    // because put opt will input duplicated keys, we need to guarantee SAMPLES_MAXCNT much larger than SAMPLES_LIMIT
-    // however std::set only remain deduplicated keys
-    // to collect good samples for previous put keys, we need a larger SAMPLES_MAXCNT
-    assert(SAMPLES_MAXCNT >= MAGIC_FACTOR * SAMPLES_LIMIT); 
-    // key ranges number must be more smaller than sample pool size. 
-    assert(MAGIC_FACTOR * APPROXIMATE_BUCKETS_NUM <= SAMPLES_LIMIT); 
 }
 
 void SamplesPool::clear() {
@@ -317,11 +289,6 @@ void HeatBuckets::init(std::vector<std::vector<std::string>>& segments) {
     // init other vars in HeatBuckets
     current_cnt_ = 0;
     buckets_.resize(seperators_.size()-1);
-    mutex_ptrs_.resize(0);
-    for (uint32_t i=0; i<buckets_.size(); i++) {
-        mutex_ptrs_.emplace_back(std::unique_ptr<std::mutex>(new std::mutex()));
-    }
-    assert(mutex_ptrs_.size() == buckets_.size());
     assert(seperators_.size() == buckets_.size()+1);
 
     is_ready_ = true;
@@ -331,6 +298,5 @@ void HeatBuckets::init(std::vector<std::vector<std::string>>& segments) {
     // std::cout << "[DEBUG] key ranges init" << std::endl;
     std::cout << "[RANGE] seperators_ size : " << seperators_.size() << std::endl;
     std::cout << "[RANGE] buckets_ size : " << buckets_.size() << std::endl;
-    std::cout << "[RANGE] mutex_ptrs_ size : " << mutex_ptrs_.size() << std::endl;
 }
 }

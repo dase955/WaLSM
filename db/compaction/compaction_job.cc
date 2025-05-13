@@ -571,6 +571,71 @@ void CompactionJob::GenSubcompactionBoundaries() {
   }
 }
 
+void CompactionJob::CollectDataAndPrefetch() {
+  // aggregate SegmentBuilderResult from subcompactions
+  for (auto& state : compact_->sub_compact_states) {
+    auto& sub_result = state.segment_builder_result;
+    assert(!sub_result.merged_segment_ids.empty());
+    assert(!sub_result.new_segment_ids.empty());
+    segment_builder_result_.new_segment_ids.insert(
+        sub_result.new_segment_ids.begin(),
+        sub_result.new_segment_ids.end());
+
+    segment_builder_result_.merged_segment_ids.insert(
+        sub_result.merged_segment_ids.begin(),
+        sub_result.merged_segment_ids.end());
+
+    for (auto& per_segment_result : sub_result.per_segment_results) {
+      segment_builder_result_.per_segment_results.push_back(
+          std::move(per_segment_result));
+    }
+  }
+  segment_builder_result_.output_level = compact_->compaction->output_level();
+
+  static std::mutex debug_mutex;
+  {
+    std::lock_guard<std::mutex> lock_guard(debug_mutex);
+    for (auto& segment_result : segment_builder_result_.per_segment_results) {
+      double rate_sum = 0;
+      // std::cout << "segment_id=" << segment_result.segment_id << ": " << segment_result.range_rate_pairs.size() << " ranges, level=" << compact_->compaction->output_level() << ", count=" << segment_result.key_count;
+      // std::cout << std::endl;
+      for (const auto& range_pair : segment_result.range_rate_pairs) {
+        rate_sum += range_pair.rate_in_segment;
+        // std::cout << range_pair.range_id << "-" << range_pair.rate_in_segment << " ";
+      }
+      assert(rate_sum >= 0.98 && rate_sum <= 1.02);
+      // std::cout << std::endl;
+    }
+  }
+
+
+  // WaLSM+ debug
+  // for (auto& state : compact_->sub_compact_states) {
+  //   for (auto& output : state.outputs) {
+  //     std::cout << "c, filename=" << output.meta.fd.GetNumber() 
+  //               << ", smallest=" << output.meta.smallest.user_key().ToString()
+  //               << ", largest=" << output.meta.largest.user_key().ToString()
+  //               << std::endl;
+  //   }
+  // }
+
+  // insert all filter block handles to FilterCache
+  for (auto& state : compact_->sub_compact_states) {
+    for (auto& output : state.outputs) {
+      assert(output.meta.fd.table_reader != nullptr);
+      const auto* table = output.meta.fd.table_reader;
+      auto block_handles_map = table->GetSegmentBlockHandles();
+      assert(block_handles_map.size() > 0);
+      for (const auto& segment_id_and_block_handles : block_handles_map) {
+        auto segment_id = segment_id_and_block_handles.first;
+        const auto& block_handles = segment_id_and_block_handles.second;
+        // dangerous cast, but we know that the table is BlockBasedTablde
+        filter_cache_client_->init_segment(segment_id, (BlockBasedTable*) table, block_handles);
+      }
+    }
+  }
+}
+
 // TODO(WaLSM+): pass temp recorders ptr and update
 Status CompactionJob::Run() {
   AutoThreadOperationStageUpdater stage_updater(
@@ -738,65 +803,6 @@ Status CompactionJob::Run() {
   }
   compact_->compaction->SetOutputTableProperties(std::move(tp));
 
-  // aggregate SegmentBuilderResult from subcompactions
-  for (auto& state : compact_->sub_compact_states) {
-    auto& sub_result = state.segment_builder_result;
-    assert(!sub_result.merged_segment_ids.empty());
-    assert(!sub_result.new_segment_ids.empty());
-    segment_builder_result_.new_segment_ids.insert(
-        sub_result.new_segment_ids.begin(),
-        sub_result.new_segment_ids.end());
-
-    segment_builder_result_.merged_segment_ids.insert(
-        sub_result.merged_segment_ids.begin(),
-        sub_result.merged_segment_ids.end());
-
-    for (auto& per_segment_result : sub_result.per_segment_results) {
-      segment_builder_result_.per_segment_results.push_back(
-          std::move(per_segment_result));
-    }
-  }
-  segment_builder_result_.output_level = compact_->compaction->output_level();
-
-  static std::mutex debug_mutex;
-  {
-    std::lock_guard<std::mutex> lock_guard(debug_mutex);
-    for (auto& segment_result : segment_builder_result_.per_segment_results) {
-      std::cout << "segment_id=" << segment_result.segment_id << ": " << segment_result.range_rate_pairs.size() << " ranges, level=" << compact_->compaction->output_level() << ", count=" << segment_result.key_count;
-      std::cout << std::endl;
-      for (const auto& range_pair : segment_result.range_rate_pairs) {
-        std::cout << range_pair.range_id << "-" << range_pair.rate_in_segment << " ";
-      }
-      std::cout << std::endl;
-    }
-  }
-
-
-  // WaLSM+ debug
-  for (auto& state : compact_->sub_compact_states) {
-    for (auto& output : state.outputs) {
-      std::cout << "c, filename=" << output.meta.fd.GetNumber() 
-                << ", smallest=" << output.meta.smallest.user_key().ToString()
-                << ", largest=" << output.meta.largest.user_key().ToString()
-                << std::endl;
-    }
-  }
-
-  // insert all filter block handles to FilterCache
-  for (auto& state : compact_->sub_compact_states) {
-    for (auto& output : state.outputs) {
-      assert(output.meta.fd.table_reader != nullptr);
-      const auto* table = output.meta.fd.table_reader;
-      auto block_handles_map = table->GetSegmentBlockHandles();
-      for (const auto& segment_id_and_block_handles : block_handles_map) {
-        auto segment_id = segment_id_and_block_handles.first;
-        const auto& block_handles = segment_id_and_block_handles.second;
-        // dangerous cast, but we know that the table is BlockBasedTablde
-        filter_cache_client_->init_segment(segment_id, (BlockBasedTable*) table, block_handles);
-      }
-    }
-  }
-
   // Finish up all book-keeping to unify the subcompaction results
   AggregateStatistics();
   UpdateCompactionStats();
@@ -920,7 +926,6 @@ Status CompactionJob::Install(const MutableCFOptions& mutable_cf_options) {
     stream.EndArray();
   }
 
-  CleanupCompaction();
   return status;
 }
 
@@ -1566,7 +1571,17 @@ Status CompactionJob::FinishCompactionOutputFile(
 #endif
 
   // WaLSM+: collect data before resetting builder pointer
-  sub_compact->segment_builder_result = sub_compact->builder->GetSegmentBuilderResult();
+  auto current_segment_builder_result = sub_compact->builder->GetSegmentBuilderResult();
+  // merge segment_builder_result into sub_compact->segment_builder_result
+  for (const auto id : current_segment_builder_result.merged_segment_ids) {
+    sub_compact->segment_builder_result.merged_segment_ids.insert(id);
+  }
+  for (const auto id : current_segment_builder_result.new_segment_ids) {
+    sub_compact->segment_builder_result.new_segment_ids.insert(id);
+  }
+  for (auto& per_segment_result : current_segment_builder_result.per_segment_results) {
+    sub_compact->segment_builder_result.per_segment_results.emplace_back(std::move(per_segment_result));
+  }
   assert(!sub_compact->segment_builder_result.merged_segment_ids.empty());
   assert(!sub_compact->segment_builder_result.new_segment_ids.empty());
 

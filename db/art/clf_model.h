@@ -7,6 +7,7 @@
 #include <cassert>
 #include <iostream>
 #include "macros.h"
+#include "port/likely.h"
 
 // dataset data point format: 
 // every data point accounts for one segment
@@ -29,14 +30,23 @@
 namespace ROCKSDB_NAMESPACE {
 
 struct RangeRatePair;
+struct RangeHeatPair;
 class ClfModel;
 
 bool RangeRatePairLessorComparor(const RangeRatePair& pair_1, const RangeRatePair& pair_2);
 bool RangeRatePairGreatorComparor(const RangeRatePair& pair_1, const RangeRatePair& pair_2);
 
+bool RangeHeatPairLessorComparor(const RangeHeatPair& pair_1, const RangeHeatPair& pair_2);
+bool RangeHeatPairGreatorComparor(const RangeHeatPair& pair_1, const RangeHeatPair& pair_2);
+
 struct RangeRatePair {
     uint32_t range_id;
     double rate_in_segment;
+};
+
+struct RangeHeatPair {
+    double rate_in_segment;
+    double heat_value;
 };
 
 inline bool RangeRatePairLessorComparor(const RangeRatePair& pair_1, const RangeRatePair& pair_2) {
@@ -45,6 +55,14 @@ inline bool RangeRatePairLessorComparor(const RangeRatePair& pair_1, const Range
 
 inline bool RangeRatePairGreatorComparor(const RangeRatePair& pair_1, const RangeRatePair& pair_2) {
     return pair_1.rate_in_segment > pair_2.rate_in_segment;
+}
+
+inline bool RangeHeatPairLessorComparor(const RangeHeatPair& pair_1, const RangeHeatPair& pair_2) {
+    return pair_1.heat_value < pair_2.heat_value;
+}
+
+inline bool RangeHeatPairGreatorComparor(const RangeHeatPair& pair_1, const RangeHeatPair& pair_2) {
+    return pair_1.heat_value > pair_2.heat_value;
 }
 
 class ClfModel {
@@ -75,7 +93,7 @@ public:
     // feature num = level feature num (1) + 2 * num of key ranges 
     // we set features_num_ to largest feature num
     void make_ready(std::vector<uint16_t>& features_nums) { 
-        if (features_nums.empty()) {
+        if (UNLIKELY(features_nums.empty())) {
             feature_num_ = 41; // debug feature num, see ../lgb_server files
         } else {
             // we may limit feature_num_ because of the socket transmit size limit is 1024 bytes

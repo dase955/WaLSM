@@ -140,12 +140,12 @@ namespace ROCKSDB_NAMESPACE {
 // micros for HeatBuckets
 
 // hotness update formula
-#define BUCKETS_ALPHA 0.2  
+#define BUCKETS_ALPHA 0.4  
 // samples pool max size, using reservoir sampling
 #define SAMPLES_LIMIT 1000000
 #define SAMPLES_MAXCNT 10000000
 // short period get count
-#define PERIOD_COUNT 2000000
+#define PERIOD_COUNT 1000000
 // key sample file
 // in order to init key ranges before first flush, 
 // we need to read keys in a file, then init key ranges first.
@@ -169,7 +169,7 @@ namespace ROCKSDB_NAMESPACE {
 // macros for Model Train
 
 // long period = TRAIN_PERIODS * short period. if one long period end, evaluate model and retrain model if necessary
-#define TRAIN_PERIODS 100
+#define TRAIN_PERIODS 10000
 // dataset csv file name
 #define DATASET_NAME "dataset.csv"
 // the path to save model txt file and train dataset csv file
@@ -180,12 +180,13 @@ namespace ROCKSDB_NAMESPACE {
 #define HOTNESS_SIGNIFICANT_DIGITS_FACTOR 1e6 
 #define RATE_SIGNIFICANT_DIGITS_FACTOR 1e6
 // model feature num max limit : 2 * 45 + 1
-#define MAX_FEATURES_NUM 5
+#define MAX_FEATURES_NUM 81
 
 // config micro connecting to LightGBM server 
 
 // we use Inet socket to connect server
 #define HOST "127.0.0.1"
+// #define PORT "10090"
 #define PORT "9090"
 // max size of socket receive buffer size
 #define BUFFER_SIZE 1024
@@ -206,7 +207,7 @@ namespace ROCKSDB_NAMESPACE {
 // we enable 0 unit for coldest segments
 #define MIN_UNITS_NUM 0
 // default max size of cache space : 8 * 1024 * 1024 * 128 = 1073741824 bit = 128 MB
-#define CACHE_SPACE_SIZE 0xffffffffU
+#define CACHE_SPACE_SIZE 0xFFFFFFFFU
 // fitler cache helper heap type
 #define BENEFIT_HEAP 0
 #define COST_HEAP 1
@@ -214,14 +215,14 @@ namespace ROCKSDB_NAMESPACE {
 // visit cnt update bound
 #define VISIT_CNT_UPDATE_BOUND 500
 // adjustment benefit bound
-#define PURE_BENEFIT_BOUND 2000
+#define PURE_BENEFIT_BOUND 500
 // filter cache map threshold
-#define FULL_RATE 0.08
-#define READY_RATE 0.05
+#define FULL_RATE 0.9
+#define READY_RATE 0.8
 // default init L0 counts
 #define INIT_LEVEL_0_COUNT 0
 // inherit remain factor
-#define INHERIT_REMAIN_FACTOR 1.0
+#define INHERIT_REMAIN_FACTOR 0.5
 
 // filter cache client background threads num
 #define FILTER_CACHE_THREADS_NUM 6
@@ -229,6 +230,6 @@ namespace ROCKSDB_NAMESPACE {
 // #define KV_SIZE = 1024
 // data block size for a segment
 // #define SEGMENT_DATA_BLOCK_SIZE 32 * 1024
-#define KEYS_PER_SEGMENT 4096 
+// #define KEYS_PER_SEGMENT 4096 
 
 }  // namespace ROCKSDB_NAMESPACE

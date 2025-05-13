@@ -25,6 +25,7 @@ def parse_pred_msg(msg: str) -> list[int]:
 # build predict data row from list[int]
 def prepare_data(data: list[int]) -> pd.DataFrame:
     assert type(data) is list and type(data[0]) is int
+    assert data[0] > 0
     datas = pd.DataFrame([data])
     return datas
 

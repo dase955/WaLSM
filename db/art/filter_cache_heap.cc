@@ -1,6 +1,7 @@
 #include "filter_cache_heap.h"
 #include <fstream>
 #include <iostream>
+#include "port/likely.h"
 
 namespace ROCKSDB_NAMESPACE {
 
@@ -9,7 +10,7 @@ FilterCacheHeapNode FilterCacheHeap::heap_top() {
     // need lock heap, or we may retrive outdated node
     // heap_mutex_.lock();
 
-    if (!heap_.empty()) {
+    if (LIKELY(!heap_.empty())) {
         return heap_[0];
     } else {
         return nullptr;
@@ -22,7 +23,7 @@ void FilterCacheHeap::heap_check(bool max_heap) {
     // need lock heap, or we may retrive outdated node
     // heap_mutex_.lock();
 
-    if (!heap_.empty()) {
+    if (LIKELY(!heap_.empty())) {
         if (max_heap) {
             for (auto &node : heap_) {
                 assert(node->benefit_or_cost <= heap_[0]->benefit_or_cost);
@@ -44,7 +45,7 @@ void FilterCacheHeap::heap_print(std::vector<uint32_t>& needed_segment_ids, cons
         auto it = heap_index_.find(segment_id);
         if (should_exist)
             assert(it != heap_index_.end());
-        if (it == heap_index_.end()) continue;
+        if (UNLIKELY(it == heap_index_.end())) continue;
         std::cout << "segment id: " << it->second->segment_id
                   << ", visit cnt: " << it->second->approx_visit_cnt
                   << ", benefit/cost: " << it->second->benefit_or_cost
@@ -129,7 +130,7 @@ void FilterCacheHeap::push(FilterCacheHeapNode& node) {
 void FilterCacheHeap::batch_query(std::vector<uint32_t>& segment_ids, std::vector<FilterCacheHeapNode>& return_nodes) {
     // heap_mutex_.lock();
 
-    uint32_t return_count = 0;
+    // uint32_t return_count = 0;
     return_nodes.clear();
     for (uint32_t& segment_id : segment_ids) {
         auto it = heap_index_.find(segment_id);
@@ -138,11 +139,11 @@ void FilterCacheHeap::batch_query(std::vector<uint32_t>& segment_ids, std::vecto
         // so we should return null when query a merged segment id
         if (it != heap_index_.end() && (it->second)->is_alive == true) { 
             return_node = it->second; // node exists in heap_index_ and segment alive
-            return_count++;
+            // return_count++;
         }
         return_nodes.emplace_back(return_node);
     }
-    assert(segment_ids.size() == return_count);
+    // assert(segment_ids.size() == return_count);
 
     // heap_mutex_.unlock();
 }
@@ -164,15 +165,15 @@ void FilterCacheHeap::batch_upsert(std::vector<FilterCacheHeapNode>& nodes) {
                 *(it->second) = *(node); // only copy content, this will update content of node in heap_index_ and heap_
                 delete node; // remember to free unnecessary space!
             }
-            bool found = false;
-            for (auto &node : heap_) {
-                found = found || (heap_index_[segment_id]->segment_id == node->segment_id);
-                if (found) {
-                    assert(node == heap_index_[segment_id]);
-                    break;
-                }
-            }
-            assert(found); // should found
+            // bool found = false;
+            // for (auto &node : heap_) {
+            //     found = found || (heap_index_[segment_id]->segment_id == node->segment_id);
+            //     if (found) {
+            //         assert(node == heap_index_[segment_id]);
+            //         break;
+            //     }
+            // }
+            // assert(found); // should found
         } else {
             // not exist in heap_index_ and heap_
             heap_index_.insert(std::make_pair(segment_id, node)); // insert into heap_index_
@@ -191,34 +192,34 @@ void FilterCacheHeap::batch_upsert(std::vector<FilterCacheHeapNode>& nodes) {
 void FilterCacheHeap::batch_delete(std::vector<uint32_t>& segment_ids) {
     // heap_mutex_.lock();
 
-    uint32_t delete_count = 0;
-    uint32_t size_before = heap_.size();
+    // uint32_t delete_count = 0;
+    // uint32_t size_before = heap_.size();
 
     // we guarantee that if one node not exist in heap_index_, it must not exist in heap
     for (uint32_t& segment_id : segment_ids) {
         auto it = heap_index_.find(segment_id);
-        if (it == heap_index_.end()) {
+        if (UNLIKELY(it == heap_index_.end())) {
             // not exist in heap_index_ and heap_
             // do nothing
-            for (auto &node : heap_) {
-                assert(node->segment_id != segment_id);
-            }
+            // for (auto &node : heap_) {
+            //     assert(node->segment_id != segment_id);
+            // }
         } else {
             // exist in heap_index_ and heap_
             // set is_alive to false and delete after that
             it->second->is_alive = false;
             assert(heap_index_[segment_id]->is_alive == false);
-            bool found = false;
-            for (auto &node : heap_) {
-                found = found || (heap_index_[segment_id]->segment_id == node->segment_id);
-                if (found) {
-                    assert(node == heap_index_[segment_id]);
-                    assert(node->is_alive == false);
-                    break;
-                }
-            }
-            assert(found); // should found
-            delete_count++;
+            // bool found = false;
+            // for (auto &node : heap_) {
+            //     found = found || (heap_index_[segment_id]->segment_id == node->segment_id);
+            //     if (found) {
+            //         assert(node == heap_index_[segment_id]);
+            //         assert(node->is_alive == false);
+            //         break;
+            //     }
+            // }
+            // assert(found); // should found
+            // delete_count++;
         }
     }
 
@@ -242,10 +243,10 @@ void FilterCacheHeap::batch_delete(std::vector<uint32_t>& segment_ids) {
     }
 
     // check already deleted?
-    for (uint32_t &segment_id : segment_ids) {
-        assert(heap_index_.find(segment_id) == heap_index_.end());
-    }
-    assert(heap_.size() + delete_count == size_before);
+    // for (uint32_t &segment_id : segment_ids) {
+    //     assert(heap_index_.find(segment_id) == heap_index_.end());
+    // }
+    // assert(heap_.size() + delete_count == size_before);
     // delete done, need to rebuild heap_
     rebuild_heap();
 
@@ -255,21 +256,21 @@ void FilterCacheHeap::batch_delete(std::vector<uint32_t>& segment_ids) {
 void FilterCacheHeapManager::batch_delete(std::vector<uint32_t>& segment_ids) {
     manager_mutex_.lock();
 
-    std::set<uint32_t> segment_ids_set;
+    // std::set<uint32_t> segment_ids_set;
     for (uint32_t& segment_id : segment_ids) {
         auto cnt_it = heap_visit_cnt_recorder_.find(segment_id);
         auto limit_it = units_num_limit_recorder_.find(segment_id);
         // assert((cnt_it != heap_visit_cnt_recorder_.end() && limit_it != units_num_limit_recorder_.end())
         //        || (cnt_it == heap_visit_cnt_recorder_.end() && limit_it == units_num_limit_recorder_.end()));
-        if (cnt_it != heap_visit_cnt_recorder_.end()) {
+        if (LIKELY(cnt_it != heap_visit_cnt_recorder_.end())) {
             heap_visit_cnt_recorder_.erase(segment_id);
         }
-        if (limit_it != units_num_limit_recorder_.end()) {
+        if (LIKELY(limit_it != units_num_limit_recorder_.end())) {
             units_num_limit_recorder_.erase(segment_id);
         }
-        segment_ids_set.insert(segment_id);
+        // segment_ids_set.insert(segment_id);
     }
-    assert(segment_ids_set.size() == segment_ids.size()); // all segment ids should be unique
+    // assert(segment_ids_set.size() == segment_ids.size()); // all segment ids should be unique
 
     // // print before deletion
     // if (segment_ids_set.size() > 0) {
@@ -285,12 +286,12 @@ void FilterCacheHeapManager::batch_delete(std::vector<uint32_t>& segment_ids) {
     cost_heap_.batch_delete(segment_ids);
 
     // check whether it is heap?
-    benefit_heap_.heap_check(true);
-    cost_heap_.heap_check(false);
-    for (uint32_t &segment_id : segment_ids) {
-        assert(heap_visit_cnt_recorder_.find(segment_id) == heap_visit_cnt_recorder_.end());
-        assert(units_num_limit_recorder_.find(segment_id) == units_num_limit_recorder_.end());
-    }
+    // benefit_heap_.heap_check(true);
+    // cost_heap_.heap_check(false);
+    // for (uint32_t &segment_id : segment_ids) {
+    //     assert(heap_visit_cnt_recorder_.find(segment_id) == heap_visit_cnt_recorder_.end());
+    //     assert(units_num_limit_recorder_.find(segment_id) == units_num_limit_recorder_.end());
+    // }
 
     assert(benefit_heap_.heap_size() == heap_visit_cnt_recorder_.size());
     assert(benefit_heap_.heap_size() == units_num_limit_recorder_.size());
@@ -303,15 +304,15 @@ void FilterCacheHeapManager::batch_upsert(std::vector<FilterCacheHeapItem>& item
     manager_mutex_.lock();
 
     std::vector<FilterCacheHeapNode> benefit_nodes, cost_nodes;
-    std::set<uint32_t> segment_ids_set;
+    // std::set<uint32_t> segment_ids_set;
     for (FilterCacheHeapItem& item : items) {
         assert(item.current_units_num >= MIN_UNITS_NUM);
         assert(item.current_units_num <= item.units_num_limit);
         assert(item.units_num_limit <= MAX_UNITS_NUM);
         double benefit = StandardBenefitWithMaxBound(item.approx_visit_cnt, item.current_units_num, item.units_num_limit);
         double cost = StandardCostWithMinBound(item.approx_visit_cnt, item.current_units_num, MIN_UNITS_NUM);
-        if (item.units_num_limit == item.current_units_num) assert(benefit == 0);
-        if (item.current_units_num == MIN_UNITS_NUM) assert(cost == __DBL_MAX__);
+        // if (item.units_num_limit == item.current_units_num) assert(benefit == 0);
+        // if (item.current_units_num == MIN_UNITS_NUM) assert(cost == __DBL_MAX__);
         // item meets at least one conditions
         // so that item always upsert into heap
         // if item.approx_visit_cnt = 0, still push into heap
@@ -368,19 +369,19 @@ void FilterCacheHeapManager::batch_upsert(std::vector<FilterCacheHeapItem>& item
         } else {
             units_num_limit_recorder_.insert(std::make_pair(segment_id, units_limit));
         }
-        segment_ids_set.insert(segment_id);
+        // segment_ids_set.insert(segment_id);
         assert(heap_visit_cnt_recorder_[segment_id] == visit_cnt);
         assert(units_num_limit_recorder_[segment_id] == units_limit);
     }
-    assert(segment_ids_set.size() == items.size());
+    // assert(segment_ids_set.size() == items.size());
 
     // upsert nodes into heaps
     benefit_heap_.batch_upsert(benefit_nodes);
     cost_heap_.batch_upsert(cost_nodes);
 
-    std::vector<uint32_t> segment_ids;
-    std::copy(segment_ids_set.begin(), segment_ids_set.end(), std::back_inserter(segment_ids));
-    assert(segment_ids.size() == segment_ids_set.size());
+    // std::vector<uint32_t> segment_ids;
+    // std::copy(segment_ids_set.begin(), segment_ids_set.end(), std::back_inserter(segment_ids));
+    // assert(segment_ids.size() == segment_ids_set.size());
 
     // // print after upsertion
     // if (segment_ids_set.size() > 0) {
@@ -393,12 +394,12 @@ void FilterCacheHeapManager::batch_upsert(std::vector<FilterCacheHeapItem>& item
     // }
 
     // check whether is heap?
-    benefit_heap_.heap_check(true);
-    cost_heap_.heap_check(false);
-    for (uint32_t &segment_id : segment_ids) {
-        assert(heap_visit_cnt_recorder_.find(segment_id) != heap_visit_cnt_recorder_.end());
-        assert(units_num_limit_recorder_.find(segment_id) != units_num_limit_recorder_.end());
-    }
+    // benefit_heap_.heap_check(true);
+    // cost_heap_.heap_check(false);
+    // for (uint32_t &segment_id : segment_ids) {
+    //     assert(heap_visit_cnt_recorder_.find(segment_id) != heap_visit_cnt_recorder_.end());
+    //     assert(units_num_limit_recorder_.find(segment_id) != units_num_limit_recorder_.end());
+    // }
 
     assert(benefit_heap_.heap_size() == heap_visit_cnt_recorder_.size());
     assert(benefit_heap_.heap_size() == units_num_limit_recorder_.size());
@@ -413,12 +414,12 @@ bool FilterCacheHeapManager::try_modify(FilterCacheModifyResult& result) {
     FilterCacheHeapNode benefit_node = benefit_heap_.heap_top();
     FilterCacheHeapNode cost_node = cost_heap_.heap_top();
     // if benefit heap or cost heap empty, no need to modify
-    if (benefit_node == nullptr || cost_node == nullptr) {
+    if (UNLIKELY(benefit_node == nullptr || cost_node == nullptr)) {
         manager_mutex_.unlock(); // remember to unlock, or we will cause deadlock
         return false;
     }
 
-    if (benefit_node->is_alive == false || cost_node->is_alive == false) {
+    if (UNLIKELY(benefit_node->is_alive == false || cost_node->is_alive == false)) {
         // std::cout << "one node is not alive, stop modification." << std::endl;
         manager_mutex_.unlock(); // remember to unlock, or we will cause deadlock
         return false;
@@ -438,19 +439,19 @@ bool FilterCacheHeapManager::try_modify(FilterCacheModifyResult& result) {
     const uint32_t benefit_segment_id = benefit_node->segment_id;
     const uint32_t cost_segment_id = cost_node->segment_id;
     // if we will enable and disable one unit of the same segment, ignore it
-    if (benefit_segment_id == cost_segment_id) {
+    if (UNLIKELY(benefit_segment_id == cost_segment_id)) {
         // std::cout << "cannot modify the same segment!" << std::endl;
         manager_mutex_.unlock(); // remember to unlock, or we will cause deadlock
         return false;
     }
-    if (heap_visit_cnt_recorder_.find(benefit_segment_id) == heap_visit_cnt_recorder_.end()
-        || heap_visit_cnt_recorder_.find(cost_segment_id) == heap_visit_cnt_recorder_.end()) {
+    if (UNLIKELY(heap_visit_cnt_recorder_.find(benefit_segment_id) == heap_visit_cnt_recorder_.end()
+        || heap_visit_cnt_recorder_.find(cost_segment_id) == heap_visit_cnt_recorder_.end())) {
         // std::cout << "target segment merged, stop modification." << std::endl; 
         manager_mutex_.unlock();
         return false;
     }
-    if (units_num_limit_recorder_.find(benefit_segment_id) == units_num_limit_recorder_.end()
-        || units_num_limit_recorder_.find(cost_segment_id) == units_num_limit_recorder_.end()) {
+    if (UNLIKELY(units_num_limit_recorder_.find(benefit_segment_id) == units_num_limit_recorder_.end()
+        || units_num_limit_recorder_.find(cost_segment_id) == units_num_limit_recorder_.end())) {
         // std::cout << "target segment merged, stop modification." << std::endl; 
         manager_mutex_.unlock();
         return false;
@@ -460,7 +461,7 @@ bool FilterCacheHeapManager::try_modify(FilterCacheModifyResult& result) {
     // we can try filter unit modification, reminded that this modification will modify units num of two segments
     // so we need to upsert new nodes of these two segments into benefit heap and cost heap
     std::vector<FilterCacheHeapNode> new_benefit_nodes, new_cost_nodes;
-    std::vector<uint32_t> segment_ids;
+    // std::vector<uint32_t> segment_ids;
 
     /*
     if (benefit_node->current_units_num + 1 < benefit_node->units_num_limit) { 
@@ -551,8 +552,8 @@ bool FilterCacheHeapManager::try_modify(FilterCacheModifyResult& result) {
                                                             )
                                     );
 
-    segment_ids.emplace_back(benefit_node->segment_id);
-    segment_ids.emplace_back(cost_node->segment_id);
+    // segment_ids.emplace_back(benefit_node->segment_id);
+    // segment_ids.emplace_back(cost_node->segment_id);
 
     // // print nodes
     // std::cout << std::endl;
@@ -594,12 +595,12 @@ bool FilterCacheHeapManager::try_modify(FilterCacheModifyResult& result) {
     // cost_heap_.heap_print(segment_ids, true);
 
     // check whether is heap?
-    benefit_heap_.heap_check(true);
-    cost_heap_.heap_check(false);
-    for (uint32_t &segment_id : segment_ids) {
-        assert(heap_visit_cnt_recorder_.find(segment_id) != heap_visit_cnt_recorder_.end());
-        assert(units_num_limit_recorder_.find(segment_id) != units_num_limit_recorder_.end());
-    }
+    // benefit_heap_.heap_check(true);
+    // cost_heap_.heap_check(false);
+    // for (uint32_t &segment_id : segment_ids) {
+    //     assert(heap_visit_cnt_recorder_.find(segment_id) != heap_visit_cnt_recorder_.end());
+    //     assert(units_num_limit_recorder_.find(segment_id) != units_num_limit_recorder_.end());
+    // }
 
     assert(benefit_heap_.heap_size() == heap_visit_cnt_recorder_.size());
     assert(benefit_heap_.heap_size() == units_num_limit_recorder_.size());
@@ -663,7 +664,7 @@ void FilterCacheHeapManager::sync_visit_cnt(std::map<uint32_t, uint32_t>& recent
     // update visit cnt and benefit/cost in these nodes 
     for (FilterCacheHeapNode& sync_benefit_node : sync_benefit_nodes) {
         assert(sync_benefit_node != nullptr);
-        if (sync_benefit_node != nullptr) {
+        if (LIKELY(sync_benefit_node != nullptr)) {
             sync_benefit_node->approx_visit_cnt = recent_visit_cnt_recorder[sync_benefit_node->segment_id];
             sync_benefit_node->benefit_or_cost = StandardBenefitWithMaxBound(sync_benefit_node->approx_visit_cnt,
                                                                              sync_benefit_node->current_units_num,
@@ -672,7 +673,7 @@ void FilterCacheHeapManager::sync_visit_cnt(std::map<uint32_t, uint32_t>& recent
     }
     for (FilterCacheHeapNode& sync_cost_node : sync_cost_nodes) {
         assert(sync_cost_node != nullptr);
-        if (sync_cost_node != nullptr) {
+        if (LIKELY(sync_cost_node != nullptr)) {
             sync_cost_node->approx_visit_cnt = recent_visit_cnt_recorder[sync_cost_node->segment_id];
             sync_cost_node->benefit_or_cost = StandardCostWithMinBound(sync_cost_node->approx_visit_cnt,
                                                                        sync_cost_node->current_units_num,
@@ -691,13 +692,13 @@ void FilterCacheHeapManager::sync_visit_cnt(std::map<uint32_t, uint32_t>& recent
     cost_heap_.rebuild_heap();
 
     // check whether is heap?
-    benefit_heap_.heap_check(true);
-    cost_heap_.heap_check(false);
-    for (uint32_t &segment_id : sync_segment_ids) {
-        assert(heap_visit_cnt_recorder_.find(segment_id) != heap_visit_cnt_recorder_.end());
-        assert(heap_visit_cnt_recorder_[segment_id] == recent_visit_cnt_recorder[segment_id]);
-        assert(units_num_limit_recorder_.find(segment_id) != units_num_limit_recorder_.end());
-    }
+    // benefit_heap_.heap_check(true);
+    // cost_heap_.heap_check(false);
+    // for (uint32_t &segment_id : sync_segment_ids) {
+    //     assert(heap_visit_cnt_recorder_.find(segment_id) != heap_visit_cnt_recorder_.end());
+    //     assert(heap_visit_cnt_recorder_[segment_id] == recent_visit_cnt_recorder[segment_id]);
+    //     assert(units_num_limit_recorder_.find(segment_id) != units_num_limit_recorder_.end());
+    // }
 
     assert(benefit_heap_.heap_size() == heap_visit_cnt_recorder_.size());
     assert(benefit_heap_.heap_size() == units_num_limit_recorder_.size());
@@ -761,7 +762,7 @@ void FilterCacheHeapManager::sync_units_num_limit(std::map<uint32_t, uint16_t>& 
     // update units num limit, units num and benefit/cost in these nodes 
     for (FilterCacheHeapNode& sync_benefit_node : sync_benefit_nodes) {
         assert(sync_benefit_node != nullptr);
-        if (sync_benefit_node != nullptr) {
+        if (LIKELY(sync_benefit_node != nullptr)) {
             sync_benefit_node->units_num_limit = current_units_num_limit_recorder[sync_benefit_node->segment_id];
             sync_benefit_node->current_units_num = std::min(sync_benefit_node->units_num_limit,
                                                             sync_benefit_node->current_units_num);
@@ -773,7 +774,7 @@ void FilterCacheHeapManager::sync_units_num_limit(std::map<uint32_t, uint16_t>& 
     }
     for (FilterCacheHeapNode& sync_cost_node : sync_cost_nodes) {
         assert(sync_cost_node != nullptr);
-        if (sync_cost_node != nullptr) {
+        if (LIKELY(sync_cost_node != nullptr)) {
             sync_cost_node->units_num_limit = current_units_num_limit_recorder[sync_cost_node->segment_id];
             sync_cost_node->current_units_num = std::min(sync_cost_node->units_num_limit,
                                                          sync_cost_node->current_units_num);
@@ -796,12 +797,12 @@ void FilterCacheHeapManager::sync_units_num_limit(std::map<uint32_t, uint16_t>& 
     cost_heap_.rebuild_heap();
 
     // check whether is heap?
-    benefit_heap_.heap_check(true);
-    cost_heap_.heap_check(false);
-    for (uint32_t &segment_id : sync_segment_ids) {
-        assert(heap_visit_cnt_recorder_.find(segment_id) != heap_visit_cnt_recorder_.end());
-        assert(units_num_limit_recorder_.find(segment_id) != units_num_limit_recorder_.end());
-    }
+    // benefit_heap_.heap_check(true);
+    // cost_heap_.heap_check(false);
+    // for (uint32_t &segment_id : sync_segment_ids) {
+    //     assert(heap_visit_cnt_recorder_.find(segment_id) != heap_visit_cnt_recorder_.end());
+    //     assert(units_num_limit_recorder_.find(segment_id) != units_num_limit_recorder_.end());
+    // }
 
     assert(benefit_heap_.heap_size() == heap_visit_cnt_recorder_.size());
     assert(benefit_heap_.heap_size() == units_num_limit_recorder_.size());

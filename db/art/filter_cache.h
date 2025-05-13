@@ -176,12 +176,12 @@ private:
     uint32_t period_cnt_; // record period cnt, if period_cnt_ - last_train_period_ >= TRAIN_PERIODS, start to evaluate or retrain ClfModel
     uint32_t last_long_period_; // record last short period cnt of last long period
     uint32_t last_short_period_; // helper var for update job when one short period ends
-    std::mutex period_mutex_; // guarantee heat buckets, get_cnt_ and period_cnt_ are updated orderly
+    mutable port::RWMutex period_mutex_; // guarantee heat buckets, get_cnt_ and period_cnt_ are updated orderly
     // std::mutex update_mutex_; // guarantee counts records only updated once
     bool train_signal_; // if true, try to retrain model. we call one background thread to monitor this flag and retrain
     std::map<uint32_t, uint32_t> last_count_recorder_; // get cnt recorder of segments in last long period
     std::map<uint32_t, uint32_t> current_count_recorder_; // get cnt recorder of segments in current long period
-    std::mutex count_mutex_; // guarentee last_count_recorder and current_count_recorder treated orderedly
+    mutable port::RWMutex count_mutex_; // guarentee last_count_recorder and current_count_recorder treated orderedly
     bool is_ready_; // check whether ready to use adaptive filter assignment
     std::map<uint32_t, FileMetaData*> segment_in_file; // map segment_id to SST file
     std::atomic<ColumnFamilyData*> cfd_; // In WaLSM+, we only support one column family

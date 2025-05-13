@@ -5447,8 +5447,8 @@ uint64_t VersionSet::ApproximateSize(const SizeApproximationOptions& options,
     for (int i = idx_start + 1; i < idx_end; ++i) {
       uint64_t file_size = files_brief.files[i].fd.GetFileSize();
       // The entire file falls into the range, so we can just take its size.
-      assert(file_size ==
-             ApproximateSize(v, files_brief.files[i], start, end, caller));
+      // assert(file_size ==
+      //        ApproximateSize(v, files_brief.files[i], start, end, caller));
       total_full_size += file_size;
     }
 

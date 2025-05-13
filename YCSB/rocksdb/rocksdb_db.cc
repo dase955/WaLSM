@@ -20,7 +20,10 @@
 #include <rocksdb/write_batch.h>
 #include <atomic>
 #include <fstream>
+#include <iostream>
 #include <mutex>
+#include "rocksdb/env.h"
+#include "rocksdb/options.h"
 #include "rocksdb/table.h"
 
 #include <unistd.h>
@@ -116,6 +119,15 @@ namespace {
   const std::string PROP_FS_URI = "rocksdb.fs_uri";
   const std::string PROP_FS_URI_DEFAULT = "";
 
+  const std::string PROP_BLOCK_SIZE = "rocksdb.block_size";
+  const std::string PROP_BLOCK_SIZE_DEFAULT = "0";
+
+  const std::string PROP_METADATA_SIZE = "rocksdb.metadata_size";
+  const std::string PROP_METADATA_SIZE_DEFAULT = "0";
+
+  const std::string PROP_MAX_SUBCOMPACTION = "rocksdb.max_subcompactions";
+  const std::string PROP_MAX_SUBCOMPACTION_DEFAULT = "0";
+
   static std::shared_ptr<rocksdb::Env> env_guard;
   static std::shared_ptr<rocksdb::Cache> block_cache;
   static std::shared_ptr<rocksdb::Cache> block_cache_compressed;
@@ -126,6 +138,7 @@ namespace ycsbc {
 rocksdb::DB *RocksdbDB::db_ = nullptr;
 int RocksdbDB::ref_cnt_ = 0;
 std::mutex RocksdbDB::mu_;
+rocksdb::Options* test_opt = nullptr;
 
 void RocksdbDB::Init() {
 // merge operator disabled by default due to link error
@@ -203,12 +216,12 @@ void RocksdbDB::Init() {
     throw utils::Exception("RocksDB db path is missing");
   }
 
-  rocksdb::Options opt;
   opt.create_if_missing = true;
   opt.nvm_path = nvm_path;
   std::vector<rocksdb::ColumnFamilyDescriptor> cf_descs;
   std::vector<rocksdb::ColumnFamilyHandle *> cf_handles;
   GetOptions(props, &opt, &cf_descs);
+  test_opt = &opt;
 #ifdef USE_MERGEUPDATE
   opt.merge_operator.reset(new YCSBUpdateMerge);
 #endif
@@ -235,6 +248,7 @@ void RocksdbDB::Cleanup() {
   if (--ref_cnt_) {
     return;
   }
+  std::cout << "Statistics: " << test_opt->statistics->ToString() << std::endl;
   sleep(5); // sleep 5 seconds to wait for final reports
   delete db_;
 }
@@ -315,6 +329,10 @@ void RocksdbDB::GetOptions(const utils::Properties &props, rocksdb::Options *opt
     if (val != 0) {
       opt->max_open_files = val;
     }
+    val = std::stoi(props.GetProperty(PROP_MAX_SUBCOMPACTION, PROP_MAX_SUBCOMPACTION_DEFAULT));
+    if (val != 0) {
+      opt->max_subcompactions = val;
+    }
 
     val = std::stoi(props.GetProperty(PROP_L0_COMPACTION_TRIGGER, PROP_L0_COMPACTION_TRIGGER_DEFAULT));
     if (val != 0) {
@@ -343,15 +361,24 @@ void RocksdbDB::GetOptions(const utils::Properties &props, rocksdb::Options *opt
     }
 
     rocksdb::BlockBasedTableOptions table_options;
-    table_options.pin_top_level_index_and_filter = false;
+    table_options.pin_top_level_index_and_filter = true;
     table_options.pin_l0_filter_and_index_blocks_in_cache = false;
-    table_options.cache_index_and_filter_blocks_with_high_priority = false;
+    table_options.cache_index_and_filter_blocks_with_high_priority = true;
     table_options.index_type = rocksdb::BlockBasedTableOptions::kTwoLevelIndexSearch;
     table_options.partition_filters = true;
     table_options.cache_index_and_filter_blocks = true;
     table_options.index_shortening = rocksdb::BlockBasedTableOptions::IndexShorteningMode::kNoShortening;
-    table_options.block_size = 256 * 1024;
+    table_options.block_size = 32 * 1024;
     table_options.metadata_block_size = 8 * 1024;
+    size_t block_size = std::stoul(props.GetProperty(PROP_BLOCK_SIZE, PROP_BLOCK_SIZE_DEFAULT));
+    if (block_size > 0) {
+      table_options.block_size = block_size;
+    }
+    size_t metadata_block_size = std::stoul(props.GetProperty(PROP_METADATA_SIZE, PROP_METADATA_SIZE_DEFAULT));
+    if (metadata_block_size > 0) {
+      table_options.metadata_block_size = metadata_block_size;
+    }
+    opt->statistics = rocksdb::CreateDBStatistics();
     size_t cache_size = std::stoul(props.GetProperty(PROP_CACHE_SIZE, PROP_CACHE_SIZE_DEFAULT));
     if (cache_size > 0) {
       block_cache = rocksdb::NewLRUCache(cache_size);
@@ -381,6 +408,7 @@ void RocksdbDB::GetOptions(const utils::Properties &props, rocksdb::Options *opt
     if (props.GetProperty(PROP_OPTIMIZE_UNIVERSALCOMP, PROP_OPTIMIZE_UNIVERSALCOMP_DEFAULT) == "true") {
       opt->OptimizeUniversalStyleCompaction();
     }
+    opt->statistics = rocksdb::CreateDBStatistics();
   }
 }
 

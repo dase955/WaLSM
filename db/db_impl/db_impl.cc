@@ -263,7 +263,7 @@ DBImpl::DBImpl(const DBOptions& options, const std::string& dbname,
     global_filter_cache.retrain_or_keep_model(
         &global_features_nums_except_level_0, &global_level_recorder,
         &global_segment_ranges_recorder, &global_unit_size_recorder);
-    global_filter_cache.make_adjustment();
+    // global_filter_cache.make_adjustment();
     #ifdef SAMPLES_FILE
     std::ifstream input(SAMPLES_FILE);
     assert(input.is_open());

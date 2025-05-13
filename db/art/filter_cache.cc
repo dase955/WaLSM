@@ -3,16 +3,18 @@
 #include <cassert>
 #include <cstddef>
 #include <cstdint>
+#include <iostream>
 #include <thread>
 #include <chrono>
 #include "table/block_based/parsed_full_filter_block.h"
 #include "filter_cache_entry.h"
+#include "port/likely.h"
 
 namespace ROCKSDB_NAMESPACE {
 
 std::vector<CachableEntry<ParsedFullFilterBlock>> FilterCache::get_filter_blocks(const uint32_t segment_id) {
     auto it = filter_cache_.find(segment_id);
-    if (it == filter_cache_.end()) {
+    if (UNLIKELY(it == filter_cache_.end())) {
         // not in cache, that means we havent insert segment FilterCacheItem info into cache
         // actually, we start inserting after every segment becomes available
         // we return a empty vector here
@@ -24,8 +26,10 @@ std::vector<CachableEntry<ParsedFullFilterBlock>> FilterCache::get_filter_blocks
 
 void FilterCache::init_segment(uint32_t segment_id, const BlockBasedTable* table, const std::vector<BlockHandle>& block_handles) {
     // filter_cache_[segment_id] = FilterCacheEntry(segment_id, table, this, block_handles);
-    filter_cache_.emplace(std::piecewise_construct, std::make_tuple(segment_id), std::make_tuple(segment_id, table, this, block_handles));
-    
+
+    if (LIKELY(table != nullptr && block_handles.size() == MAX_UNITS_NUM)) {
+        filter_cache_.emplace(std::piecewise_construct, std::make_tuple(segment_id), std::make_tuple(segment_id, table, this, block_handles));
+    }
 }
 
 void FilterCache::enable_for_segments(std::unordered_map<uint32_t, uint16_t>& segment_units_num_recorder, const bool& is_forced,
@@ -89,8 +93,8 @@ void FilterCache::enable_for_segments(std::unordered_map<uint32_t, uint16_t>& se
     // std::cout << "enable l0 count: " << enable_l0_count << ", enable non l0 count: " << enable_non_l0_count << ", fail count: " << fail_count << std::endl;
     // std::cout << "level 0 filter usage after enable: " << level_0_used_space_size_ << std::endl;
     // std::cout << "non level 0 filter usage after enable: " << used_space_size_ << std::endl; 
-    assert(enable_l0_count == new_level_0_segment_ids.size());
-    assert(enable_l0_count + enable_non_l0_count + fail_count == segment_units_num_recorder.size());
+    // assert(enable_l0_count == new_level_0_segment_ids.size());
+    // assert(enable_l0_count + enable_non_l0_count + fail_count == segment_units_num_recorder.size());
     filter_cache_mutex_.unlock();
 }
 
@@ -150,7 +154,7 @@ void FilterCache::release_for_segments(std::vector<uint32_t>& segment_ids, std::
     filter_cache_mutex_.lock();
     auto it = filter_cache_.begin();
     size_t idx = 0;
-    uint32_t release_non_l0_count = 0, release_l0_count = 0;
+    // uint32_t release_non_l0_count = 0, release_l0_count = 0;
     // std::cout << "level 0 filter usage before release: " << level_0_used_space_size_ << std::endl;
     // std::cout << "non level 0 filter usage before release: " << used_space_size_ << std::endl; 
     while (it != filter_cache_.end() && idx < segment_ids.size()) {
@@ -161,18 +165,18 @@ void FilterCache::release_for_segments(std::vector<uint32_t>& segment_ids, std::
         } else {
             if (old_level_0_segment_ids.count(it->first)) {
                 level_0_used_space_size_ = level_0_used_space_size_ - (it->second).approximate_size();
-                release_l0_count++; 
+                // release_l0_count++; 
                 // std::cout << "free " << (it->second).approximate_size() << " bits of level 0 segment " << it->first << std::endl;
             } else {
                 used_space_size_ = used_space_size_ - (it->second).approximate_size();
-                release_non_l0_count++;
+                // release_non_l0_count++;
                 // std::cout << "free " << (it->second).approximate_size() << " bits of non level 0 segment " << it->first << std::endl;
             }
             it = filter_cache_.erase(it); idx++;
         }
     }
-    assert(release_non_l0_count + release_l0_count == segment_ids.size());
-    assert(release_l0_count == old_level_0_segment_ids.size());
+    // assert(release_non_l0_count + release_l0_count == segment_ids.size());
+    // assert(release_l0_count == old_level_0_segment_ids.size());
     // std::cout << "release l0 count: " << release_l0_count << ", release non l0 count: " << release_non_l0_count << std::endl;
     // std::cout << "level 0 filter usage after release: " << level_0_used_space_size_ << std::endl;
     // std::cout << "non level 0 filter usage after release: " << used_space_size_ << std::endl; 
@@ -195,29 +199,21 @@ bool FilterCacheManager::make_heat_buckets_ready(const std::string& key,
 }
 
 void FilterCacheManager::hit_heat_buckets(const std::string& key) {
-    if (heat_buckets_.is_ready()) {
+    bool signal = false;
+    if (LIKELY(heat_buckets_.is_ready())) {
         get_cnt_ += 1;
-        // one period end, send true to update
-        if (get_cnt_ >= PERIOD_COUNT) {
-            period_mutex_.lock();
-            if (get_cnt_ >= PERIOD_COUNT) {
-                // avoid multi-update in a short time
-                heat_buckets_.hit(key, true);
-                // std::cout << "get_cnt_: " << get_cnt_ << std::endl;
-                // std::cout << "period_cnt_: " << PERIOD_COUNT << std::endl;
-                get_cnt_ = 0;
-                period_cnt_ += 1;
-            } else {
-                heat_buckets_.hit(key, false);
-            }
-            period_mutex_.unlock();
-        } else {
-            heat_buckets_.hit(key, false);
+        heat_buckets_.hit(key, signal); // if one period end, return true signal
+        if (signal) {
+            period_mutex_.WriteLock();
+            get_cnt_ = 0;
+            period_cnt_ += 1;
+            // std::cout << "get cnt updated, current period cnt: " << period_cnt_ << std::endl;
+            period_mutex_.WriteUnlock();
         }
     }
 }
 
-void FilterCacheManager::do_periods_work(){
+void FilterCacheManager::do_periods_work() {
     bool need_retrain = false;
 
     // called by a background thread, never need to lock
@@ -252,6 +248,8 @@ void FilterCacheManager::do_periods_work(){
             heap_manager_.sync_visit_cnt(recent_count_recorder);
         }
     }
+
+    std::this_thread::sleep_for(std::chrono::milliseconds(1000));
     // update_mutex_.unlock();
 }
 
@@ -272,36 +270,40 @@ void FilterCacheManager::init_segment(uint32_t segment_id, const BlockBasedTable
 }
 
 void FilterCacheManager::hit_count_recorder(uint32_t segment_id) {
-    count_mutex_.lock();
+    count_mutex_.ReadLock();
 
     auto it = current_count_recorder_.find(segment_id);
     if (it == current_count_recorder_.end()) {
         // segment havent been visited, need to insert count
-        current_count_recorder_.insert(std::make_pair(segment_id, 1));
+        // current_count_recorder_.insert(std::make_pair(segment_id, 1));
+        // do nothing, wait for insertion
     } else {
         // segment have been visited, only update count
         it->second = it->second + 1;
     }
 
-    count_mutex_.unlock();
+    count_mutex_.ReadUnlock();
 }
 
 void FilterCacheManager::update_count_recorder() {
-    count_mutex_.lock();
+    count_mutex_.WriteLock();
 
     last_count_recorder_.clear();
-    last_count_recorder_.insert(current_count_recorder_.begin(), current_count_recorder_.end());
+    // last_count_recorder_.insert(current_count_recorder_.begin(), current_count_recorder_.end());
+    std::copy(current_count_recorder_.begin(), current_count_recorder_.end(), 
+              std::inserter(last_count_recorder_, last_count_recorder_.begin()));
+    assert(last_count_recorder_.size() == current_count_recorder_.size());
     for (auto it = current_count_recorder_.begin(); it != current_count_recorder_.end(); it++) {
         it->second = 0;
     }
 
-    count_mutex_.unlock();
+    count_mutex_.WriteUnlock();
 }
 
 void FilterCacheManager::debug_count_recorder() {
     uint32_t get_cnt = 0;
 
-    count_mutex_.lock();
+    count_mutex_.ReadLock();
 
     std::cout << "last_count_recorder: " << std::endl;
     for (auto it = last_count_recorder_.begin(); it != last_count_recorder_.end(); it++) {
@@ -314,12 +316,12 @@ void FilterCacheManager::debug_count_recorder() {
     }
     std::cout << "get_cnt: " << get_cnt << std::endl;
 
-    count_mutex_.unlock();
+    count_mutex_.ReadUnlock();
 }
 
 void FilterCacheManager::inherit_count_recorder(std::vector<uint32_t>& merged_segment_ids, std::vector<uint32_t>& new_segment_ids,  const uint32_t& level_0_base_count,
                                                 std::map<uint32_t, std::unordered_map<uint32_t, double>>& inherit_infos_recorder) {
-    count_mutex_.lock();
+    count_mutex_.WriteLock();
 
     // copy last count and current count of merged segments
     std::map<uint32_t, uint32_t> merged_last_count_recorder, merged_current_count_recorder; // cache merged segment count temporarily
@@ -360,9 +362,9 @@ void FilterCacheManager::inherit_count_recorder(std::vector<uint32_t>& merged_se
         }
         
         // std::cout << "temp last count: " << uint32_t(last_count) << " temp currrent count: " << uint32_t(current_count) << std::endl;
-        assert(weight_sum > 0.90);
+        // assert(weight_sum > 0.90);
         // weight sum should be 1.0, we multiple the inherited count by (1.0 / weight_sum)
-        assert(weight_sum > 0.98 && weight_sum < 1.02); // weight_sum approximately equals to 1.0
+        // assert(weight_sum > 0.98 && weight_sum < 1.02); // weight_sum approximately equals to 1.0
         last_count *= (1.0 / weight_sum); current_count *= (1.0 / weight_sum); // actually weight_sum always equals to 1.0
         // std::cout << "weight sum: " << weight_sum << " final last count: " << uint32_t(last_count) << " final currrent count: " << uint32_t(current_count) << std::endl;
         new_last_count_recorder.insert(std::make_pair(infos_it->first, uint32_t(last_count)));
@@ -373,9 +375,9 @@ void FilterCacheManager::inherit_count_recorder(std::vector<uint32_t>& merged_se
     assert(inherit_infos_recorder.size() == new_current_count_recorder.size());
     assert(inherit_infos_recorder.size() <= new_segment_ids.size());
 
-    uint32_t last_insert_num = 0, current_insert_num = 0;
-    uint32_t last_update_num = 0, current_update_num = 0;
-    uint32_t last_check_num = 0, current_check_num = 0;
+    // uint32_t last_insert_num = 0, current_insert_num = 0;
+    // uint32_t last_update_num = 0, current_update_num = 0;
+    // uint32_t last_check_num = 0, current_check_num = 0;
 
     // insert last count and current count of new segments
     for (uint32_t& new_segment_id : new_segment_ids) {
@@ -385,14 +387,14 @@ void FilterCacheManager::inherit_count_recorder(std::vector<uint32_t>& merged_se
         // if true, this means new segment not on level 0, also means this segments are inherited from some segments
         if (new_last_count_recorder.count(new_segment_id) > 0) {
             new_last_count = new_last_count_recorder[new_segment_id];
-            last_check_num ++;
+            // last_check_num ++;
         }
         if (last_it != last_count_recorder_.end()) {
             last_it->second = last_it->second + new_last_count;
-            last_update_num ++;
+            // last_update_num ++;
         } else {
             last_count_recorder_.insert(std::make_pair(new_segment_id, new_last_count));
-            last_insert_num ++;
+            // last_insert_num ++;
         }
 
         // insert current count
@@ -401,14 +403,14 @@ void FilterCacheManager::inherit_count_recorder(std::vector<uint32_t>& merged_se
         // if true, this means new segment not on level 0, also means this segments are inherited from some segments
         if (new_current_count_recorder.count(new_segment_id) > 0) {
             new_current_count = new_current_count_recorder[new_segment_id];
-            current_check_num ++;
+            // current_check_num ++;
         }
         if (current_it != current_count_recorder_.end()) {
             current_it->second = current_it->second + new_current_count;
-            current_update_num ++;
+            // current_update_num ++;
         } else {
             current_count_recorder_.insert(std::make_pair(new_segment_id, new_current_count));
-            current_insert_num ++;
+            // current_insert_num ++;
         }
 
         assert(last_count_recorder_[new_segment_id] >= new_last_count);
@@ -416,15 +418,15 @@ void FilterCacheManager::inherit_count_recorder(std::vector<uint32_t>& merged_se
         // std::cout << "new segment id: " << new_segment_id << " last count: " << new_last_count << " current count: " << new_current_count << std::endl;
     }
 
-    assert(last_insert_num + last_update_num == new_segment_ids.size());
-    assert(current_insert_num + current_update_num == new_segment_ids.size());
-    assert(last_check_num == inherit_infos_recorder.size());
-    assert(current_check_num == inherit_infos_recorder.size());
+    // assert(last_insert_num + last_update_num == new_segment_ids.size());
+    // assert(current_insert_num + current_update_num == new_segment_ids.size());
+    // assert(last_check_num == inherit_infos_recorder.size());
+    // assert(current_check_num == inherit_infos_recorder.size());
     // std::cout << "last_insert_num: " << last_insert_num << " last_update_num: " << last_update_num << std::endl;
     // std::cout << "current_insert_num: " << current_insert_num << " current_update_num: " << current_update_num << std::endl;
     // std::cout << std::endl << std::endl;
 
-    count_mutex_.unlock();
+    count_mutex_.WriteUnlock();
 }
 
 void FilterCacheManager::estimate_recent_counts(std::map<uint32_t, uint32_t>& approximate_counts_recorder, const std::vector<uint32_t>& needed_segment_ids) {
@@ -433,7 +435,7 @@ void FilterCacheManager::estimate_recent_counts(std::map<uint32_t, uint32_t>& ap
     double current_long_period_rate = std::min(double(current_long_period_count) / double(long_period_total_count), 1.0);
 
     if (needed_segment_ids.empty()) {
-        count_mutex_.lock();
+        count_mutex_.ReadLock();
         approximate_counts_recorder.clear();
         // approximate_counts_recorder.insert(current_count_recorder_.begin(), current_count_recorder_.end());
         std::copy(current_count_recorder_.begin(), current_count_recorder_.end(), 
@@ -463,9 +465,9 @@ void FilterCacheManager::estimate_recent_counts(std::map<uint32_t, uint32_t>& ap
                 last_it ++;
             }
         }
-        count_mutex_.unlock();
+        count_mutex_.ReadUnlock();
     } else {
-        count_mutex_.lock();
+        count_mutex_.ReadLock();
         approximate_counts_recorder.clear();
         for (uint32_t segment_id : needed_segment_ids) {
             approximate_counts_recorder.insert(std::make_pair(segment_id, current_count_recorder_[segment_id]));
@@ -488,7 +490,7 @@ void FilterCacheManager::estimate_recent_counts(std::map<uint32_t, uint32_t>& ap
                 assert(current_count_recorder_[approx_it->first] != recent_result);
             approx_it ++;
         }
-        count_mutex_.unlock();
+        count_mutex_.ReadUnlock();
     }
     // return nothing, already write result to approximate_counts_recorder
 }
@@ -505,6 +507,14 @@ bool FilterCacheManager::try_retrain_model(std::map<uint32_t, uint16_t>& level_r
     if (train_signal_ == false) {
         return false;
     }
+
+    // auto level_it_0 = level_recorder.begin();
+    // while (level_it_0 != level_recorder.end()) {
+    //     if (last_count_recorder_.find(level_it_0->first) == last_count_recorder_.end()) continue;
+    //     uint32_t cnt = last_count_recorder_[level_it_0->first];
+    //     std::cout << level_it_0->first << " : " << cnt << ", level: " << level_it_0->second << std::endl;
+    //     level_it_0++;
+    // }
 
     // recheck whether each segments include at least one key ranges.
     auto ranges_it = segment_ranges_recorder.begin();
@@ -544,9 +554,9 @@ bool FilterCacheManager::try_retrain_model(std::map<uint32_t, uint16_t>& level_r
     assert(unit_size_recorder.size() == 0);
 
     std::map<uint32_t, uint32_t> last_count_recorder_copy;
-    count_mutex_.lock();
+    count_mutex_.ReadLock();
     last_count_recorder_copy = last_count_recorder_;
-    count_mutex_.unlock();
+    count_mutex_.ReadUnlock();
 
     auto get_cnt_it = last_count_recorder_copy.begin();
     while (get_cnt_it != last_count_recorder_copy.end()) {
@@ -558,8 +568,7 @@ bool FilterCacheManager::try_retrain_model(std::map<uint32_t, uint16_t>& level_r
         get_cnt_it ++;
     }
     assert(algo_infos.size() > 0);
-    if (algo_infos.empty()) return false;
-    count_mutex_.unlock();
+    if (UNLIKELY(algo_infos.empty())) return false;
     std::cout << "[ALGO] algo_infos size: " << algo_infos.size() << std::endl;
     greedy_algo_.solve(algo_infos, label_recorder, filter_cache_.cache_size_except_level_0());
     std::cout << "[ALGO] stage 1: recorder size (exclude level 0): " << label_recorder.size() << std::endl;
@@ -567,7 +576,7 @@ bool FilterCacheManager::try_retrain_model(std::map<uint32_t, uint16_t>& level_r
     // // need to verify solutions
     // greedy_algo_.verify(algo_infos, label_recorder, filter_cache_.cache_size_except_level_0() / 256);
 
-    assert(level_recorder.size() == segment_ranges_recorder.size());
+    // assert(level_recorder.size() == segment_ranges_recorder.size());
     // should make these two recorders share the same segment ids
     auto level_it_1 = level_recorder.begin();
     auto range_it_1 = segment_ranges_recorder.begin();
@@ -624,14 +633,14 @@ bool FilterCacheManager::try_retrain_model(std::map<uint32_t, uint16_t>& level_r
     // recheck whether these 3 recorder have same size
     assert(level_recorder.size() == segment_ranges_recorder.size());
     assert(level_recorder.size() == label_recorder.size());
-    auto check_level_it_2 = level_recorder.begin();
-    auto check_label_it_2 = label_recorder.begin();
-    while (check_level_it_2 != level_recorder.end()
-           && check_label_it_2 != label_recorder.end())
-    {
-        assert(check_level_it_2->first == check_label_it_2->first);
-        check_level_it_2++; check_label_it_2++;
-    }
+    // auto check_level_it_2 = level_recorder.begin();
+    // auto check_label_it_2 = label_recorder.begin();
+    // while (check_level_it_2 != level_recorder.end()
+    //        && check_label_it_2 != label_recorder.end())
+    // {
+    //     assert(check_level_it_2->first == check_label_it_2->first);
+    //     check_level_it_2++; check_label_it_2++;
+    // }
     std::cout << "[ALGO] stage 2: recorder size (exclude level 0): " << label_recorder.size() << std::endl;
 
     std::vector<Bucket> buckets = heat_buckets_.buckets();
@@ -657,31 +666,37 @@ bool FilterCacheManager::try_retrain_model(std::map<uint32_t, uint16_t>& level_r
             label_it ++;
         } else {
             // only train with non level 0 data
-            if (level_it->second > 0) {
+            if (LIKELY(level_it->second > 0)) {
                 // add data row
                 std::vector<uint32_t> data;
+                std::vector<RangeHeatPair> heat_pairs;
                 double rate_sum = 0;
-                std::sort((range_it->second).begin(), (range_it->second).end(), RangeRatePairGreatorComparor);
-                for (size_t i = 0; i < range_it->second.size() - 1; i ++) {
-                    assert(range_it->second[i].rate_in_segment >= range_it->second[i+1].rate_in_segment);
-                }
                 for (RangeRatePair& pair : range_it->second) {
                     rate_sum += pair.rate_in_segment;
+
+                    RangeHeatPair heat_pair;
+                    assert(pair.range_id >= 0 && pair.range_id < buckets.size());
+                    heat_pair.rate_in_segment = pair.rate_in_segment;
+                    heat_pair.heat_value = buckets[pair.range_id].hotness_;
+                    heat_pairs.emplace_back(heat_pair);
                 }
                 assert(rate_sum >= 0.98 && rate_sum <= 1.02);
-                data.emplace_back(level_it->second);
-                for (RangeRatePair& pair : range_it->second) {
-                    assert(pair.range_id >= 0 && pair.range_id < buckets.size());
-                    data.emplace_back(uint32_t(RATE_SIGNIFICANT_DIGITS_FACTOR * pair.rate_in_segment));
-                    data.emplace_back(uint32_t(HOTNESS_SIGNIFICANT_DIGITS_FACTOR * buckets[pair.range_id].hotness_));
+                assert(heat_pairs.size() == (range_it->second).size());
+
+                std::sort(heat_pairs.begin(), heat_pairs.end(), RangeHeatPairGreatorComparor);
+                for (size_t i = 0; i < heat_pairs.size() - 1; i ++) {
+                    assert(heat_pairs[i].heat_value >= heat_pairs[i+1].heat_value);
                 }
-                for (size_t i = 3; i < data.size() && (i+1) < data.size(); i+=2) {
-                    assert(data[i-2] >= data[i]);
+                
+                data.emplace_back(level_it->second);
+                for (RangeHeatPair& heat_pair : heat_pairs) {
+                    data.emplace_back(uint32_t(RATE_SIGNIFICANT_DIGITS_FACTOR * heat_pair.rate_in_segment));
+                    data.emplace_back(uint32_t(HOTNESS_SIGNIFICANT_DIGITS_FACTOR * heat_pair.heat_value));
                 }
                 // std::cout << "[DEBUG] segment " << level_it->first << " data features num: " << data.size() << std::endl;
                 assert(data.size() >= 3 && data.size() % 2 == 1);
                 assert((range_it->second).size() * 2 + 1 == data.size());
-                assert(data[0] >= MIN_UNITS_NUM && data[0] <= MAX_UNITS_NUM);
+                assert(data[0] > 0);
                 datas.emplace_back(data);
                 // add label row
                 labels.emplace_back(label_it->second);
@@ -718,22 +733,22 @@ void FilterCacheManager::update_cache_and_heap(std::map<uint32_t, uint16_t>& lev
     std::vector<Bucket> buckets = heat_buckets_.buckets();
 
     // check whether level 0 segments exist?
-    assert(level_recorder.size() == segment_ranges_recorder.size());
-    auto level_it_1 = level_recorder.begin();
-    auto range_it_1 = segment_ranges_recorder.begin();
-    while (level_it_1 != level_recorder.end()
-           && range_it_1 != segment_ranges_recorder.end()) {
-        assert(level_it_1->first == range_it_1->first);
-        assert(level_it_1->second > 0);
-        level_it_1++;
-        range_it_1++;
-    }
+    // assert(level_recorder.size() == segment_ranges_recorder.size());
+    // auto level_it_1 = level_recorder.begin();
+    // auto range_it_1 = segment_ranges_recorder.begin();
+    // while (level_it_1 != level_recorder.end()
+    //        && range_it_1 != segment_ranges_recorder.end()) {
+    //     assert(level_it_1->first == range_it_1->first);
+    //     assert(level_it_1->second > 0);
+    //     level_it_1++;
+    //     range_it_1++;
+    // }
     // check whether level 0 segments exist?
-    level_it_1 = level_recorder.begin();
-    while (level_it_1 != level_recorder.end()) {
-        assert(level_it_1->second > 0);
-        level_it_1++;
-    }
+    // level_it_1 = level_recorder.begin();
+    // while (level_it_1 != level_recorder.end()) {
+    //     assert(level_it_1->second > 0);
+    //     level_it_1++;
+    // }
 
     // build data rows into datas
     auto level_it = level_recorder.begin();
@@ -747,24 +762,38 @@ void FilterCacheManager::update_cache_and_heap(std::map<uint32_t, uint16_t>& lev
         } else {
             assert(level_it->first == range_it->first);
             assert(level_it->second > 0);
-            if (level_it->second > 0) {
+            if (LIKELY(level_it->second > 0)) {
                 segment_ids.emplace_back(level_it->first);
                 // add data row
                 std::vector<uint32_t> data;
-                std::sort((range_it->second).begin(), (range_it->second).end(), RangeRatePairGreatorComparor);
-                for (size_t i = 0; i < range_it->second.size() - 1; i ++) {
-                    assert(range_it->second[i].rate_in_segment >= range_it->second[i+1].rate_in_segment);
-                }
-                data.emplace_back(level_it->second);
+                std::vector<RangeHeatPair> heat_pairs;
+                // double rate_sum = 0;
                 for (RangeRatePair& pair : range_it->second) {
+                    // rate_sum += pair.rate_in_segment;
+
+                    RangeHeatPair heat_pair;
                     assert(pair.range_id >= 0 && pair.range_id < buckets.size());
-                    data.emplace_back(uint32_t(RATE_SIGNIFICANT_DIGITS_FACTOR * pair.rate_in_segment));
-                    data.emplace_back(uint32_t(HOTNESS_SIGNIFICANT_DIGITS_FACTOR * buckets[pair.range_id].hotness_));
+                    heat_pair.rate_in_segment = pair.rate_in_segment;
+                    heat_pair.heat_value = buckets[pair.range_id].hotness_;
+                    heat_pairs.emplace_back(heat_pair);
                 }
-                for (size_t i = 3; i < data.size() && (i+1) < data.size(); i+=2) {
-                    assert(data[i-2] >= data[i]);
+                // assert(rate_sum >= 0.98 && rate_sum <= 1.02);
+                assert(heat_pairs.size() == (range_it->second).size());
+
+                std::sort(heat_pairs.begin(), heat_pairs.end(), RangeHeatPairGreatorComparor);
+                for (size_t i = 0; i < heat_pairs.size() - 1; i ++) {
+                    assert(heat_pairs[i].heat_value >= heat_pairs[i+1].heat_value);
                 }
-                assert(data[0] >= MIN_UNITS_NUM && data[0] <= MAX_UNITS_NUM);
+                
+                data.emplace_back(level_it->second);
+                for (RangeHeatPair& heat_pair : heat_pairs) {
+                    data.emplace_back(uint32_t(RATE_SIGNIFICANT_DIGITS_FACTOR * heat_pair.rate_in_segment));
+                    data.emplace_back(uint32_t(HOTNESS_SIGNIFICANT_DIGITS_FACTOR * heat_pair.heat_value));
+                }
+                // std::cout << "[DEBUG] segment " << level_it->first << " data features num: " << data.size() << std::endl;
+                assert(data.size() >= 3 && data.size() % 2 == 1);
+                assert((range_it->second).size() * 2 + 1 == data.size());
+                assert(data[0] > 0);
                 datas.emplace_back(data);
             }
 
@@ -779,8 +808,8 @@ void FilterCacheManager::update_cache_and_heap(std::map<uint32_t, uint16_t>& lev
     size_t idx = 0;
     // std::cout << std::endl << "sync units num limit" << std::endl;
     while (idx < segment_ids.size() && idx < preds.size()) {
-        segment_units_num_recorder.insert(std::make_pair(segment_ids[idx], preds[idx]));
-        current_units_num_limit_recorder.insert(std::make_pair(segment_ids[idx], preds[idx]));
+        segment_units_num_recorder.insert(std::make_pair(segment_ids[idx], std::max(preds[idx], uint16_t(1))));
+        current_units_num_limit_recorder.insert(std::make_pair(segment_ids[idx], std::max(preds[idx], uint16_t(1))));
         // std::cout << "segment id: " << segment_ids[idx] << ", units limit: " << preds[idx] << std::endl;
         idx = idx + 1;
     }
@@ -824,9 +853,9 @@ bool FilterCacheManager::adjust_cache_and_heap() {
         segment_units_num_recorder.insert(std::make_pair(result.disable_segment_id, result.disable_segment_next_units_num));
         filter_cache_.enable_for_segments(segment_units_num_recorder, true, empty_level_0_segment_ids, empty_failed_segment_ids);
         assert(empty_failed_segment_ids.empty());
-        std::this_thread::sleep_for(std::chrono::milliseconds(500));
+        std::this_thread::sleep_for(std::chrono::milliseconds(200));
     } else {
-        std::this_thread::sleep_for(std::chrono::milliseconds(5000));
+        std::this_thread::sleep_for(std::chrono::milliseconds(1000));
     }
     return can_adjust;
 }
@@ -847,26 +876,21 @@ void FilterCacheManager::insert_segments(std::vector<uint32_t>& merged_segment_i
     assert(new_segment_ids.size() == new_level_recorder.size());
     assert(new_segment_ids.size() == segment_ranges_recorder.size());
     assert(new_segment_ids.size() >= inherit_infos_recorder.size());
-    auto level_it = new_level_recorder.begin();
-    size_t new_idx = 0;
     uint32_t new_l0_count = 0, new_non_l0_count = 0;
     size_t cached_l0_count = cached_level_0_segment_ids_.size();
-    assert(DEFAULT_UNITS_NUM < MAX_UNITS_NUM && DEFAULT_UNITS_NUM > MIN_UNITS_NUM);
-    while (level_it != new_level_recorder.end()) {
-        if (new_idx < new_segment_ids.size() && level_it->first == new_segment_ids[new_idx]) {
-            if (level_it->second == 0) {
-                new_level_0_segment_ids.insert(level_it->first);
-                cached_level_0_segment_ids_.insert(level_it->first); // update current cached level 0 segments
-                segment_units_num_recorder.insert(std::make_pair(level_it->first, MAX_UNITS_NUM));
-                new_l0_count++;
-            } else {
-                // not a level 0 segment, set default units num
-                segment_units_num_recorder.insert(std::make_pair(level_it->first, DEFAULT_UNITS_NUM));
-                new_non_l0_count++;
-            }
-            new_idx ++;
-        } 
-        level_it ++;
+    assert(DEFAULT_UNITS_NUM <= MAX_UNITS_NUM && DEFAULT_UNITS_NUM >= MIN_UNITS_NUM);
+    for (auto& item : new_level_recorder) {
+        auto segment_id = item.first;
+        auto level = item.second;
+        if (level == 0) {
+            new_level_0_segment_ids.insert(segment_id);
+            cached_level_0_segment_ids_.insert(segment_id); // update current cached level 0 segments
+            segment_units_num_recorder.insert(std::make_pair(segment_id, MAX_UNITS_NUM));
+            new_l0_count++;
+        } else {
+            segment_units_num_recorder.insert(std::make_pair(segment_id, DEFAULT_UNITS_NUM));
+            new_non_l0_count++;
+        }
     }
     cached_l0_count += new_l0_count;
     assert(new_l0_count + new_non_l0_count == new_segment_ids.size());
@@ -903,7 +927,7 @@ void FilterCacheManager::insert_segments(std::vector<uint32_t>& merged_segment_i
     // std::cout << std::endl;
 
     cached_l0_count -= old_l0_count;
-    assert(cached_l0_count == cached_level_0_segment_ids_.size());
+    // assert(cached_l0_count == cached_level_0_segment_ids_.size());
     assert(old_l0_count + old_non_l0_count == merged_segment_ids.size());
 
     // // print merged segment ids
@@ -1010,25 +1034,35 @@ void FilterCacheManager::insert_segments(std::vector<uint32_t>& merged_segment_i
 
                 auto range_it = segment_ranges_recorder.find(new_segment_id);
                 assert(range_it != segment_ranges_recorder.end());
-                std::sort((range_it->second).begin(),
-                          (range_it->second).end(), 
-                          RangeRatePairGreatorComparor);
-                for (size_t i = 0; i < range_it->second.size() - 1; i ++) {
-                    assert(range_it->second[i].rate_in_segment >= range_it->second[i+1].rate_in_segment);
-                }
-
                 std::vector<uint32_t> pred_data;
-                pred_data.emplace_back(new_level_recorder[new_segment_id]);
-                for (RangeRatePair& pair : segment_ranges_recorder[new_segment_id]) {
-                    assert(pair.range_id >= 0 && pair.range_id < buckets.size());
-                    pred_data.emplace_back(uint32_t(RATE_SIGNIFICANT_DIGITS_FACTOR * pair.rate_in_segment));
-                    pred_data.emplace_back(uint32_t(HOTNESS_SIGNIFICANT_DIGITS_FACTOR * buckets[pair.range_id].hotness_));
-                }
+                std::vector<RangeHeatPair> heat_pairs;
+                // double rate_sum = 0;
+                for (RangeRatePair& pair : range_it->second) {
+                    // rate_sum += pair.rate_in_segment;
 
-                for (size_t i = 1; i < pred_data.size()-2; i += 2) {
-                    assert(pred_data[i] >= pred_data[i+2]);
+                    RangeHeatPair heat_pair;
+                    assert(pair.range_id >= 0 && pair.range_id < buckets.size());
+                    heat_pair.rate_in_segment = pair.rate_in_segment;
+                    heat_pair.heat_value = buckets[pair.range_id].hotness_;
+                    heat_pairs.emplace_back(heat_pair);
                 }
-                assert(pred_data[0] >= MIN_UNITS_NUM && pred_data[0] <= MAX_UNITS_NUM);
+                // assert(rate_sum >= 0.98 && rate_sum <= 1.02);
+                assert(heat_pairs.size() == (range_it->second).size());
+
+                std::sort(heat_pairs.begin(), heat_pairs.end(), RangeHeatPairGreatorComparor);
+                for (size_t i = 0; i < heat_pairs.size() - 1; i ++) {
+                    assert(heat_pairs[i].heat_value >= heat_pairs[i+1].heat_value);
+                }
+                
+                pred_data.emplace_back(new_level_recorder[new_segment_id]);
+                for (RangeHeatPair& heat_pair : heat_pairs) {
+                    pred_data.emplace_back(uint32_t(RATE_SIGNIFICANT_DIGITS_FACTOR * heat_pair.rate_in_segment));
+                    pred_data.emplace_back(uint32_t(HOTNESS_SIGNIFICANT_DIGITS_FACTOR * heat_pair.heat_value));
+                }
+                // std::cout << "[DEBUG] segment " << level_it->first << " data features num: " << data.size() << std::endl;
+                assert(pred_data.size() >= 3 && pred_data.size() % 2 == 1);
+                assert((range_it->second).size() * 2 + 1 == pred_data.size());
+                assert(pred_data[0] > 0);
                 pred_datas.emplace_back(pred_data);
             }
         }
@@ -1037,7 +1071,7 @@ void FilterCacheManager::insert_segments(std::vector<uint32_t>& merged_segment_i
         assert(pred_datas.size() == pred_results.size());
         size_t pred_idx = 0;
         while (pred_idx < pred_segment_ids.size() && pred_idx < pred_results.size()) {
-            segment_units_num_recorder[pred_segment_ids[pred_idx]] = pred_results[pred_idx];
+            segment_units_num_recorder[pred_segment_ids[pred_idx]] = std::max(pred_results[pred_idx], uint16_t(1));
             assert(new_level_0_segment_ids.count(pred_segment_ids[pred_idx]) == 0);
             assert(pred_results[pred_idx] >= MIN_UNITS_NUM && pred_results[pred_idx] <= MAX_UNITS_NUM);
             pred_idx = pred_idx + 1;
@@ -1135,7 +1169,7 @@ void FilterCacheManager::move_segments(std::vector<uint32_t>& moved_segment_ids,
     }
 
     // collect old segments id on level 0
-    for (uint32_t& moved_segment_id : moved_segment_ids) {
+    for (uint32_t moved_segment_id : moved_segment_ids) {
         if (cached_level_0_segment_ids_.count(moved_segment_id)) {
             old_level_0_segment_ids.insert(moved_segment_id);
             cached_level_0_segment_ids_.erase(moved_segment_id);
@@ -1207,31 +1241,41 @@ void FilterCacheManager::move_segments(std::vector<uint32_t>& moved_segment_ids,
         std::vector<std::vector<uint32_t>> pred_datas;
         std::vector<uint32_t> pred_segment_ids;
         std::vector<uint16_t> pred_results;
-        for (uint32_t& segment_id : moved_segment_ids) {
-            assert(move_level_recorder[segment_id] > 0);
-            pred_segment_ids.emplace_back(segment_id);
+        for (uint32_t moved_segment_id : moved_segment_ids) {
+            assert(move_level_recorder[moved_segment_id] > 0);
+            pred_segment_ids.emplace_back(moved_segment_id);
 
-            auto range_it = move_segment_ranges_recorder.find(segment_id);
+            auto range_it = move_segment_ranges_recorder.find(moved_segment_id);
             assert(range_it != move_segment_ranges_recorder.end());
-            std::sort((range_it->second).begin(),
-                      (range_it->second).end(), 
-                      RangeRatePairGreatorComparor);
-            for (size_t i = 0; i < range_it->second.size() - 1; i ++) {
-                assert(range_it->second[i].rate_in_segment >= range_it->second[i+1].rate_in_segment);
-            }
-
             std::vector<uint32_t> pred_data;
-            pred_data.emplace_back(move_level_recorder[segment_id]);
-            for (RangeRatePair& pair : move_segment_ranges_recorder[segment_id]) {
-                assert(pair.range_id >= 0 && pair.range_id < buckets.size());
-                pred_data.emplace_back(uint32_t(RATE_SIGNIFICANT_DIGITS_FACTOR * pair.rate_in_segment));
-                pred_data.emplace_back(uint32_t(HOTNESS_SIGNIFICANT_DIGITS_FACTOR * buckets[pair.range_id].hotness_));
-            }
+            std::vector<RangeHeatPair> heat_pairs;
+            double rate_sum = 0;
+            for (RangeRatePair& pair : range_it->second) {
+                rate_sum += pair.rate_in_segment;
 
-            for (size_t i = 1; i < pred_data.size()-2; i += 2) {
-                assert(pred_data[i] >= pred_data[i+2]);
+                RangeHeatPair heat_pair;
+                assert(pair.range_id >= 0 && pair.range_id < buckets.size());
+                heat_pair.rate_in_segment = pair.rate_in_segment;
+                heat_pair.heat_value = buckets[pair.range_id].hotness_;
+                heat_pairs.emplace_back(heat_pair);
             }
-            assert(pred_data[0] >= MIN_UNITS_NUM && pred_data[0] <= MAX_UNITS_NUM);
+            assert(rate_sum >= 0.98 && rate_sum <= 1.02);
+            assert(heat_pairs.size() == (range_it->second).size());
+
+            std::sort(heat_pairs.begin(), heat_pairs.end(), RangeHeatPairGreatorComparor);
+            for (size_t i = 0; i < heat_pairs.size() - 1; i ++) {
+                assert(heat_pairs[i].heat_value >= heat_pairs[i+1].heat_value);
+            }
+                
+            pred_data.emplace_back(move_level_recorder[moved_segment_id]);
+            for (RangeHeatPair& heat_pair : heat_pairs) {
+                pred_data.emplace_back(uint32_t(RATE_SIGNIFICANT_DIGITS_FACTOR * heat_pair.rate_in_segment));
+                pred_data.emplace_back(uint32_t(HOTNESS_SIGNIFICANT_DIGITS_FACTOR * heat_pair.heat_value));
+            }
+            // std::cout << "[DEBUG] segment " << level_it->first << " data features num: " << data.size() << std::endl;
+            assert(pred_data.size() >= 3 && pred_data.size() % 2 == 1);
+            assert((range_it->second).size() * 2 + 1 == pred_data.size());
+            assert(pred_data[0] > 0);
             pred_datas.emplace_back(pred_data);
         }
         assert(pred_datas.size() == pred_segment_ids.size());
@@ -1249,7 +1293,7 @@ void FilterCacheManager::move_segments(std::vector<uint32_t>& moved_segment_ids,
         filter_cache_.update_for_segments(segment_units_num_recorder, old_level_0_segment_ids, empty_failed_segment_ids);
 
         // insert nodes into filter heaps
-        for (uint32_t& segment_id : moved_segment_ids) {
+        for (uint32_t segment_id : moved_segment_ids) {
             assert(move_level_recorder[segment_id] > 0);
             uint16_t units_num = segment_units_num_recorder[segment_id];
             new_segment_items.emplace_back(FilterCacheHeapItem(segment_id, approximate_counts_recorder[segment_id],

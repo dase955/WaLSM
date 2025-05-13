@@ -7,6 +7,7 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file. See the AUTHORS file for names of contributors.
 
+#include "table/block_based/full_filter_block.h"
 #ifndef GFLAGS
 #include <cstdio>
 int main() {
@@ -28,6 +29,9 @@ int main() {
 #include "test_util/testutil.h"
 #include "util/gflags_compat.h"
 #include "util/hash.h"
+#include "table/block_based/partitioned_filter_block.h"
+#include "include/rocksdb/filter_policy.h"
+#include "rocksdb/slice.h"
 
 using GFLAGS_NAMESPACE::ParseCommandLineFlags;
 
@@ -976,6 +980,111 @@ TEST_P(FullBloomTest, CorruptFilters) {
 INSTANTIATE_TEST_CASE_P(Full, FullBloomTest,
                         testing::Values(BloomFilterPolicy::kLegacyBloom,
                                         BloomFilterPolicy::kFastLocalBloom));
+
+#ifdef ART_PLUS
+class MultiUnitBloomEffectTest : public testing::Test {
+ protected:
+  size_t filter_count_ = 8;
+  int bits_per_key_per_unit_ = 2;
+  int num_keys_ = 1000;
+  std::vector<std::string> keys_;
+  std::vector<std::unique_ptr<const char[]>> filter_bufs_;
+  std::vector<Slice> filter_slices_;
+  std::shared_ptr<const FilterPolicy> policy_;
+  std::unique_ptr<FilterBitsBuilder> bits_builder_;
+
+  void SetUp() override {
+    policy_.reset(new BloomFilterPolicy(bits_per_key_per_unit_, BloomFilterPolicy::kLegacyBloom));
+    
+    BlockBasedTableOptions table_options;
+    table_options.filter_policy = policy_;
+    
+    FilterBuildingContext context(table_options);
+    
+    // 直接通过policy获取builder
+    bits_builder_.reset(policy_->GetBuilderWithContext(context));
+    
+    // 生成key
+    for (int i = 0; i < num_keys_; ++i) {
+      keys_.push_back("key" + std::to_string(i));
+    }
+    
+    // 添加所有key到filter
+    for (const auto& k : keys_) {
+      bits_builder_->AddKey(Slice(k));
+    }
+    
+    // 分别构造每个unit的filter
+    filter_bufs_.resize(filter_count_);
+    filter_slices_.resize(filter_count_);
+    for (size_t i = 0; i < filter_count_; ++i) {
+      // 调用FinishWithId
+      filter_slices_[i] = bits_builder_->FinishWithId(&filter_bufs_[i], i);
+      std::cout << "slice " << i << " size: " << filter_slices_[i].size() << std::endl;
+    }
+  }
+
+  // 用前n个unit做AND查询
+  bool MayMatchWithNUnits(const std::string& key, int n) {
+    for (int i = 0; i < n; ++i) {
+      FilterBitsReader* reader = policy_->GetFilterBitsReader(filter_slices_[i]);
+      if (!reader->MayMatchWithId(Slice(key), i)) {
+        delete reader;
+        return false;
+      }
+      delete reader;
+    }
+    return true;
+  }
+};
+
+TEST_F(MultiUnitBloomEffectTest, FalsePositiveRateDecreasesWithMoreUnits) {
+  int test_fp = 0;
+  int test_total = 100000000;
+  // 用1个unit
+  for (int i = num_keys_; i < num_keys_ + test_total; ++i) {
+    if (MayMatchWithNUnits("key" + std::to_string(i), 1)) test_fp++;
+  }
+  double fp_rate_1 = test_fp / double(test_total);
+
+  test_fp = 0;
+  // 用2个unit
+  for (int i = num_keys_; i < num_keys_ + test_total; ++i) {
+    if (MayMatchWithNUnits("key" + std::to_string(i), 2)) test_fp++;
+  }
+  double fp_rate_2 = test_fp / double(test_total);
+
+  test_fp = 0;
+  // 用4个unit
+  for (int i = num_keys_; i < num_keys_ + test_total; ++i) {
+    if (MayMatchWithNUnits("key" + std::to_string(i), 4)) test_fp++;
+  }
+  double fp_rate_4 = test_fp / double(test_total);
+
+  test_fp = 0;
+  // 用8个unit
+  for (int i = num_keys_; i < num_keys_ + test_total; ++i) {
+    if (MayMatchWithNUnits("key" + std::to_string(i), 8)) test_fp++;
+  }
+  double fp_rate_8 = test_fp / double(test_total);
+
+  printf("FP rate with 1 unit: %f\n", fp_rate_1);
+  printf("FP rate with 2 units: %f\n", fp_rate_2);
+  printf("FP rate with 4 units: %f\n", fp_rate_4);
+  printf("FP rate with 8 units: %f\n", fp_rate_8);
+
+  ASSERT_GT(fp_rate_1, fp_rate_2);
+  ASSERT_GT(fp_rate_2, fp_rate_4);
+  ASSERT_GT(fp_rate_4, fp_rate_8);
+}
+
+TEST_F(MultiUnitBloomEffectTest, AllKeysAlwaysMatch) {
+  // 所有插入的key都应该能查到
+  for (const auto& k : keys_) {
+    ASSERT_TRUE(MayMatchWithNUnits(k, 8));
+  }
+}
+#endif  // ART_PLUS
 
 }  // namespace ROCKSDB_NAMESPACE
 

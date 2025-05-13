@@ -15,8 +15,8 @@ endif
 export PYTHON
 
 # EXTRA_CXXFLAGS += -I$(HOME)/local/include -gdwarf-4 -fsanitize=address
-EXTRA_CXXFLAGS += -I$(HOME)/local/include -gdwarf-4
-LDFLAGS  += -L$(HOME)/local/lib -lsocket++
+EXTRA_CXXFLAGS += -I$(HOME)/local/include -gdwarf-4 -DGFLAGS
+LDFLAGS  += -L$(HOME)/local/lib -lsocket++ -lgflags
 
 CLEAN_FILES = # deliberately empty, so we can append below.
 CFLAGS += ${EXTRA_CFLAGS}
@@ -117,7 +117,7 @@ ifneq ($(findstring rocksdbjava, $(MAKECMDGOALS)),)
 endif
 
 # DEBUG_LEVEL=1
-DEBUG_LEVEL=2
+DEBUG_LEVEL=1
 $(info $$DEBUG_LEVEL is ${DEBUG_LEVEL})
 
 # Lite build flag.
@@ -1315,6 +1315,11 @@ package:
 $(STATIC_LIBRARY): $(LIB_OBJECTS)
 	$(AM_V_AR)rm -f $@ $(SHARED1) $(SHARED2) $(SHARED3) $(SHARED4)
 	$(AM_V_at)$(AR) $(ARFLAGS) $@ $(LIB_OBJECTS)
+
+# Add a target to build bloom_test with ART_PLUS defined
+bloom_test_plus: util/bloom_test.cc $(LIBRARY) $(GTEST)
+	$(AM_V_CCLD)$(CXX) $(CXXFLAGS) -DART_PLUS -c util/bloom_test.cc -o $(OBJ_DIR)/util/bloom_test_plus.o
+	$(AM_V_CCLD)$(CXX) -o bloom_test_plus $(OBJ_DIR)/util/bloom_test_plus.o $(GTEST) $(LIBRARY) $(EXEC_LDFLAGS) $(LDFLAGS) $(COVERAGEFLAGS)
 
 $(STATIC_TEST_LIBRARY): $(TEST_OBJECTS)
 	$(AM_V_AR)rm -f $@ $(SHARED_TEST_LIBRARY)

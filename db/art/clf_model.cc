@@ -7,6 +7,7 @@
 #include <map>
 #include <random>
 #include <chrono>
+#include "port/likely.h"
 
 namespace ROCKSDB_NAMESPACE {
 void ClfModel::write_debug_dataset() {
@@ -118,7 +119,7 @@ void ClfModel::write_real_dataset(std::vector<std::vector<uint32_t>>& datas, std
 
 void ClfModel::write_dataset(std::vector<std::vector<uint32_t>>& datas, std::vector<uint16_t>& tags, std::vector<uint32_t>& get_cnts) {
     assert(feature_num_ > 0);
-    if (datas.empty()) return;
+    if (UNLIKELY(datas.empty())) return;
     assert(datas.size() > 0);
     // if (datas.empty()) {
     //     assert(false); // we have to write dataset
@@ -193,7 +194,7 @@ void ClfModel::make_real_predict(std::vector<std::vector<uint32_t>>& datas, std:
     libsocket::inet_stream sock(host_, port_, LIBSOCKET_IPv4);
     std::string message, recv_buffer;
     for (std::vector<uint32_t>& data : datas) {
-        if (!data.empty()) {
+        if (LIKELY(!data.empty())) {
             prepare_data(data);
             message.clear();
             recv_buffer.clear();
@@ -219,7 +220,7 @@ void ClfModel::make_real_predict(std::vector<std::vector<uint32_t>>& datas, std:
 void ClfModel::make_predict(std::vector<std::vector<uint32_t>>& datas, std::vector<uint16_t>& preds) {
     preds.clear();
 
-    if (datas.empty()) return;
+    if (UNLIKELY(datas.empty())) return;
     assert(datas.size() > 0);
     // datas empty means we are debuging class ClfModel
     // if (datas.empty()) {

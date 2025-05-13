@@ -75,6 +75,8 @@ class FilterCacheEntry {
   // units_num : [MIN_UNITS_NUM, MAX_UNITS_NUM]
   void enable_units(uint32_t units_num);
 
+  void prefetch_units();
+
   // 获取缓存的 filter Block
   std::vector<CachableEntry<ParsedFullFilterBlock>> get_filter_blocks();
 };

@@ -113,6 +113,12 @@ class CompactionJob {
     filter_cache_client_ = filter_cache_client;
   }
 
+  // collect data for WaLSM+
+  void CollectDataAndPrefetch();
+
+  // call cleanup after CollectDataAndPrefetch()
+  void CleanupCompaction();
+
  private:
   struct SubcompactionState;
 
@@ -140,7 +146,6 @@ class CompactionJob {
   Status InstallCompactionResults(const MutableCFOptions& mutable_cf_options);
   void RecordCompactionIOStats();
   Status OpenCompactionOutputFile(SubcompactionState* sub_compact);
-  void CleanupCompaction();
   void UpdateCompactionJobStats(
     const InternalStats::CompactionStats& stats) const;
   void RecordDroppedKeys(const CompactionIterationStats& c_iter_stats,

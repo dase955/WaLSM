@@ -8,6 +8,7 @@
 #include <cassert>
 #include <cstdlib>
 #include <algorithm>
+#include "port/port_posix.h"
 
 namespace ROCKSDB_NAMESPACE {
 
@@ -75,12 +76,10 @@ private:
     std::vector<std::string> seperators_;
     std::vector<Bucket> buckets_;
     uint32_t current_cnt_; // current get count in this period
-    std::vector<std::unique_ptr<std::mutex>> mutex_ptrs_;
-    std::mutex cnt_mutex_;
+    mutable port::RWMutex hit_mutex_;
     std::mutex sample_mutex_;
     bool is_ready_; // identify whether HeatBuckets ready for hit
     SamplesPool samples_; 
-    bool updated_;
     
 public:
     HeatBuckets();
@@ -97,7 +96,7 @@ public:
     void init(std::vector<std::vector<std::string>>& segments); // if sample enough keys, ready to init heatbuckets
 
     void update(); // update hotness value of all buckets
-    void hit(const std::string& key, const bool& signal); // one key only hit one bucket (also mean only hit one key range)
+    void hit(const std::string& key, bool& signal); // one key only hit one bucket (also mean only hit one key range)
     // if signal is true, update hotness
     void debug(); // output debug message in standard output
 };

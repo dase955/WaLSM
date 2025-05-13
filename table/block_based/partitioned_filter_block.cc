@@ -7,6 +7,7 @@
 #include <sys/types.h>
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <cassert>
 #include <cctype>
@@ -65,7 +66,7 @@ PartitionedFilterBlockBuilder::PartitionedFilterBlockBuilder(
   keys_per_partition_ =
       filter_bits_builder_->CalculateNumEntry(partition_size);
   if (keys_per_partition_ < 1) {
-    // partition_size (minus buffer, ~10%) might be smaller than minimum
+    // partition_size (minus bufer, ~10%) might be smaller than minimum
     // filter size, sometimes based on cache line size. Try to find that
     // minimum size without CalculateSpace (not necessarily available).
     uint32_t larger = std::max(partition_size + 4, uint32_t{16});
@@ -85,7 +86,7 @@ PartitionedFilterBlockBuilder::PartitionedFilterBlockBuilder(
   }
 
   // keys_per_partition_ = std::min(keys_per_partition_, (uint32_t) KEYS_PER_SEGMENT);
-  keys_per_partition_ = KEYS_PER_SEGMENT;
+  // keys_per_partition_ = KEYS_PER_SEGMENT;
 
   #ifdef ART_PLUS
   filter_count_ = filter_bits_builder->filter_count_;
@@ -651,7 +652,17 @@ bool PartitionedFilterBlockReader::MayMatch(
 
   // TODO: get some filter blocks from the filter cache and check (WaLSM+)
   std::vector<CachableEntry<ParsedFullFilterBlock>> filter_partition_blocks =
-      std::move(filter_cache.get_filter_blocks(segment_id));
+      filter_cache.get_filter_blocks(segment_id);
+
+  static std::array<std::atomic<int>, MAX_UNITS_NUM+1> filter_unit_num_hits;
+  static std::atomic<int> maymatch_calls{0};
+  filter_unit_num_hits[filter_partition_blocks.size()]++;
+  if (maymatch_calls.fetch_add(1) % 500000 == 0) {
+    std::cout << "maymatch_calls: " << maymatch_calls.load() << std::endl;
+    for (size_t i = 0; i < filter_unit_num_hits.size(); ++i) {
+      std::cout << "filter_unit_num_hits[" << i << "]: " << filter_unit_num_hits[i].load() << std::endl;
+    }
+  }
 
   for (size_t hash_id = 0; hash_id < filter_partition_blocks.size(); ++hash_id) {
     FullFilterBlockReader filter_partition(

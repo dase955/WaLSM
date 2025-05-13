@@ -1045,9 +1045,9 @@ Status BlockBasedTable::PrefetchIndexAndFilterBlocks(
         lookup_context);
     if (filter) {
       // Refer to the comment above about paritioned indexes always being cached
-      if (prefetch_all) {
-        filter->CacheDependencies(ro, pin_all);
-      }
+      // if (prefetch_all) {
+      //   filter->CacheDependencies(ro, pin_all);
+      // }
 
       rep_->filter = std::move(filter);
     }
@@ -1899,9 +1899,8 @@ Status BlockBasedTable::RetrieveBlock(
   std::unique_ptr<TBlocklike> block;
 
   {
-    // TODO: 这里可能报错，先注释了
-    // StopWatch sw(rep_->ioptions.env, rep_->ioptions.statistics,
-    //              READ_BLOCK_GET_MICROS);
+    StopWatch sw(rep_->ioptions.env, rep_->ioptions.statistics,
+                 READ_BLOCK_GET_MICROS);
     s = ReadBlockFromFile(
         rep_->file.get(), prefetch_buffer, rep_->footer, ro, handle, &block,
         rep_->ioptions, do_uncompress, maybe_compressed, block_type,
