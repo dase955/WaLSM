@@ -58,8 +58,7 @@ size_t FilterCacheEntry::approximate_size() {
 
 std::vector<CachableEntry<ParsedFullFilterBlock>>
 FilterCacheEntry::get_filter_blocks() {
-  uint32_t units_num = std::max(loaded_units_num_, uint32_t(1));
-  assert(units_num > 0);
+  uint32_t units_num = loaded_units_num_;
 
   rwlock.ReadLock();
   std::vector<CachableEntry<ParsedFullFilterBlock>> result;

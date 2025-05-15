@@ -853,10 +853,8 @@ bool FilterCacheManager::adjust_cache_and_heap() {
         segment_units_num_recorder.insert(std::make_pair(result.disable_segment_id, result.disable_segment_next_units_num));
         filter_cache_.enable_for_segments(segment_units_num_recorder, true, empty_level_0_segment_ids, empty_failed_segment_ids);
         assert(empty_failed_segment_ids.empty());
-        std::this_thread::sleep_for(std::chrono::milliseconds(200));
-    } else {
-        std::this_thread::sleep_for(std::chrono::milliseconds(1000));
-    }
+    } 
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
     return can_adjust;
 }
 

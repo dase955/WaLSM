@@ -14,11 +14,11 @@ class LGBModel():
         self.__min_class = 0
         self.__max_class = 6
         self.__num_classes = (self.__max_class - self.__min_class) + 1
-        self.__default_class = 3
+        self.__default_class = 2
         self.__bits_per_key = 2 # bits_per_key for one filter unit, must larger than 1
         self.__num_probes = math.floor(self.__bits_per_key * 0.69) # 4 * 0.69 = 2.76 -> 2
         self.__rate_per_unit = math.pow(1.0 - math.exp(-self.__num_probes/self.__bits_per_key), self.__num_probes) # false positive rate of one unit
-        self.__cost_threshold = 2 # we can torelate deviation that is no more than self.__cost_rate_line * (best I/O cost) (compared to best I/O cost)
+        self.__cost_threshold = 1.2 # we can torelate deviation that is no more than self.__cost_rate_line * (best I/O cost) (compared to best I/O cost)
         self.__model_name = 'model.txt'
         # self.__host = '127.0.0.1'
         # self.__port = '6666'

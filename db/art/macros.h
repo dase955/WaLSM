@@ -157,19 +157,19 @@ namespace ROCKSDB_NAMESPACE {
 #define MAGIC_FACTOR 10 
 
 // key number of each segment
-// TODO: modify based on KV size and 4MB fixed segment size. 
-// TODO: How to modify size of each segment based on these macros?
-#define KV_SIZE 1024
-#define SEGMENT_SIZE (512 * 1024)
-#define KV_NUM_OF_SEGMENT (SEGMENT_SIZE / KV_SIZE)
+#define KV_NUM_OF_SEGMENT 420
 // default size of one filter unit (bits) 
+// bits-per-key for every filter unit of every segment, 
+// found default bits-per-key = DEFAULT_UNITS_NUM * BITS_PER_KEY_PER_UNIT = 10
+// equal to primary value of paper benchmark config value
+#define BITS_PER_KEY_PER_UNIT 2
 // TODO: needed to be set based on size of KV pairs
 #define DEFAULT_UNIT_SIZE (KV_NUM_OF_SEGMENT * BITS_PER_KEY_PER_UNIT)
 
 // macros for Model Train
 
 // long period = TRAIN_PERIODS * short period. if one long period end, evaluate model and retrain model if necessary
-#define TRAIN_PERIODS 10000
+#define TRAIN_PERIODS 15
 // dataset csv file name
 #define DATASET_NAME "dataset.csv"
 // the path to save model txt file and train dataset csv file
@@ -180,7 +180,7 @@ namespace ROCKSDB_NAMESPACE {
 #define HOTNESS_SIGNIFICANT_DIGITS_FACTOR 1e6 
 #define RATE_SIGNIFICANT_DIGITS_FACTOR 1e6
 // model feature num max limit : 2 * 45 + 1
-#define MAX_FEATURES_NUM 81
+#define MAX_FEATURES_NUM 21
 
 // config micro connecting to LightGBM server 
 
@@ -197,17 +197,13 @@ namespace ROCKSDB_NAMESPACE {
 // micros for filter cache
 
 // before model work, we enable DEFAULT_UNITS_NUM units for every segments
-#define DEFAULT_UNITS_NUM 5
-// bits-per-key for every filter unit of every segment, 
-// found default bits-per-key = DEFAULT_UNITS_NUM * BITS_PER_KEY_PER_UNIT = 10
-// equal to primary value of paper benchmark config value
-#define BITS_PER_KEY_PER_UNIT 2
+#define DEFAULT_UNITS_NUM 2
 // max unit nums for every segment, we only generate MAX_UNITS_NUM units for every segment
-#define MAX_UNITS_NUM 12
+#define MAX_UNITS_NUM 6
 // we enable 0 unit for coldest segments
 #define MIN_UNITS_NUM 0
 // default max size of cache space : 8 * 1024 * 1024 * 128 = 1073741824 bit = 128 MB
-#define CACHE_SPACE_SIZE 0xFFFFFFFFU
+#define CACHE_SPACE_SIZE (32 * 1024 * 1024 * 8)
 // fitler cache helper heap type
 #define BENEFIT_HEAP 0
 #define COST_HEAP 1
@@ -217,12 +213,12 @@ namespace ROCKSDB_NAMESPACE {
 // adjustment benefit bound
 #define PURE_BENEFIT_BOUND 500
 // filter cache map threshold
-#define FULL_RATE 0.9
-#define READY_RATE 0.8
+#define FULL_RATE 1.00
+#define READY_RATE 0.80
 // default init L0 counts
 #define INIT_LEVEL_0_COUNT 0
 // inherit remain factor
-#define INHERIT_REMAIN_FACTOR 0.5
+#define INHERIT_REMAIN_FACTOR 1
 
 // filter cache client background threads num
 #define FILTER_CACHE_THREADS_NUM 6

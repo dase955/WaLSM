@@ -881,7 +881,7 @@ FilterBitsBuilder* BloomFilterPolicy::GetBuilderWithContext(
         // TODO: determine filter_count, 
         // and maybe move this property to some kind of options (WaLSM+)
         const int filter_count = MAX_UNITS_NUM;
-        return new MultiLegacyBloomBitsBuilder(filter_count, whole_bits_per_key_, context.info_log);
+        return new MultiLegacyBloomBitsBuilder(filter_count, BITS_PER_KEY_PER_UNIT, context.info_log);
         #endif
     }
   }
