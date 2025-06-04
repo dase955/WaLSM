@@ -8,3 +8,7 @@ tags
 compile_commands.json
 .clangd/
 .cache/
+
+test_logs/
+compile.log
+*.log
