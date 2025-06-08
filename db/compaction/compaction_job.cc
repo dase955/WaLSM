@@ -27,6 +27,7 @@
 
 #include "db/art/compactor.h"
 #include "db/art/logger.h"
+#include "db/art/art_metric.h"
 #include "db/builder.h"
 #include "db/db_impl/db_impl.h"
 #include "db/db_iter.h"
@@ -74,6 +75,8 @@
 #include "util/string_util.h"
 
 namespace ROCKSDB_NAMESPACE {
+
+static SSDWriteMetric writeMetric_;
 
 const char* GetCompactionReasonString(CompactionReason compaction_reason) {
   switch (compaction_reason) {
@@ -863,6 +866,9 @@ Status CompactionJob::Install(const MutableCFOptions& mutable_cf_options) {
               stats.micros * 1e-6,
               (GetStartTime() - stats.micros) * 1e-6,
               compact_->compaction->output_level());
+
+  // update WaLSM write metric
+  writeMetric_.updateMetric(stats.bytes_written);
 
   ROCKS_LOG_BUFFER(
       log_buffer_,

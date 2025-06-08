@@ -2,8 +2,8 @@
 # Workload T: For Debug
 
 
-recordcount=5000000
-operationcount=2200000
+recordcount=80000000
+operationcount=80000000
 workload=com.yahoo.ycsb.workloads.CoreWorkload
 
 readallfields=true

@@ -86,7 +86,7 @@ void FilterCache::enable_for_segments(std::unordered_map<uint32_t, uint16_t>& se
             // }
 
             // all segments to be enabled must have been inited
-            std::cout << "filter handle not exist, segment id: " << segment_id << std::endl;
+            // std::cout << "filter handle not exist, segment id: " << segment_id << std::endl;
             // assert(false);
         }
     }
@@ -854,7 +854,7 @@ bool FilterCacheManager::adjust_cache_and_heap() {
         filter_cache_.enable_for_segments(segment_units_num_recorder, true, empty_level_0_segment_ids, empty_failed_segment_ids);
         assert(empty_failed_segment_ids.empty());
     } 
-    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    // std::this_thread::sleep_for(std::chrono::milliseconds(10));
     return can_adjust;
 }
 

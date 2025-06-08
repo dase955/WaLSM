@@ -37,6 +37,7 @@
 #include "util/autovector.h"
 #include "util/coding.h"
 #include "util/string_util.h"
+#include "db/art/art_metric.h"
 
 #if defined(OS_LINUX) && !defined(F_SET_RW_HINT)
 #define F_LINUX_SPECIFIC_BASE 1024
@@ -44,6 +45,8 @@
 #endif
 
 namespace ROCKSDB_NAMESPACE {
+
+static ReadMetric readMetric_;
 
 std::string IOErrorMsg(const std::string& context,
                        const std::string& file_name) {
@@ -601,6 +604,8 @@ IOStatus PosixRandomAccessFile::Read(uint64_t offset, size_t n,
         filename_, errno);
   }
   *result = Slice(scratch, (r < 0) ? 0 : n - left);
+  // update WaLSM Read Metric
+  readMetric_.updateMetric(offset, offset + ((r < 0) ? 0 : n - left));
   return s;
 }
 
@@ -705,6 +710,10 @@ IOStatus PosixRandomAccessFile::MultiRead(FSReadRequest* reqs,
             "PosixRandomAccessFile::MultiRead:io_uring_result", &bytes_read);
         if (bytes_read == req_wrap->iov.iov_len) {
           req->result = Slice(req->scratch, req->len);
+
+          // update WaLSM Read Metric
+          readMetric_.updateMetric(req->offset, req->offset + req->len);
+
           req->status = IOStatus::OK();
         } else if (bytes_read == 0) {
           // cqe->res == 0 can means EOF, or can mean partial results. See
@@ -717,6 +726,10 @@ IOStatus PosixRandomAccessFile::MultiRead(FSReadRequest* reqs,
             // Bytes reads don't fill sectors. Should only happen at the end
             // of the file.
             req->result = Slice(req->scratch, req_wrap->finished_len);
+
+            // update WaLSM Read Metric
+            readMetric_.updateMetric(req->offset, req->offset + req_wrap->finished_len);
+
             req->status = IOStatus::OK();
           } else {
             Slice tmp_slice;
@@ -726,6 +739,10 @@ IOStatus PosixRandomAccessFile::MultiRead(FSReadRequest* reqs,
                      req->scratch + req_wrap->finished_len, dbg);
             req->result =
                 Slice(req->scratch, req_wrap->finished_len + tmp_slice.size());
+
+            // update WaLSM Read Metric
+            readMetric_.updateMetric(req->offset,
+                                     req->offset + req_wrap->finished_len + tmp_slice.size());
           }
         } else if (bytes_read < req_wrap->iov.iov_len) {
           assert(bytes_read > 0);
@@ -865,6 +882,8 @@ IOStatus PosixMmapReadableFile::Read(uint64_t offset, size_t n,
     n = static_cast<size_t>(length_ - offset);
   }
   *result = Slice(reinterpret_cast<char*>(mmapped_region_) + offset, n);
+  // update WaLSM Read Metric
+  readMetric_.updateMetric(offset, offset + n);
   return s;
 }
 

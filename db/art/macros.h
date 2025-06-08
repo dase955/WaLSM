@@ -145,7 +145,7 @@ namespace ROCKSDB_NAMESPACE {
 #define SAMPLES_LIMIT 1000000
 #define SAMPLES_MAXCNT 10000000
 // short period get count
-#define PERIOD_COUNT 1000000
+#define PERIOD_COUNT 2000000
 // key sample file
 // in order to init key ranges before first flush, 
 // we need to read keys in a file, then init key ranges first.
