@@ -224,12 +224,12 @@ void FilterCacheManager::do_periods_work() {
         last_long_period_ = period_cnt_;
         update_count_recorder();
         // debug_count_recorder();
-        std::map<uint32_t, uint32_t> recent_count_recorder;
-        std::vector<uint32_t> empty_needed_segment_ids;
-        estimate_recent_counts(recent_count_recorder, empty_needed_segment_ids);
-        assert(recent_count_recorder.size() > 0);
+        // std::map<uint32_t, uint32_t> recent_count_recorder;
+        // std::vector<uint32_t> empty_needed_segment_ids;
+        // estimate_recent_counts(recent_count_recorder, empty_needed_segment_ids);
+        // assert(recent_count_recorder.size() > 0);
         // std::cout << "long period end, sync visit cnt." << std::endl;
-        heap_manager_.sync_visit_cnt(recent_count_recorder);
+        // heap_manager_.sync_visit_cnt(recent_count_recorder);
         train_signal_ = true;
         need_retrain = true;
     }
@@ -240,12 +240,12 @@ void FilterCacheManager::do_periods_work() {
             // std::cout << "period_cnt_: " << period_cnt_ << std::endl;
             // std::cout << "last_short_period_: " << last_short_period_ << std::endl;
             // debug_count_recorder();
-            std::map<uint32_t, uint32_t> recent_count_recorder;
-            std::vector<uint32_t> empty_needed_segment_ids;
-            estimate_recent_counts(recent_count_recorder, empty_needed_segment_ids);
-            assert(recent_count_recorder.size() > 0);
+            // std::map<uint32_t, uint32_t> recent_count_recorder;
+            // std::vector<uint32_t> empty_needed_segment_ids;
+            // estimate_recent_counts(recent_count_recorder, empty_needed_segment_ids);
+            // assert(recent_count_recorder.size() > 0);
             // std::cout << "short period end, sync visit cnt." << std::endl;
-            heap_manager_.sync_visit_cnt(recent_count_recorder);
+            // heap_manager_.sync_visit_cnt(recent_count_recorder);
         }
     }
 
@@ -575,6 +575,21 @@ bool FilterCacheManager::try_retrain_model(std::map<uint32_t, uint16_t>& level_r
     assert(algo_infos.size() == label_recorder.size());
     // // need to verify solutions
     // greedy_algo_.verify(algo_infos, label_recorder, filter_cache_.cache_size_except_level_0() / 256);
+    std::map<uint16_t, uint32_t> min_cnt_recorder, max_cnt_recorder;
+    for (uint16_t i = 0; i <= MAX_UNITS_NUM; i++) {
+        min_cnt_recorder[i] = 0xFFFFFFFFU; max_cnt_recorder[i] = 0;
+    }                        
+
+    // recheck that we already compute for all segments in segment_algo_infos
+    auto infos_it = algo_infos.begin();
+    auto solution_it = label_recorder.begin();
+    while (infos_it != algo_infos.end() && solution_it != label_recorder.end()) {
+        assert(infos_it->first == solution_it->first);
+        min_cnt_recorder[solution_it->second] = std::min(min_cnt_recorder[solution_it->second], infos_it->second.visit_cnt);
+        max_cnt_recorder[solution_it->second] = std::max(max_cnt_recorder[solution_it->second], infos_it->second.visit_cnt);
+        infos_it++; solution_it++;
+    }
+    adjust_manager_.UpdateCnt(min_cnt_recorder, max_cnt_recorder);
 
     // assert(level_recorder.size() == segment_ranges_recorder.size());
     // should make these two recorders share the same segment ids
@@ -817,7 +832,8 @@ void FilterCacheManager::update_cache_and_heap(std::map<uint32_t, uint16_t>& lev
     assert(segment_ids.size() == segment_units_num_recorder.size());
 
     // update filter cache helper heaps
-    heap_manager_.sync_units_num_limit(current_units_num_limit_recorder);
+    // heap_manager_.sync_units_num_limit(current_units_num_limit_recorder);
+    adjust_manager_.UpdateLimit(current_units_num_limit_recorder);
 
     // update filter cache
     std::set<uint32_t> empty_level_0_segment_ids; // no level 0 segment in heaps and model data, dont worry
@@ -844,17 +860,28 @@ bool FilterCacheManager::adjust_cache_and_heap() {
         double disable_cost;
     };
     */
-    bool can_adjust = heap_manager_.try_modify(result);
+    // bool can_adjust = heap_manager_.try_modify(result);
+    // if (can_adjust) {
+    //     std::unordered_map<uint32_t, uint16_t> segment_units_num_recorder;
+    //     std::set<uint32_t> empty_level_0_segment_ids; // no level 0 segment in heaps, dont worry
+    //     std::set<uint32_t> empty_failed_segment_ids; // force to update segments' filter units group, so dont worry for cache space
+    //     segment_units_num_recorder.insert(std::make_pair(result.enable_segment_id, result.enable_segment_next_units_num));
+    //     segment_units_num_recorder.insert(std::make_pair(result.disable_segment_id, result.disable_segment_next_units_num));
+    //     filter_cache_.enable_for_segments(segment_units_num_recorder, true, empty_level_0_segment_ids, empty_failed_segment_ids);
+    //     assert(empty_failed_segment_ids.empty());
+    // } 
+    // std::this_thread::sleep_for(std::chrono::milliseconds(10));
+
+    bool can_adjust = adjust_manager_.adjust(result);
     if (can_adjust) {
         std::unordered_map<uint32_t, uint16_t> segment_units_num_recorder;
         std::set<uint32_t> empty_level_0_segment_ids; // no level 0 segment in heaps, dont worry
         std::set<uint32_t> empty_failed_segment_ids; // force to update segments' filter units group, so dont worry for cache space
-        segment_units_num_recorder.insert(std::make_pair(result.enable_segment_id, result.enable_segment_next_units_num));
-        segment_units_num_recorder.insert(std::make_pair(result.disable_segment_id, result.disable_segment_next_units_num));
+        segment_units_num_recorder.insert(std::make_pair(result.enable_segment_id, result.enable_units_num));
+        segment_units_num_recorder.insert(std::make_pair(result.disable_segment_id, result.disable_units_num));
         filter_cache_.enable_for_segments(segment_units_num_recorder, true, empty_level_0_segment_ids, empty_failed_segment_ids);
         assert(empty_failed_segment_ids.empty());
-    } 
-    // std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
     return can_adjust;
 }
 
@@ -863,9 +890,9 @@ void FilterCacheManager::insert_segments(std::vector<uint32_t>& merged_segment_i
                                          std::map<uint32_t, uint16_t>& new_level_recorder, const uint32_t& level_0_base_count,
                                          std::map<uint32_t, std::vector<RangeRatePair>>& segment_ranges_recorder) {
     std::unordered_map<uint32_t, uint16_t> segment_units_num_recorder;
-    std::map<uint32_t, uint32_t> approximate_counts_recorder;
+    // std::map<uint32_t, uint32_t> approximate_counts_recorder;
     std::set<uint32_t> failed_segment_ids;
-    std::vector<FilterCacheHeapItem> new_segment_items;
+    // std::vector<FilterCacheHeapItem> new_segment_items;
     std::set<uint32_t> old_level_0_segment_ids, new_level_0_segment_ids;
     std::vector<Bucket> buckets = heat_buckets_.buckets();
     std::sort(merged_segment_ids.begin(), merged_segment_ids.end());
@@ -949,9 +976,10 @@ void FilterCacheManager::insert_segments(std::vector<uint32_t>& merged_segment_i
         for (uint32_t &segment_id : merged_segment_ids) {
             if (old_level_0_segment_ids.count(segment_id) == 0) {
                 merged_segment_ids_except_l0.emplace_back(segment_id);
+                adjust_manager_.DelSegment(segment_id);
             }
         }
-        heap_manager_.batch_delete(merged_segment_ids_except_l0);
+        // heap_manager_.batch_delete(merged_segment_ids_except_l0);
         // std::cout << merged_segment_ids_except_l0.size() << " " << merged_segment_ids.size() << std::endl;
         filter_cache_.release_for_segments(merged_segment_ids, old_level_0_segment_ids);
 
@@ -960,12 +988,12 @@ void FilterCacheManager::insert_segments(std::vector<uint32_t>& merged_segment_i
         // this function will remove moved segments from last_count_recorder_ and current_count_recorder_
         inherit_count_recorder(merged_segment_ids, new_segment_ids, level_0_base_count, inherit_infos_recorder);
 
-        std::vector<uint32_t> needed_segment_ids;
-        for (uint32_t segment_id : new_segment_ids) {
-            needed_segment_ids.emplace_back(segment_id);
-        }
-        estimate_recent_counts(approximate_counts_recorder, needed_segment_ids);
-        assert(approximate_counts_recorder.size() > 0);
+        // std::vector<uint32_t> needed_segment_ids;
+        // for (uint32_t segment_id : new_segment_ids) {
+        //     needed_segment_ids.emplace_back(segment_id);
+        // }
+        // estimate_recent_counts(approximate_counts_recorder, needed_segment_ids);
+        // assert(approximate_counts_recorder.size() > 0);
 
         // insert units into filter cache
         filter_cache_.enable_for_segments(segment_units_num_recorder, false, new_level_0_segment_ids, failed_segment_ids);
@@ -978,17 +1006,19 @@ void FilterCacheManager::insert_segments(std::vector<uint32_t>& merged_segment_i
             } else if (failed_segment_ids.count(new_segment_id) > 0) {
                 // failed to insert filter units
                 uint16_t units_num = segment_units_num_recorder[new_segment_id];
-                new_segment_items.emplace_back(FilterCacheHeapItem(new_segment_id, approximate_counts_recorder[new_segment_id],
-                                                                   0, 0, units_num));
+                // new_segment_items.emplace_back(FilterCacheHeapItem(new_segment_id, approximate_counts_recorder[new_segment_id],
+                //                                                    0, 0, units_num));
+                adjust_manager_.AddSegment(new_segment_id, 0, units_num);
             } else {
                 // succeed to insert filter units
                 uint16_t units_num = segment_units_num_recorder[new_segment_id];
-                new_segment_items.emplace_back(FilterCacheHeapItem(new_segment_id, approximate_counts_recorder[new_segment_id],
-                                                                   units_num, 0, units_num));
+                // new_segment_items.emplace_back(FilterCacheHeapItem(new_segment_id, approximate_counts_recorder[new_segment_id],
+                //                                                    units_num, 0, units_num));
+                adjust_manager_.AddSegment(new_segment_id, units_num, units_num);
             }
         }
-        assert(new_segment_items.size() + new_level_0_segment_ids.size() == new_segment_ids.size());
-        heap_manager_.batch_upsert(new_segment_items);
+        // assert(new_segment_items.size() + new_level_0_segment_ids.size() == new_segment_ids.size());
+        // heap_manager_.batch_upsert(new_segment_items);
 
         // remember to update is_ready_
         if (filter_cache_.is_ready()) {
@@ -1001,9 +1031,10 @@ void FilterCacheManager::insert_segments(std::vector<uint32_t>& merged_segment_i
         for (uint32_t &segment_id : merged_segment_ids) {
             if (old_level_0_segment_ids.count(segment_id) == 0) {
                 merged_segment_ids_except_l0.emplace_back(segment_id);
+                adjust_manager_.DelSegment(segment_id);
             }
         }
-        heap_manager_.batch_delete(merged_segment_ids_except_l0);
+        // heap_manager_.batch_delete(merged_segment_ids_except_l0);
         // std::cout << merged_segment_ids_except_l0.size() << " " << merged_segment_ids.size() << std::endl;
         filter_cache_.release_for_segments(merged_segment_ids, old_level_0_segment_ids);
 
@@ -1012,12 +1043,12 @@ void FilterCacheManager::insert_segments(std::vector<uint32_t>& merged_segment_i
         // this function will remove moved segments from last_count_recorder_ and current_count_recorder_
         inherit_count_recorder(merged_segment_ids, new_segment_ids, level_0_base_count, inherit_infos_recorder);
 
-        std::vector<uint32_t> needed_segment_ids;
-        for (uint32_t segment_id : new_segment_ids) {
-            needed_segment_ids.emplace_back(segment_id);
-        }
-        estimate_recent_counts(approximate_counts_recorder, needed_segment_ids);
-        assert(approximate_counts_recorder.size() > 0);
+        // std::vector<uint32_t> needed_segment_ids;
+        // for (uint32_t segment_id : new_segment_ids) {
+        //     needed_segment_ids.emplace_back(segment_id);
+        // }
+        // estimate_recent_counts(approximate_counts_recorder, needed_segment_ids);
+        // assert(approximate_counts_recorder.size() > 0);
 
         // predict units num for new non level 0 segments and update segment_units_num_recorder
         std::vector<std::vector<uint32_t>> pred_datas;
@@ -1088,17 +1119,19 @@ void FilterCacheManager::insert_segments(std::vector<uint32_t>& merged_segment_i
             } else if (failed_segment_ids.count(new_segment_id) > 0) {
                 // failed to insert filter units
                 uint16_t units_num = segment_units_num_recorder[new_segment_id];
-                new_segment_items.emplace_back(FilterCacheHeapItem(new_segment_id, approximate_counts_recorder[new_segment_id],
-                                                                   0, 0, units_num));
+                // new_segment_items.emplace_back(FilterCacheHeapItem(new_segment_id, approximate_counts_recorder[new_segment_id],
+                //                                                    0, 0, units_num));
+                adjust_manager_.AddSegment(new_segment_id, 0, units_num);
             } else {
                 // succeed to insert filter units
                 uint16_t units_num = segment_units_num_recorder[new_segment_id];
-                new_segment_items.emplace_back(FilterCacheHeapItem(new_segment_id, approximate_counts_recorder[new_segment_id],
-                                                                   units_num, 0, units_num));
+                // new_segment_items.emplace_back(FilterCacheHeapItem(new_segment_id, approximate_counts_recorder[new_segment_id],
+                //                                                    units_num, 0, units_num));
+                adjust_manager_.AddSegment(new_segment_id, units_num, units_num);
             }
         }
-        assert(new_segment_items.size() + new_level_0_segment_ids.size() == new_segment_ids.size());
-        heap_manager_.batch_upsert(new_segment_items);
+        // assert(new_segment_items.size() + new_level_0_segment_ids.size() == new_segment_ids.size());
+        // heap_manager_.batch_upsert(new_segment_items);
     }
 }
 
@@ -1121,7 +1154,7 @@ void FilterCacheManager::delete_segments(std::vector<uint32_t>& merged_segment_i
     if (!is_ready_) {
         // if is_ready_ is false, no need to enable two-heaps adjustment, remember to update is_ready_ in the end
         // remove merged segments' units in filter cache and nodes in filter heaps
-        heap_manager_.batch_delete(merged_segment_ids);
+        // heap_manager_.batch_delete(merged_segment_ids);
         filter_cache_.release_for_segments(merged_segment_ids, old_level_0_segment_ids);
 
         // remember to update is_ready_
@@ -1131,7 +1164,7 @@ void FilterCacheManager::delete_segments(std::vector<uint32_t>& merged_segment_i
     } else {
         // is_ready_ is true, then we will not update is_ready_, that means is_ready_ will be always true
         // remove merged segments' units in filter cache and nodes in filter heaps
-        heap_manager_.batch_delete(merged_segment_ids);
+        // heap_manager_.batch_delete(merged_segment_ids);
         filter_cache_.release_for_segments(merged_segment_ids, old_level_0_segment_ids);
     }
 }
@@ -1143,8 +1176,8 @@ void FilterCacheManager::move_segments(std::vector<uint32_t>& moved_segment_ids,
     assert(false);
     exit(1);
     std::unordered_map<uint32_t, uint16_t> segment_units_num_recorder;
-    std::map<uint32_t, uint32_t> approximate_counts_recorder;
-    std::vector<FilterCacheHeapItem> new_segment_items;
+    // std::map<uint32_t, uint32_t> approximate_counts_recorder;
+    // std::vector<FilterCacheHeapItem> new_segment_items;
     std::set<uint32_t> old_level_0_segment_ids;
     std::vector<Bucket> buckets = heat_buckets_.buckets();
     std::sort(moved_segment_ids.begin(), moved_segment_ids.end());
@@ -1176,7 +1209,7 @@ void FilterCacheManager::move_segments(std::vector<uint32_t>& moved_segment_ids,
 
     if (!is_ready_) {
         // firstly, delete moved segments
-        heap_manager_.batch_delete(moved_segment_ids);
+        // heap_manager_.batch_delete(moved_segment_ids);
 
         // inherit these segments' count
         // for (uint32_t& segment_id : moved_segment_ids) {
@@ -1189,25 +1222,25 @@ void FilterCacheManager::move_segments(std::vector<uint32_t>& moved_segment_ids,
         //         current_it->second = INHERIT_REMAIN_FACTOR * (current_it->second);
         //     }
         // }
-        std::vector<uint32_t> needed_segment_ids;
-        for (uint32_t segment_id : moved_segment_ids) {
-            needed_segment_ids.emplace_back(segment_id);
-        }
-        estimate_recent_counts(approximate_counts_recorder, needed_segment_ids);
-        assert(approximate_counts_recorder.size() > 0);
+        // std::vector<uint32_t> needed_segment_ids;
+        // for (uint32_t segment_id : moved_segment_ids) {
+        //     needed_segment_ids.emplace_back(segment_id);
+        // }
+        // estimate_recent_counts(approximate_counts_recorder, needed_segment_ids);
+        // assert(approximate_counts_recorder.size() > 0);
 
         // modify units into filter cache
         std::set<uint32_t> empty_failed_segment_ids;
         filter_cache_.update_for_segments(segment_units_num_recorder, old_level_0_segment_ids, empty_failed_segment_ids);
         
         // insert nodes into filter heaps
-        for (uint32_t& segment_id : moved_segment_ids) {
-            assert(move_level_recorder[segment_id] > 0);
-            uint16_t units_num = segment_units_num_recorder[segment_id];
-            new_segment_items.emplace_back(FilterCacheHeapItem(segment_id, approximate_counts_recorder[segment_id],
-                                                               units_num, 0, units_num));
-        }
-        heap_manager_.batch_upsert(new_segment_items);
+        // for (uint32_t& segment_id : moved_segment_ids) {
+        //     assert(move_level_recorder[segment_id] > 0);
+        //     uint16_t units_num = segment_units_num_recorder[segment_id];
+        //     new_segment_items.emplace_back(FilterCacheHeapItem(segment_id, approximate_counts_recorder[segment_id],
+        //                                                        units_num, 0, units_num));
+        // }
+        // heap_manager_.batch_upsert(new_segment_items);
 
         // remember to update is_ready_
         if (filter_cache_.is_ready()) {
@@ -1215,7 +1248,7 @@ void FilterCacheManager::move_segments(std::vector<uint32_t>& moved_segment_ids,
         }
     } else {
         // firstly, delete moved segments
-        heap_manager_.batch_delete(moved_segment_ids);
+        // heap_manager_.batch_delete(moved_segment_ids);
 
         // inherit these segments' count
         // for (uint32_t& segment_id : moved_segment_ids) {
@@ -1228,12 +1261,12 @@ void FilterCacheManager::move_segments(std::vector<uint32_t>& moved_segment_ids,
         //         current_it->second = INHERIT_REMAIN_FACTOR * (current_it->second);
         //     }
         // }
-        std::vector<uint32_t> needed_segment_ids;
-        for (uint32_t segment_id : moved_segment_ids) {
-            needed_segment_ids.emplace_back(segment_id);
-        }
-        estimate_recent_counts(approximate_counts_recorder, needed_segment_ids);
-        assert(approximate_counts_recorder.size() > 0);
+        // std::vector<uint32_t> needed_segment_ids;
+        // for (uint32_t segment_id : moved_segment_ids) {
+        //     needed_segment_ids.emplace_back(segment_id);
+        // }
+        // estimate_recent_counts(approximate_counts_recorder, needed_segment_ids);
+        // assert(approximate_counts_recorder.size() > 0);
 
         // predict units num for new non level 0 segments and update segment_units_num_recorder
         std::vector<std::vector<uint32_t>> pred_datas;
@@ -1291,13 +1324,14 @@ void FilterCacheManager::move_segments(std::vector<uint32_t>& moved_segment_ids,
         filter_cache_.update_for_segments(segment_units_num_recorder, old_level_0_segment_ids, empty_failed_segment_ids);
 
         // insert nodes into filter heaps
-        for (uint32_t segment_id : moved_segment_ids) {
-            assert(move_level_recorder[segment_id] > 0);
-            uint16_t units_num = segment_units_num_recorder[segment_id];
-            new_segment_items.emplace_back(FilterCacheHeapItem(segment_id, approximate_counts_recorder[segment_id],
-                                                               units_num, 0, units_num));
-        }
-        heap_manager_.batch_upsert(new_segment_items);
+        // for (uint32_t segment_id : moved_segment_ids) {
+        //     assert(move_level_recorder[segment_id] > 0);
+        //     uint16_t units_num = segment_units_num_recorder[segment_id];
+        //     new_segment_items.emplace_back(FilterCacheHeapItem(segment_id, approximate_counts_recorder[segment_id],
+        //                                                        units_num, 0, units_num));
+            
+        // }
+        // heap_manager_.batch_upsert(new_segment_items);
     }
 }
 

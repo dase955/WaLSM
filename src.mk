@@ -32,7 +32,7 @@ LIB_SOURCES =                                                   \
   db/art/global_memtable.cc                                     \
   db/art/heat_buckets.cc                                        \
   db/art/clf_model.cc                                           \
-  db/art/filter_cache_heap.cc                                   \
+  db/art/filter_cache_tree.cc                                   \
   db/art/filter_cache_entry.cc                                  \
   db/art/global_filter_cache_context.cc                         \
   db/art/filter_cache.cc                                        \

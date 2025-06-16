@@ -16,7 +16,8 @@
 #include "greedy_algo.h"
 #include "clf_model.h"
 #include "heat_buckets.h"
-#include "filter_cache_heap.h"
+// #include "filter_cache_heap.h"
+#include "filter_cache_tree.h"
 #include "rocksdb/cache.h"
 #include "table/block_based/cachable_entry.h"
 #include "table/block_based/parsed_full_filter_block.h"
@@ -171,7 +172,8 @@ private:
     HeatBuckets heat_buckets_;
     ClfModel clf_model_;
     GreedyAlgo greedy_algo_;
-    FilterCacheHeapManager heap_manager_;
+    // FilterCacheHeapManager heap_manager_;
+    FilterCacheIntervalsQueuesManager adjust_manager_;
     uint32_t get_cnt_; // record get cnt in current period, when exceeding PERIOD_COUNT, start next period
     uint32_t period_cnt_; // record period cnt, if period_cnt_ - last_train_period_ >= TRAIN_PERIODS, start to evaluate or retrain ClfModel
     uint32_t last_long_period_; // record last short period cnt of last long period
