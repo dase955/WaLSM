@@ -341,9 +341,18 @@ class FilterCacheIntervalsQueuesManager {
                         uint32_t segment_id = benefit_queue->PopSegment();
                         units_saver[segment_id] = benefit_queue->queue[benefit_i].units_curr;
                         limit_saver[segment_id] = benefit_queue->queue[benefit_i].units_limit;
+                        // std::cout << "segment id: " << segment_id 
+                        //           << " , units num: " << benefit_queue->queue[benefit_i].units_curr
+                        //           << " , limit: " << benefit_queue->queue[benefit_i].units_limit
+                        //           << " is saved to units_saver." << std::endl;
                     } else {
                         result = replace(benefit_i, cost_i);
                         found = true;
+                        // std::cout << "benefit_i: " << benefit_i 
+                        //           << " , cost_i: " << cost_i
+                        //           << " , enable_segment_id: " << result.enable_segment_id
+                        //           << " , disable_segment_id: " << result.disable_segment_id
+                        //           << std::endl;
                     }
                     lock.unlock();
 
@@ -363,6 +372,7 @@ class FilterCacheIntervalsQueuesManager {
 
             if (!found) {
                 lock.lock();
+                // std::cout << "re-insert to trees." << std::endl;
                 auto units_it = units_saver.begin();
                 while (units_it != units_saver.end()) {
                     if (valid_segment_ids.count(units_it->first)) {

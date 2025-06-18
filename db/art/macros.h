@@ -223,7 +223,7 @@ namespace ROCKSDB_NAMESPACE {
 // filter cache client background threads num
 #define FILTER_CACHE_THREADS_NUM 6
 
-#define ALPHA 0.7
+#define ALPHA 0.8
 
 // #define KV_SIZE = 1024
 // data block size for a segment
