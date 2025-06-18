@@ -9,7 +9,7 @@ cd YCSB
 make clean && make -j4
 
 rm -rf /mnt/nvme0n1/guoteng/walsmtest/tmp/gt_test
-rm -rf /mnt/pmem0.8/guoteng/nodememory
+rm -rf /mnt/pmem0.8/guoteng/*
 
 #gdb --args ./ycsb -load -run -db rocksdb -P workloads/workloadt -P rocksdb/rocksdb.properties -p threadcount=8 -s
 ./ycsb -load -run -db rocksdb -P workloads/workloadt -P rocksdb/rocksdb.properties -p threadcount=8 -p sleepafterload=60 -s
