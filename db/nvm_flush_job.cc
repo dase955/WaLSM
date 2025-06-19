@@ -15,6 +15,7 @@
 #include <vector>
 
 #include "db/art/logger.h"
+#include "db/art/art_metric.h"
 #include "db/builder.h"
 #include "db/db_iter.h"
 #include "db/dbformat.h"
@@ -49,6 +50,9 @@
 #include "util/stop_watch.h"
 
 namespace ROCKSDB_NAMESPACE {
+
+static FlushMetric flushMetric_;
+// static NVMWriteMetric writeMetric_;
 
 NVMFlushJob::NVMFlushJob(SingleCompactionJob* job,
     const std::string& dbname, ColumnFamilyData* cfd,
@@ -199,6 +203,10 @@ void NVMFlushJob::Build() {
     }
     LogFlush(db_options_.info_log);
   }
+
+  // upadte WaLSM Flush Metric
+  flushMetric_.updateMetric(job_->out_file_size);
+
   ROCKS_LOG_INFO(db_options_.info_log,
                  "[%s] [JOB %d] Level-0 flush table #%" PRIu64 ": %" PRIu64
                  " bytes %s"
@@ -296,6 +304,9 @@ void NVMFlushJob::WriteResult(InternalStats::CompactionStats& stats) {
     stream << "file_cpu_read_nanos"
            << (IOSTATS(cpu_read_nanos) - prev_cpu_read_nanos);
   }
+
+  // // update WaLSM write metric
+  // writeMetric_.updateMetric(stats.bytes_written);
 }
 
 void NVMFlushJob::Cancel() {

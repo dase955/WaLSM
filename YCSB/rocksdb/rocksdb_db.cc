@@ -19,6 +19,8 @@
 #include <rocksdb/utilities/options_util.h>
 #include <rocksdb/write_batch.h>
 
+#include <iostream>
+
 namespace {
   const std::string PROP_NAME = "rocksdb.dbname";
   const std::string PROP_NAME_DEFAULT = "";
@@ -120,6 +122,7 @@ namespace ycsbc {
 rocksdb::DB *RocksdbDB::db_ = nullptr;
 int RocksdbDB::ref_cnt_ = 0;
 std::mutex RocksdbDB::mu_;
+rocksdb::Options opt;
 
 void RocksdbDB::Init() {
 // merge operator disabled by default due to link error
@@ -197,7 +200,6 @@ void RocksdbDB::Init() {
     throw utils::Exception("RocksDB db path is missing");
   }
 
-  rocksdb::Options opt;
   opt.create_if_missing = true;
   opt.nvm_path = nvm_path;
   std::vector<rocksdb::ColumnFamilyDescriptor> cf_descs;
@@ -229,6 +231,8 @@ void RocksdbDB::Cleanup() {
   if (--ref_cnt_) {
     return;
   }
+  // std::string stats = opt.statistics->ToString();
+  // std::cout << stats << std::endl;
   delete db_;
 }
 
@@ -360,6 +364,8 @@ void RocksdbDB::GetOptions(const utils::Properties &props, rocksdb::Options *opt
     opt->table_factory.reset(rocksdb::NewBlockBasedTableFactory(table_options));
 
     if (props.GetProperty(PROP_INCREASE_PARALLELISM, PROP_INCREASE_PARALLELISM_DEFAULT) == "true") {
+      opt->max_background_compactions = -1;
+      opt->max_background_flushes = -1;
       opt->IncreaseParallelism(32);
     }
     if (props.GetProperty(PROP_OPTIMIZE_LEVELCOMP, PROP_OPTIMIZE_LEVELCOMP_DEFAULT) == "true") {
@@ -368,6 +374,7 @@ void RocksdbDB::GetOptions(const utils::Properties &props, rocksdb::Options *opt
     if (props.GetProperty(PROP_OPTIMIZE_UNIVERSALCOMP, PROP_OPTIMIZE_UNIVERSALCOMP_DEFAULT) == "true") {
       opt->OptimizeUniversalStyleCompaction();
     }
+    // opt->statistics = rocksdb::CreateDBStatistics();
   }
 }
 
